@@ -12,6 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	defaultInitContainerImage = "quay.io/fedora/fedora:44"
+)
+
 var applyCmd = &cobra.Command{
 	Use:   "apply",
 	Short: "Transform and apply a Kubernetes manifest for CoCo",
@@ -179,7 +183,7 @@ func handleInitContainer(m *manifest.Manifest, cfg *config.CocoConfig) error {
 		if cfg.InitContainerImage != "" {
 			image = cfg.InitContainerImage
 		} else {
-			image = "quay.io/fedora/fedora:44" // Default image
+			image = defaultInitContainerImage // Default image
 		}
 	}
 
@@ -243,7 +247,7 @@ func handleSecret(m *manifest.Manifest, secretSpec string, cfg *config.CocoConfi
 	command := []string{"sh", "-c", initContainerCmd}
 
 	// Determine init container image
-	image := "registry.access.redhat.com/ubi9/ubi:9.3"
+	image := defaultInitContainerImage
 	if cfg.InitContainerImage != "" {
 		image = cfg.InitContainerImage
 	}
