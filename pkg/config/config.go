@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -86,5 +87,16 @@ func (c *CocoConfig) Validate() error {
 	if len(c.RuntimeClasses) == 0 {
 		return fmt.Errorf("at least one runtime_class must be specified")
 	}
+
+	// Normalize trustee_server URL - add https:// prefix if no protocol is specified
+	c.NormalizeTrusteeServer()
+
 	return nil
+}
+
+// NormalizeTrusteeServer adds https:// prefix to trustee_server if no protocol is specified
+func (c *CocoConfig) NormalizeTrusteeServer() {
+	if c.TrusteeServer != "" && !strings.HasPrefix(c.TrusteeServer, "http://") && !strings.HasPrefix(c.TrusteeServer, "https://") {
+		c.TrusteeServer = "https://" + c.TrusteeServer
+	}
 }
