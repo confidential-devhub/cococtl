@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/confidential-containers/coco-ctl/pkg/config"
 	"github.com/pelletier/go-toml/v2"
@@ -27,43 +28,46 @@ type InitData struct {
 
 // Generate creates initdata based on the CoCo configuration
 func Generate(cfg *config.CocoConfig) (string, error) {
-	initData := &InitData{
-		Version:   InitDataVersion,
-		Algorithm: InitDataAlgorithm,
-		Data:      make(map[string]string),
-	}
-
 	// Generate aa.toml (Attestation Agent configuration)
 	aaToml, err := generateAAToml(cfg)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate aa.toml: %w", err)
 	}
-	initData.AAToml = aaToml
 
 	// Generate cdh.toml (Confidential Data Hub configuration)
 	cdhToml, err := generateCDHToml(cfg)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate cdh.toml: %w", err)
 	}
-	initData.CDHToml = cdhToml
 
-	// Add policy.rego if specified
+	// Get policy.rego
+	var policy string
 	if cfg.KataAgentPolicy != "" {
-		policy, err := loadPolicyFile(cfg.KataAgentPolicy)
+		policy, err = loadPolicyFile(cfg.KataAgentPolicy)
 		if err != nil {
 			return "", fmt.Errorf("failed to load policy file: %w", err)
 		}
-		initData.Data["policy.rego"] = policy
 	} else {
 		// Use default restrictive policy (exec and log disabled)
-		initData.Data["policy.rego"] = getDefaultPolicy()
+		policy = getDefaultPolicy()
 	}
 
-	// Marshal to TOML
-	tomlData, err := toml.Marshal(initData)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal initdata: %w", err)
-	}
+	// Manually construct TOML with multiline strings for proper formatting
+	var tomlBuilder strings.Builder
+	tomlBuilder.WriteString(fmt.Sprintf("version = '%s'\n", InitDataVersion))
+	tomlBuilder.WriteString(fmt.Sprintf("algorithm = '%s'\n", InitDataAlgorithm))
+	tomlBuilder.WriteString("'aa.toml' = '''\n")
+	tomlBuilder.WriteString(aaToml)
+	tomlBuilder.WriteString("'''\n")
+	tomlBuilder.WriteString("'cdh.toml' = '''\n")
+	tomlBuilder.WriteString(cdhToml)
+	tomlBuilder.WriteString("'''\n\n")
+	tomlBuilder.WriteString("[data]\n")
+	tomlBuilder.WriteString("'policy.rego' = '''\n")
+	tomlBuilder.WriteString(policy)
+	tomlBuilder.WriteString("'''\n")
+
+	tomlData := []byte(tomlBuilder.String())
 
 	// Compress with gzip and encode to base64
 	encoded, err := compressAndEncode(tomlData)
