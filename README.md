@@ -95,8 +95,8 @@ kubectl coco apply -f app.yaml --skip-apply
 # Use custom config file
 kubectl coco apply -f app.yaml --config /path/to/config.toml
 
-# Convert secrets to sealed secrets
-kubectl coco apply -f app.yaml --resource-uri "kbs:///default/kbsres1/key1"
+# Add secret download initContainer
+kubectl coco apply -f app.yaml --secret "kbs:///default/kbsres1/key1::/keys/key1"
 
 # Add default attestation initContainer
 kubectl coco apply -f app.yaml --init-container
@@ -108,27 +108,38 @@ kubectl coco apply -f app.yaml --init-container --init-container-img custom:late
 kubectl coco apply -f app.yaml --init-container --init-container-cmd "echo 'attestation check'"
 
 # Combine multiple options
-kubectl coco apply -f app.yaml --init-container --resource-uri "kbs:///default/kbsres1/key1" --runtime-class kata-remote
+kubectl coco apply -f app.yaml --init-container --secret "kbs:///default/kbsres1/key1::/keys/key1" --runtime-class kata-remote
 ```
 
-### 3. Working with Sealed Secrets
+### 3. Working with Secrets
 
-When your manifest contains secrets, use the `--resource-uri` flag:
+When you need to inject secrets from the KBS into your containers, use the `--secret` flag:
 
 ```bash
-kubectl coco apply -f app.yaml --resource-uri "kbs:///default/kbsres1/key1"
+kubectl coco apply -f app.yaml --secret "kbs:///default/kbsres1/key1::/keys/key1"
 ```
+
+The format is: `kbs://resource-uri::target-path`
 
 This will:
-1. Generate a sealed secret using coco-tools
-2. Print the kubectl command to create the secret
-3. Update the manifest to use the sealed secret
 
-Example output:
-```
-Generated sealed secret: sealed.fakejwsheader.eyJ2ZXJzaW...fakesignature
-You need to create a Kubernetes secret with this value:
-kubectl create secret generic sealed-secret --from-literal=secret=sealed.fakejwsheader...
+1. Create an emptyDir volume (medium: Memory)
+2. Add an initContainer that downloads the secret via attestation
+3. Mount the volume in both initContainer and app containers
+
+Example initContainer generated:
+
+```yaml
+initContainers:
+  - name: get-key
+    image: registry.access.redhat.com/ubi9/ubi:9.3
+    command:
+      - sh
+      - -c
+      - curl -o /keys/key1 http://127.0.0.1:8006/cdh/resource/default/kbsres1/key1
+    volumeMounts:
+      - name: keys
+        mountPath: /keys
 ```
 
 ## What Gets Transformed
@@ -149,10 +160,11 @@ When you run `kubectl coco apply`, the tool:
    - Custom image: Use `--init-container-img`
    - Custom command: Use `--init-container-cmd`
 
-4. **Converts Secrets** (if `--resource-uri` provided):
-   - Detects secret references in env vars and volumes
-   - Generates sealed secrets via coco-tools
-   - Replaces secret names with 'sealed-secret'
+4. **Adds Secret Download** (if `--secret` flag provided):
+   - Creates emptyDir volume with Memory medium
+   - Adds initContainer to download secret from KBS
+   - Mounts volume in initContainer and app containers
+   - Converts kbs:// URIs to CDH endpoint URLs
 
 5. **Creates Backup**: Saves transformed manifest as `*-coco.yaml`
 
