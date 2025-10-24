@@ -8,6 +8,7 @@ import (
 	"github.com/confidential-containers/coco-ctl/pkg/config"
 	"github.com/confidential-containers/coco-ctl/pkg/initdata"
 	"github.com/confidential-containers/coco-ctl/pkg/manifest"
+	"github.com/confidential-containers/coco-ctl/pkg/sealed"
 	"github.com/spf13/cobra"
 )
 
@@ -95,7 +96,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Transforming %s '%s' for CoCo...\n", m.GetKind(), m.GetName())
 
 	// Transform manifest
-	if err := transformManifest(m, cfg, rc); err != nil {
+	if err := transformManifest(m, cfg, rc, resourceURI, secretFile); err != nil {
 		return fmt.Errorf("failed to transform manifest: %w", err)
 	}
 
@@ -120,14 +121,29 @@ func runApply(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string) error {
+func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc, resourceURI, secretFile string) error {
 	// 1. Set RuntimeClass
 	fmt.Printf("  - Setting runtimeClassName: %s\n", rc)
 	if err := m.SetRuntimeClass(rc); err != nil {
 		return fmt.Errorf("failed to set runtime class: %w", err)
 	}
 
-	// 2. Generate and add initdata annotation
+	// 2. Handle sealed secrets if resource-uri is provided
+	if resourceURI != "" {
+		if err := handleSealedSecret(m, resourceURI); err != nil {
+			return fmt.Errorf("failed to handle sealed secret: %w", err)
+		}
+	} else {
+		// Auto-detect secrets and warn if found
+		secrets := m.GetSecretRefs()
+		if len(secrets) > 0 {
+			fmt.Printf("  ⚠ Warning: Found %d secret reference(s) in manifest: %v\n", len(secrets), secrets)
+			fmt.Println("    Secrets should be converted to sealed secrets for CoCo.")
+			fmt.Println("    Use --resource-uri flag to create a sealed secret.")
+		}
+	}
+
+	// 3. Generate and add initdata annotation
 	fmt.Println("  - Generating initdata annotation")
 	initdataValue, err := initdata.Generate(cfg)
 	if err != nil {
@@ -139,9 +155,40 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string) 
 	}
 
 	// TODO: Add more transformations in subsequent commits:
-	// - Convert secrets to sealed secrets
 	// - Add initContainer
-	// - Handle resource-uri and secret-file flags
+	// - Handle secret-file flag for volume mounts
+
+	return nil
+}
+
+func handleSealedSecret(m *manifest.Manifest, resourceURI string) error {
+	fmt.Printf("  - Converting secrets to sealed secrets (resource: %s)\n", resourceURI)
+
+	// Get all secret references in the manifest
+	secrets := m.GetSecretRefs()
+	if len(secrets) == 0 {
+		fmt.Println("    No secrets found in manifest, but will print sealed secret value")
+	}
+
+	// Generate sealed secret using coco-tools
+	sealedValue, err := sealed.ConvertToSealed(resourceURI)
+	if err != nil {
+		return fmt.Errorf("failed to convert to sealed secret: %w", err)
+	}
+
+	fmt.Printf("    Generated sealed secret: %s\n", sealedValue)
+	fmt.Println("    You need to create a Kubernetes secret with this value:")
+	fmt.Printf("    kubectl create secret generic sealed-secret --from-literal=secret=%s\n", sealedValue)
+
+	// Replace secret names in manifest if secrets exist
+	if len(secrets) > 0 {
+		for _, secretName := range secrets {
+			fmt.Printf("    Replacing secret '%s' with 'sealed-secret'\n", secretName)
+			if err := m.ReplaceSecretName(secretName, "sealed-secret"); err != nil {
+				return fmt.Errorf("failed to replace secret name: %w", err)
+			}
+		}
+	}
 
 	return nil
 }

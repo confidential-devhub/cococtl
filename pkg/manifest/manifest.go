@@ -146,3 +146,103 @@ func (m *Manifest) GetSpec() (map[string]interface{}, error) {
 	}
 	return spec, nil
 }
+
+// GetSecretRefs returns all secret references in the manifest
+func (m *Manifest) GetSecretRefs() []string {
+	secrets := make(map[string]bool)
+
+	spec, err := m.GetSpec()
+	if err != nil {
+		return []string{}
+	}
+
+	// Check containers
+	if containers, ok := spec["containers"].([]interface{}); ok {
+		for _, container := range containers {
+			if c, ok := container.(map[string]interface{}); ok {
+				// Check env variables
+				if env, ok := c["env"].([]interface{}); ok {
+					for _, e := range env {
+						if envVar, ok := e.(map[string]interface{}); ok {
+							if valueFrom, ok := envVar["valueFrom"].(map[string]interface{}); ok {
+								if secretKeyRef, ok := valueFrom["secretKeyRef"].(map[string]interface{}); ok {
+									if name, ok := secretKeyRef["name"].(string); ok {
+										secrets[name] = true
+									}
+								}
+							}
+						}
+					}
+				}
+
+				// Check volume mounts - we need to look at volumes
+			}
+		}
+	}
+
+	// Check volumes
+	if volumes, ok := spec["volumes"].([]interface{}); ok {
+		for _, vol := range volumes {
+			if v, ok := vol.(map[string]interface{}); ok {
+				if secret, ok := v["secret"].(map[string]interface{}); ok {
+					if secretName, ok := secret["secretName"].(string); ok {
+						secrets[secretName] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Convert map to slice
+	result := make([]string, 0, len(secrets))
+	for s := range secrets {
+		result = append(result, s)
+	}
+
+	return result
+}
+
+// ReplaceSecretName replaces all occurrences of oldName with newName in secret references
+func (m *Manifest) ReplaceSecretName(oldName, newName string) error {
+	spec, err := m.GetSpec()
+	if err != nil {
+		return err
+	}
+
+	// Replace in containers
+	if containers, ok := spec["containers"].([]interface{}); ok {
+		for _, container := range containers {
+			if c, ok := container.(map[string]interface{}); ok {
+				// Replace in env variables
+				if env, ok := c["env"].([]interface{}); ok {
+					for _, e := range env {
+						if envVar, ok := e.(map[string]interface{}); ok {
+							if valueFrom, ok := envVar["valueFrom"].(map[string]interface{}); ok {
+								if secretKeyRef, ok := valueFrom["secretKeyRef"].(map[string]interface{}); ok {
+									if name, ok := secretKeyRef["name"].(string); ok && name == oldName {
+										secretKeyRef["name"] = newName
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Replace in volumes
+	if volumes, ok := spec["volumes"].([]interface{}); ok {
+		for _, vol := range volumes {
+			if v, ok := vol.(map[string]interface{}); ok {
+				if secret, ok := v["secret"].(map[string]interface{}); ok {
+					if secretName, ok := secret["secretName"].(string); ok && secretName == oldName {
+						secret["secretName"] = newName
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
