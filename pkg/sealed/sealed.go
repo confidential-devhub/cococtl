@@ -1,83 +1,65 @@
 package sealed
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
-const (
-	// CocoToolsImage is the default image for coco-tools
-	CocoToolsImage = "quay.io/confidential-devhub/coco-tools:0.4.0"
-
-	// ContainerRuntime preferences (try in order)
-	runtimePodman = "podman"
-	runtimeDocker = "docker"
-)
-
-// ConvertToSealed converts a resource URI to a sealed secret using coco-tools
-// Returns the sealed secret string (sealed.fakejwsheader.xxx.fakesignature)
-func ConvertToSealed(resourceURI string) (string, error) {
-	if resourceURI == "" {
-		return "", fmt.Errorf("resource URI cannot be empty")
-	}
-
-	// Detect available container runtime
-	runtime, err := detectRuntime()
-	if err != nil {
-		return "", fmt.Errorf("no container runtime found: %w", err)
-	}
-
-	// Run coco-tools to generate sealed secret
-	// podman run -it quay.io/confidential-devhub/coco-tools:0.4.0 /tools/secret seal vault --resource-uri kbs:///default/kbsres1/key1 --provider kbs
-	cmd := exec.Command(
-		runtime,
-		"run",
-		"--rm",
-		CocoToolsImage,
-		"/tools/secret",
-		"seal",
-		"vault",
-		"--resource-uri", resourceURI,
-		"--provider", "kbs",
-	)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("failed to run coco-tools: %w\nOutput: %s", err, string(output))
-	}
-
-	// Parse output to extract sealed secret
-	// Expected format:
-	// Warning: Secrets must be provisioned to provider separately.
-	// sealed.fakejwsheader.eyJ2ZXJzaW...fakesignature
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "sealed.") {
-			return trimmed, nil
-		}
-	}
-
-	return "", fmt.Errorf("failed to extract sealed secret from output: %s", string(output))
+// SecretSpec represents the sealed secret specification
+type SecretSpec struct {
+	Version          string                 `json:"version"`
+	Type             string                 `json:"type"`
+	Name             string                 `json:"name"`
+	Provider         string                 `json:"provider"`
+	ProviderSettings map[string]interface{} `json:"provider_settings"`
+	Annotations      map[string]interface{} `json:"annotations"`
 }
 
-// detectRuntime checks which container runtime is available
-func detectRuntime() (string, error) {
-	// Try podman first
-	if _, err := exec.LookPath(runtimePodman); err == nil {
-		return runtimePodman, nil
+// GenerateSealedSecret creates a sealed secret from a KBS resource URI
+// Format: sealed.fakejwsheader.{base64url_encoded_json}.fakesignature
+func GenerateSealedSecret(resourceURI string) (string, error) {
+	// Create the secret specification
+	spec := SecretSpec{
+		Version:          "0.1.0",
+		Type:             "vault",
+		Name:             resourceURI,
+		Provider:         "kbs",
+		ProviderSettings: make(map[string]interface{}),
+		Annotations:      make(map[string]interface{}),
 	}
 
-	// Try docker
-	if _, err := exec.LookPath(runtimeDocker); err == nil {
-		return runtimeDocker, nil
+	// Marshal to JSON
+	jsonData, err := json.Marshal(spec)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal secret spec: %w", err)
 	}
 
-	return "", fmt.Errorf("neither podman nor docker found in PATH")
+	// Encode to base64url (unpadded)
+	encoded := base64.RawURLEncoding.EncodeToString(jsonData)
+
+	// Create sealed secret format
+	sealedSecret := fmt.Sprintf("sealed.fakejwsheader.%s.fakesignature", encoded)
+
+	return sealedSecret, nil
 }
 
-// GetRuntime returns the detected container runtime
-func GetRuntime() (string, error) {
-	return detectRuntime()
+// ParseResourceURI extracts the path components from a KBS resource URI
+// Example: kbs:///default/mysecret/user -> namespace=default, resource=mysecret, key=user
+func ParseResourceURI(uri string) (namespace, resource, key string, err error) {
+	// Remove kbs:// prefix
+	if !strings.HasPrefix(uri, "kbs://") {
+		return "", "", "", fmt.Errorf("invalid KBS URI format, must start with kbs://")
+	}
+
+	// Remove prefix and split by /
+	path := strings.TrimPrefix(uri, "kbs://")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+
+	if len(parts) < 3 {
+		return "", "", "", fmt.Errorf("invalid KBS URI format, expected kbs:///namespace/resource/key")
+	}
+
+	return parts[0], parts[1], parts[2], nil
 }
