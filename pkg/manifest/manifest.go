@@ -291,3 +291,84 @@ func (m *Manifest) GetInitContainers() []interface{} {
 
 	return []interface{}{}
 }
+
+// AddVolume adds a volume to the spec
+func (m *Manifest) AddVolume(name, volumeType string, config map[string]interface{}) error {
+	spec, err := m.GetSpec()
+	if err != nil {
+		return err
+	}
+
+	// Create volume definition
+	volume := map[string]interface{}{
+		"name": name,
+	}
+
+	// Add volume-specific configuration
+	volume[volumeType] = config
+
+	// Get existing volumes or create new list
+	var volumes []interface{}
+	if existing, ok := spec["volumes"].([]interface{}); ok {
+		volumes = existing
+	} else {
+		volumes = []interface{}{}
+	}
+
+	// Append new volume
+	volumes = append(volumes, volume)
+	spec["volumes"] = volumes
+
+	return nil
+}
+
+// AddVolumeMountToContainer adds a volumeMount to a specific container
+func (m *Manifest) AddVolumeMountToContainer(containerName, volumeName, mountPath string) error {
+	spec, err := m.GetSpec()
+	if err != nil {
+		return err
+	}
+
+	containers, ok := spec["containers"].([]interface{})
+	if !ok {
+		return fmt.Errorf("no containers found in spec")
+	}
+
+	// Find the container and add volumeMount
+	for _, container := range containers {
+		c, ok := container.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Check if this is the target container (or add to all if containerName is empty)
+		if containerName != "" {
+			if name, ok := c["name"].(string); !ok || name != containerName {
+				continue
+			}
+		}
+
+		// Get existing volumeMounts or create new list
+		var volumeMounts []interface{}
+		if existing, ok := c["volumeMounts"].([]interface{}); ok {
+			volumeMounts = existing
+		} else {
+			volumeMounts = []interface{}{}
+		}
+
+		// Add new volumeMount
+		volumeMount := map[string]interface{}{
+			"name":      volumeName,
+			"mountPath": mountPath,
+		}
+		volumeMounts = append(volumeMounts, volumeMount)
+		c["volumeMounts"] = volumeMounts
+
+		// If specific container name was provided, we're done
+		if containerName != "" {
+			return nil
+		}
+	}
+
+	return nil
+}

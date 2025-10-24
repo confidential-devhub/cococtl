@@ -217,13 +217,80 @@ func handleSecret(m *manifest.Manifest, secretSpec string, cfg *config.CocoConfi
 
 	fmt.Printf("  - Handling secret (resource: %s, path: %s)\n", resourceURI, targetPath)
 
-	// TODO: This will be implemented in the next commit
-	// For now, just print a message
-	fmt.Println("    Secret download initContainer will be added in next commit")
-	fmt.Printf("    Resource URI: %s\n", resourceURI)
-	fmt.Printf("    Target path: %s\n", targetPath)
+	// Convert kbs:// to CDH endpoint format
+	// kbs:///default/kbsres1/key1 -> http://127.0.0.1:8006/cdh/resource/default/kbsres1/key1
+	cdhURL := strings.Replace(resourceURI, "kbs://", "http://127.0.0.1:8006/cdh/resource", 1)
+
+	// Extract volume name from target path (use parent directory name or "keys")
+	volumeName := "keys"
+	mountPath := strings.TrimSuffix(targetPath, "/"+getFileName(targetPath))
+	if mountPath == "" {
+		mountPath = "/keys"
+	}
+
+	// 1. Add emptyDir volume
+	fmt.Printf("    Adding emptyDir volume '%s'\n", volumeName)
+	emptyDirConfig := map[string]interface{}{
+		"medium": "Memory",
+	}
+	if err := m.AddVolume(volumeName, "emptyDir", emptyDirConfig); err != nil {
+		return fmt.Errorf("failed to add volume: %w", err)
+	}
+
+	// 2. Add initContainer to download secret
+	fmt.Printf("    Adding secret download initContainer\n")
+	initContainerCmd := fmt.Sprintf("curl -o %s %s", targetPath, cdhURL)
+	command := []string{"sh", "-c", initContainerCmd}
+
+	// Determine init container image
+	image := "registry.access.redhat.com/ubi9/ubi:9.3"
+	if cfg.InitContainerImage != "" {
+		image = cfg.InitContainerImage
+	}
+
+	// Create initContainer with volumeMount
+	initContainer := map[string]interface{}{
+		"name":    "get-key",
+		"image":   image,
+		"command": command,
+		"volumeMounts": []interface{}{
+			map[string]interface{}{
+				"name":      volumeName,
+				"mountPath": mountPath,
+			},
+		},
+	}
+
+	// Add initContainer manually (more control)
+	spec, err := m.GetSpec()
+	if err != nil {
+		return fmt.Errorf("failed to get spec: %w", err)
+	}
+
+	var initContainers []interface{}
+	if existing, ok := spec["initContainers"].([]interface{}); ok {
+		initContainers = append([]interface{}{initContainer}, existing...)
+	} else {
+		initContainers = []interface{}{initContainer}
+	}
+	spec["initContainers"] = initContainers
+
+	// 3. Add volumeMount to all containers
+	fmt.Printf("    Adding volumeMount to containers (path: %s)\n", mountPath)
+	if err := m.AddVolumeMountToContainer("", volumeName, mountPath); err != nil {
+		return fmt.Errorf("failed to add volumeMount: %w", err)
+	}
 
 	return nil
+}
+
+// getFileName extracts the file name from a path
+func getFileName(path string) string {
+	parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return ""
 }
 
 func applyWithKubectl(manifestPath string) error {
