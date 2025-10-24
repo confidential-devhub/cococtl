@@ -5,7 +5,7 @@
 *.so
 *.dylib
 kubectl-coco
-coco-ctl
+cococtl
 
 # Test binary, built with `go test -c`
 *.test

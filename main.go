@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/confidential-containers/coco-ctl/cmd"
+	"github.com/confidential-devhub/cococtl/cmd"
 )
 
 func main() {

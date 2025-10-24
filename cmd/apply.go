@@ -6,9 +6,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/confidential-containers/coco-ctl/pkg/config"
-	"github.com/confidential-containers/coco-ctl/pkg/initdata"
-	"github.com/confidential-containers/coco-ctl/pkg/manifest"
+	"github.com/confidential-devhub/cococtl/pkg/config"
+	"github.com/confidential-devhub/cococtl/pkg/initdata"
+	"github.com/confidential-devhub/cococtl/pkg/manifest"
 	"github.com/spf13/cobra"
 )
 

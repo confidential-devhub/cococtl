@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/confidential-containers/coco-ctl/pkg/config"
+	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/spf13/cobra"
 )
 

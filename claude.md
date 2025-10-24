@@ -40,7 +40,7 @@ This approach ensured:
 ### Package Structure
 
 ```
-coco-ctl/
+cococtl/
 ├── cmd/                    # CLI commands (Cobra-based)
 │   ├── root.go            # Root command and common utilities
 │   ├── createconfig.go    # Interactive config creation

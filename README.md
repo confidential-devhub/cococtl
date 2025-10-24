@@ -31,8 +31,8 @@ A kubectl plugin to deploy Confidential Containers (CoCo) applications.
 ### From Source
 
 ```bash
-git clone https://github.com/confidential-containers/coco-ctl
-cd coco-ctl
+git clone https://github.com/confidential-devhub/cococtl
+cd cococtl
 make build
 sudo make install
 ```

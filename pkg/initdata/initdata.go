@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/confidential-containers/coco-ctl/pkg/config"
+	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -19,11 +19,11 @@ const (
 
 // InitData represents the structure of initdata TOML
 type InitData struct {
-	Version   string                 `toml:"version"`
-	Algorithm string                 `toml:"algorithm"`
-	AAToml    string                 `toml:"aa.toml"`
-	CDHToml   string                 `toml:"cdh.toml"`
-	Data      map[string]string      `toml:"data"`
+	Version   string            `toml:"version"`
+	Algorithm string            `toml:"algorithm"`
+	AAToml    string            `toml:"aa.toml"`
+	CDHToml   string            `toml:"cdh.toml"`
+	Data      map[string]string `toml:"data"`
 }
 
 // Generate creates initdata based on the CoCo configuration
