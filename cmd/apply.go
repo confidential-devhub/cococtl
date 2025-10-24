@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/confidential-containers/coco-ctl/pkg/config"
 	"github.com/confidential-containers/coco-ctl/pkg/initdata"
 	"github.com/confidential-containers/coco-ctl/pkg/manifest"
-	"github.com/confidential-containers/coco-ctl/pkg/sealed"
 	"github.com/spf13/cobra"
 )
 
@@ -39,8 +39,7 @@ var (
 	addInitContainer bool
 	initContainerImg string
 	initContainerCmd string
-	resourceURI      string
-	secretFile       string
+	secretSpec       string
 	skipApply        bool
 	configPath       string
 )
@@ -53,8 +52,7 @@ func init() {
 	applyCmd.Flags().BoolVar(&addInitContainer, "init-container", false, "Add default attestation initContainer")
 	applyCmd.Flags().StringVar(&initContainerImg, "init-container-img", "", "Custom init container image (requires --init-container)")
 	applyCmd.Flags().StringVar(&initContainerCmd, "init-container-cmd", "", "Custom init container command (requires --init-container)")
-	applyCmd.Flags().StringVar(&resourceURI, "resource-uri", "", "Resource URI in trustee (e.g., kbs:///default/kbsres1/key1)")
-	applyCmd.Flags().StringVar(&secretFile, "secret-file", "", "Path inside container to mount the secret")
+	applyCmd.Flags().StringVar(&secretSpec, "secret", "", "Secret specification (format: kbs://uri::path, e.g., kbs:///default/kbsres1/key1::/keys/key1)")
 	applyCmd.Flags().BoolVar(&skipApply, "skip-apply", false, "Skip kubectl apply, only transform the manifest")
 	applyCmd.Flags().StringVar(&configPath, "config", "", "Path to CoCo config file (default: ~/.kube/coco-config.toml)")
 
@@ -144,10 +142,10 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string) 
 		}
 	}
 
-	// 3. Handle sealed secrets if resource-uri is provided
-	if resourceURI != "" {
-		if err := handleSealedSecret(m, resourceURI); err != nil {
-			return fmt.Errorf("failed to handle sealed secret: %w", err)
+	// 3. Handle secrets if --secret is provided
+	if secretSpec != "" {
+		if err := handleSecret(m, secretSpec, cfg); err != nil {
+			return fmt.Errorf("failed to handle secret: %w", err)
 		}
 	} else {
 		// Auto-detect secrets and warn if found
@@ -155,7 +153,7 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string) 
 		if len(secrets) > 0 {
 			fmt.Printf("  ⚠ Warning: Found %d secret reference(s) in manifest: %v\n", len(secrets), secrets)
 			fmt.Println("    Secrets should be converted to sealed secrets for CoCo.")
-			fmt.Println("    Use --resource-uri flag to create a sealed secret.")
+			fmt.Println("    Use --secret flag to handle secrets (format: kbs://uri::path).")
 		}
 	}
 
@@ -207,34 +205,23 @@ func handleInitContainer(m *manifest.Manifest, cfg *config.CocoConfig) error {
 	return nil
 }
 
-func handleSealedSecret(m *manifest.Manifest, resourceURI string) error {
-	fmt.Printf("  - Converting secrets to sealed secrets (resource: %s)\n", resourceURI)
-
-	// Get all secret references in the manifest
-	secrets := m.GetSecretRefs()
-	if len(secrets) == 0 {
-		fmt.Println("    No secrets found in manifest, but will print sealed secret value")
+func handleSecret(m *manifest.Manifest, secretSpec string, cfg *config.CocoConfig) error {
+	// Parse secret specification: kbs://uri::path
+	parts := strings.Split(secretSpec, "::")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid secret format, expected 'kbs://uri::path', got: %s", secretSpec)
 	}
 
-	// Generate sealed secret using coco-tools
-	sealedValue, err := sealed.ConvertToSealed(resourceURI)
-	if err != nil {
-		return fmt.Errorf("failed to convert to sealed secret: %w", err)
-	}
+	resourceURI := parts[0]
+	targetPath := parts[1]
 
-	fmt.Printf("    Generated sealed secret: %s\n", sealedValue)
-	fmt.Println("    You need to create a Kubernetes secret with this value:")
-	fmt.Printf("    kubectl create secret generic sealed-secret --from-literal=secret=%s\n", sealedValue)
+	fmt.Printf("  - Handling secret (resource: %s, path: %s)\n", resourceURI, targetPath)
 
-	// Replace secret names in manifest if secrets exist
-	if len(secrets) > 0 {
-		for _, secretName := range secrets {
-			fmt.Printf("    Replacing secret '%s' with 'sealed-secret'\n", secretName)
-			if err := m.ReplaceSecretName(secretName, "sealed-secret"); err != nil {
-				return fmt.Errorf("failed to replace secret name: %w", err)
-			}
-		}
-	}
+	// TODO: This will be implemented in the next commit
+	// For now, just print a message
+	fmt.Println("    Secret download initContainer will be added in next commit")
+	fmt.Printf("    Resource URI: %s\n", resourceURI)
+	fmt.Printf("    Target path: %s\n", targetPath)
 
 	return nil
 }
