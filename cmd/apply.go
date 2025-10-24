@@ -6,6 +6,7 @@ import (
 	"os/exec"
 
 	"github.com/confidential-containers/coco-ctl/pkg/config"
+	"github.com/confidential-containers/coco-ctl/pkg/initdata"
 	"github.com/confidential-containers/coco-ctl/pkg/manifest"
 	"github.com/spf13/cobra"
 )
@@ -126,10 +127,14 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string) 
 		return fmt.Errorf("failed to set runtime class: %w", err)
 	}
 
-	// 2. Add initdata annotation (placeholder for now)
-	fmt.Println("  - Adding initdata annotation")
-	// TODO: Generate actual initdata in next iteration
-	if err := m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", "placeholder_initdata"); err != nil {
+	// 2. Generate and add initdata annotation
+	fmt.Println("  - Generating initdata annotation")
+	initdataValue, err := initdata.Generate(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to generate initdata: %w", err)
+	}
+
+	if err := m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", initdataValue); err != nil {
 		return fmt.Errorf("failed to set initdata annotation: %w", err)
 	}
 
