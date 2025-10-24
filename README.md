@@ -97,6 +97,18 @@ kubectl coco apply -f app.yaml --config /path/to/config.toml
 
 # Convert secrets to sealed secrets
 kubectl coco apply -f app.yaml --resource-uri "kbs:///default/kbsres1/key1"
+
+# Add default attestation initContainer
+kubectl coco apply -f app.yaml --init-container
+
+# Add custom initContainer with specific image
+kubectl coco apply -f app.yaml --init-container --init-container-img custom:latest
+
+# Add custom initContainer with specific command
+kubectl coco apply -f app.yaml --init-container --init-container-cmd "echo 'attestation check'"
+
+# Combine multiple options
+kubectl coco apply -f app.yaml --init-container --resource-uri "kbs:///default/kbsres1/key1" --runtime-class kata-remote
 ```
 
 ### 3. Working with Sealed Secrets
@@ -131,12 +143,18 @@ When you run `kubectl coco apply`, the tool:
    - `policy.rego`: Agent policy (default: exec and logs disabled)
    - Compressed with gzip and base64 encoded
 
-3. **Converts Secrets** (if `--resource-uri` provided):
+3. **Adds InitContainer** (if `--init-container` flag provided):
+   - Prepends an initContainer named 'get-attn-status'
+   - Default: Queries attestation status from CDH
+   - Custom image: Use `--init-container-img`
+   - Custom command: Use `--init-container-cmd`
+
+4. **Converts Secrets** (if `--resource-uri` provided):
    - Detects secret references in env vars and volumes
    - Generates sealed secrets via coco-tools
    - Replaces secret names with 'sealed-secret'
 
-4. **Creates Backup**: Saves transformed manifest as `*-coco.yaml`
+5. **Creates Backup**: Saves transformed manifest as `*-coco.yaml`
 
 ## Example
 

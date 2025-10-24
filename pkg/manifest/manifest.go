@@ -246,3 +246,48 @@ func (m *Manifest) ReplaceSecretName(oldName, newName string) error {
 
 	return nil
 }
+
+// AddInitContainer adds an initContainer to the beginning of the initContainers list
+func (m *Manifest) AddInitContainer(name, image string, command []string) error {
+	spec, err := m.GetSpec()
+	if err != nil {
+		return err
+	}
+
+	// Create the initContainer
+	initContainer := map[string]interface{}{
+		"name":  name,
+		"image": image,
+	}
+
+	if len(command) > 0 {
+		initContainer["command"] = command
+	}
+
+	// Get existing initContainers or create new list
+	var initContainers []interface{}
+	if existing, ok := spec["initContainers"].([]interface{}); ok {
+		// Prepend new initContainer to existing list
+		initContainers = append([]interface{}{initContainer}, existing...)
+	} else {
+		// Create new list with just this initContainer
+		initContainers = []interface{}{initContainer}
+	}
+
+	spec["initContainers"] = initContainers
+	return nil
+}
+
+// GetInitContainers returns the list of initContainers
+func (m *Manifest) GetInitContainers() []interface{} {
+	spec, err := m.GetSpec()
+	if err != nil {
+		return []interface{}{}
+	}
+
+	if initContainers, ok := spec["initContainers"].([]interface{}); ok {
+		return initContainers
+	}
+
+	return []interface{}{}
+}

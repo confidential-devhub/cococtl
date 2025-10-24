@@ -36,7 +36,9 @@ Example:
 var (
 	manifestFile     string
 	runtimeClass     string
-	initContainer    string
+	addInitContainer bool
+	initContainerImg string
+	initContainerCmd string
 	resourceURI      string
 	secretFile       string
 	skipApply        bool
@@ -48,7 +50,9 @@ func init() {
 
 	applyCmd.Flags().StringVarP(&manifestFile, "filename", "f", "", "Path to Kubernetes manifest file (required)")
 	applyCmd.Flags().StringVar(&runtimeClass, "runtime-class", "", "RuntimeClass to use (default from config)")
-	applyCmd.Flags().StringVar(&initContainer, "init-container", "", "Custom init container image")
+	applyCmd.Flags().BoolVar(&addInitContainer, "init-container", false, "Add default attestation initContainer")
+	applyCmd.Flags().StringVar(&initContainerImg, "init-container-img", "", "Custom init container image (requires --init-container)")
+	applyCmd.Flags().StringVar(&initContainerCmd, "init-container-cmd", "", "Custom init container command (requires --init-container)")
 	applyCmd.Flags().StringVar(&resourceURI, "resource-uri", "", "Resource URI in trustee (e.g., kbs:///default/kbsres1/key1)")
 	applyCmd.Flags().StringVar(&secretFile, "secret-file", "", "Path inside container to mount the secret")
 	applyCmd.Flags().BoolVar(&skipApply, "skip-apply", false, "Skip kubectl apply, only transform the manifest")
@@ -95,8 +99,13 @@ func runApply(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Transforming %s '%s' for CoCo...\n", m.GetKind(), m.GetName())
 
+	// Validate initContainer flags
+	if (initContainerImg != "" || initContainerCmd != "") && !addInitContainer {
+		return fmt.Errorf("--init-container-img and --init-container-cmd require --init-container flag")
+	}
+
 	// Transform manifest
-	if err := transformManifest(m, cfg, rc, resourceURI, secretFile); err != nil {
+	if err := transformManifest(m, cfg, rc); err != nil {
 		return fmt.Errorf("failed to transform manifest: %w", err)
 	}
 
@@ -121,14 +130,21 @@ func runApply(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc, resourceURI, secretFile string) error {
+func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string) error {
 	// 1. Set RuntimeClass
 	fmt.Printf("  - Setting runtimeClassName: %s\n", rc)
 	if err := m.SetRuntimeClass(rc); err != nil {
 		return fmt.Errorf("failed to set runtime class: %w", err)
 	}
 
-	// 2. Handle sealed secrets if resource-uri is provided
+	// 2. Add initContainer if requested
+	if addInitContainer {
+		if err := handleInitContainer(m, cfg); err != nil {
+			return fmt.Errorf("failed to add initContainer: %w", err)
+		}
+	}
+
+	// 3. Handle sealed secrets if resource-uri is provided
 	if resourceURI != "" {
 		if err := handleSealedSecret(m, resourceURI); err != nil {
 			return fmt.Errorf("failed to handle sealed secret: %w", err)
@@ -143,7 +159,7 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc, resourc
 		}
 	}
 
-	// 3. Generate and add initdata annotation
+	// 4. Generate and add initdata annotation
 	fmt.Println("  - Generating initdata annotation")
 	initdataValue, err := initdata.Generate(cfg)
 	if err != nil {
@@ -154,9 +170,39 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc, resourc
 		return fmt.Errorf("failed to set initdata annotation: %w", err)
 	}
 
-	// TODO: Add more transformations in subsequent commits:
-	// - Add initContainer
-	// - Handle secret-file flag for volume mounts
+	return nil
+}
+
+func handleInitContainer(m *manifest.Manifest, cfg *config.CocoConfig) error {
+	// Determine the image to use
+	image := initContainerImg
+	if image == "" {
+		// Use configured init container image or default
+		if cfg.InitContainerImage != "" {
+			image = cfg.InitContainerImage
+		} else {
+			image = "quay.io/fedora/fedora:44" // Default image
+		}
+	}
+
+	// Determine the command to use
+	var command []string
+	if initContainerCmd != "" {
+		// User provided custom command
+		command = []string{"sh", "-c", initContainerCmd}
+	} else {
+		// Default attestation check command
+		command = []string{
+			"sh",
+			"-c",
+			"curl http://localhost:8006/cdh/resource/default/attestation-status/status",
+		}
+	}
+
+	fmt.Printf("  - Adding initContainer 'get-attn-status' (image: %s)\n", image)
+	if err := m.AddInitContainer("get-attn-status", image, command); err != nil {
+		return fmt.Errorf("failed to add initContainer: %w", err)
+	}
 
 	return nil
 }
