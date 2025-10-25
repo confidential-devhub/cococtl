@@ -24,7 +24,6 @@ A kubectl plugin to deploy Confidential Containers (CoCo) applications.
 
 - Go 1.21 or later (for building from source)
 - kubectl (for applying manifests)
-- podman or docker (for sealed secret generation)
 
 ## Installation
 
@@ -242,21 +241,6 @@ kata_agent_policy = '/path/to/custom-policy.rego'
 See [examples/](examples/) for policy examples.
 
 ## Troubleshooting
-
-### "No container runtime found"
-
-Sealed secret conversion requires podman or docker. Install one:
-
-```bash
-# macOS
-brew install podman
-podman machine init
-podman machine start
-
-# Linux
-sudo dnf install podman  # Fedora/RHEL
-sudo apt install podman  # Ubuntu/Debian
-```
 
 ### "trustee_server is mandatory"
 
