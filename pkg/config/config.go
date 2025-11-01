@@ -15,7 +15,8 @@ type CocoConfig struct {
 	RuntimeClass       string            `toml:"runtime_class" comment:"Default RuntimeClass to use when --runtime-class is not specified (default: kata-cc)"`
 	TrusteeCACert      string            `toml:"trustee_ca_cert" comment:"Trustee CA cert location (optional)"`
 	KataAgentPolicy    string            `toml:"kata_agent_policy" comment:"Kata-agent policy file path (optional)"`
-	InitContainerImage string            `toml:"init_container_image" comment:"Init Container image for attestation (optional)"`
+	InitContainerImage string            `toml:"init_container_image" comment:"Default init container image (optional, default: quay.io/fedora/fedora:44)"`
+	InitContainerCmd   string            `toml:"init_container_cmd" comment:"Default init container command (optional, default: attestation check)"`
 	ContainerPolicyURI string            `toml:"container_policy_uri" comment:"Container policy URI (optional)"`
 	RegistryCredURI    string            `toml:"registry_cred_uri" comment:"Container registry credentials URI (optional)"`
 	RegistryConfigURI  string            `toml:"registry_config_uri" comment:"Container registry config URI (optional)"`
@@ -30,6 +31,7 @@ func DefaultConfig() *CocoConfig {
 		TrusteeCACert:      "",
 		KataAgentPolicy:    "",
 		InitContainerImage: "",
+		InitContainerCmd:   "",
 		ContainerPolicyURI: "",
 		RegistryCredURI:    "",
 		RegistryConfigURI:  "",

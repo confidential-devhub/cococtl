@@ -65,7 +65,8 @@ runtime_class = 'kata-cc'
 # Optional settings
 trustee_ca_cert = '/path/to/ca.crt'
 kata_agent_policy = '/path/to/policy.rego'
-init_container_image = 'custom-init:latest'
+init_container_image = 'quay.io/fedora/fedora:44'
+init_container_cmd = 'curl http://localhost:8006/cdh/resource/default/attestation-status/status'
 
 # Custom annotations to add to pods (optional)
 # Only annotations with non-empty values will be added
@@ -231,7 +232,8 @@ The configuration file (`~/.kube/coco-config.toml`) supports:
 | `runtime_class` | Yes | Default RuntimeClass to use when --runtime-class is not specified (default: kata-cc) |
 | `trustee_ca_cert` | No | Path to Trustee CA certificate |
 | `kata_agent_policy` | No | Path to custom agent policy file (.rego) |
-| `init_container_image` | No | Custom init container for attestation |
+| `init_container_image` | No | Default init container image (default: quay.io/fedora/fedora:44) |
+| `init_container_cmd` | No | Default init container command (default: attestation check) |
 | `container_policy_uri` | No | Container policy URI |
 | `registry_cred_uri` | No | Registry credentials URI |
 | `registry_config_uri` | No | Registry configuration URI |

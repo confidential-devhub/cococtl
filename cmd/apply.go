@@ -201,8 +201,11 @@ func handleInitContainer(m *manifest.Manifest, cfg *config.CocoConfig) error {
 	// Determine the command to use
 	var command []string
 	if initContainerCmd != "" {
-		// User provided custom command
+		// User provided custom command via CLI
 		command = []string{"sh", "-c", initContainerCmd}
+	} else if cfg.InitContainerCmd != "" {
+		// Use configured init container command
+		command = []string{"sh", "-c", cfg.InitContainerCmd}
 	} else {
 		// Default attestation check command
 		command = []string{
