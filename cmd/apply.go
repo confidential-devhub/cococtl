@@ -270,7 +270,7 @@ func handleSecret(m *manifest.Manifest, secretSpec string, cfg *config.CocoConfi
 
 	var initContainers []interface{}
 	if existing, ok := spec["initContainers"].([]interface{}); ok {
-		initContainers = append([]interface{}{initContainer}, existing...)
+		initContainers = append(existing, initContainer)
 	} else {
 		initContainers = []interface{}{initContainer}
 	}
