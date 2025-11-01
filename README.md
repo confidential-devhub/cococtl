@@ -59,8 +59,8 @@ This creates `~/.kube/coco-config.toml` with the following settings:
 # Trustee server URL (mandatory)
 trustee_server = 'https://your-trustee-server:8080'
 
-# RuntimeClass to use (default)
-runtime_classes = ['kata-cc', 'kata-remote']
+# Default RuntimeClass to use when --runtime-class is not specified
+runtime_class = 'kata-cc'
 
 # Optional settings
 trustee_ca_cert = '/path/to/ca.crt'
@@ -217,7 +217,7 @@ The configuration file (`~/.kube/coco-config.toml`) supports:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `trustee_server` | Yes | URL of the Trustee/KBS server |
-| `runtime_classes` | Yes | List of RuntimeClasses (default: kata-cc, kata-remote) |
+| `runtime_class` | Yes | Default RuntimeClass to use when --runtime-class is not specified (default: kata-cc) |
 | `trustee_ca_cert` | No | Path to Trustee CA certificate |
 | `kata_agent_policy` | No | Path to custom agent policy file (.rego) |
 | `init_container_image` | No | Custom init container for attestation |

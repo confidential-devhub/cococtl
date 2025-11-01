@@ -11,27 +11,27 @@ import (
 
 // CocoConfig represents the configuration for CoCo deployments
 type CocoConfig struct {
-	TrusteeServer         string   `toml:"trustee_server" comment:"Trustee server URL (mandatory)"`
-	RuntimeClasses        []string `toml:"runtime_classes" comment:"RuntimeClass to use (kata-cc and kata-remote as default)"`
-	TrusteeCACert         string   `toml:"trustee_ca_cert" comment:"Trustee CA cert location (optional)"`
-	KataAgentPolicy       string   `toml:"kata_agent_policy" comment:"Kata-agent policy file path (optional)"`
-	InitContainerImage    string   `toml:"init_container_image" comment:"Init Container image for attestation (optional)"`
-	ContainerPolicyURI    string   `toml:"container_policy_uri" comment:"Container policy URI (optional)"`
-	RegistryCredURI       string   `toml:"registry_cred_uri" comment:"Container registry credentials URI (optional)"`
-	RegistryConfigURI     string   `toml:"registry_config_uri" comment:"Container registry config URI (optional)"`
+	TrusteeServer         string `toml:"trustee_server" comment:"Trustee server URL (mandatory)"`
+	RuntimeClass          string `toml:"runtime_class" comment:"Default RuntimeClass to use when --runtime-class is not specified (default: kata-cc)"`
+	TrusteeCACert         string `toml:"trustee_ca_cert" comment:"Trustee CA cert location (optional)"`
+	KataAgentPolicy       string `toml:"kata_agent_policy" comment:"Kata-agent policy file path (optional)"`
+	InitContainerImage    string `toml:"init_container_image" comment:"Init Container image for attestation (optional)"`
+	ContainerPolicyURI    string `toml:"container_policy_uri" comment:"Container policy URI (optional)"`
+	RegistryCredURI       string `toml:"registry_cred_uri" comment:"Container registry credentials URI (optional)"`
+	RegistryConfigURI     string `toml:"registry_config_uri" comment:"Container registry config URI (optional)"`
 }
 
 // DefaultConfig returns a default CoCo configuration
 func DefaultConfig() *CocoConfig {
 	return &CocoConfig{
-		TrusteeServer:  "",
-		RuntimeClasses: []string{"kata-cc", "kata-remote"},
-		TrusteeCACert:  "",
-		KataAgentPolicy: "",
+		TrusteeServer:      "",
+		RuntimeClass:       "kata-cc",
+		TrusteeCACert:      "",
+		KataAgentPolicy:    "",
 		InitContainerImage: "",
 		ContainerPolicyURI: "",
-		RegistryCredURI: "",
-		RegistryConfigURI: "",
+		RegistryCredURI:    "",
+		RegistryConfigURI:  "",
 	}
 }
 
@@ -84,8 +84,8 @@ func (c *CocoConfig) Validate() error {
 	if c.TrusteeServer == "" {
 		return fmt.Errorf("trustee_server is mandatory and cannot be empty")
 	}
-	if len(c.RuntimeClasses) == 0 {
-		return fmt.Errorf("at least one runtime_class must be specified")
+	if c.RuntimeClass == "" {
+		return fmt.Errorf("runtime_class must be specified")
 	}
 
 	// Normalize trustee_server URL - add https:// prefix if no protocol is specified

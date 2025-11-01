@@ -85,11 +85,8 @@ func runApply(cmd *cobra.Command, args []string) error {
 	// Determine runtime class to use
 	rc := runtimeClass
 	if rc == "" {
-		if len(cfg.RuntimeClasses) > 0 {
-			rc = cfg.RuntimeClasses[0] // Use first one as default
-		} else {
-			return fmt.Errorf("no runtime class specified and none found in config")
-		}
+		// Use default from config
+		rc = cfg.RuntimeClass
 	}
 
 	// Load manifest

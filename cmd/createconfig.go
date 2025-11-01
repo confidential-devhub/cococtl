@@ -17,7 +17,7 @@ var createConfigCmd = &cobra.Command{
 
 This interactive command will prompt you for configuration values including:
   - Trustee server URL (mandatory)
-  - RuntimeClass to use (default: kata-cc, kata-remote)
+  - Default RuntimeClass (default: kata-cc)
   - Trustee CA cert location (optional)
   - Kata-agent policy file path (optional)
   - Init Container image for attestation (optional)
@@ -72,19 +72,7 @@ func runCreateConfig(cmd *cobra.Command, args []string) error {
 
 		// Prompt for configuration values
 		cfg.TrusteeServer = promptString("Trustee server URL (mandatory)", cfg.TrusteeServer, true)
-
-		runtimeClassesStr := promptString(
-			"RuntimeClasses (comma-separated)",
-			strings.Join(cfg.RuntimeClasses, ","),
-			false,
-		)
-		if runtimeClassesStr != "" {
-			cfg.RuntimeClasses = strings.Split(runtimeClassesStr, ",")
-			for i := range cfg.RuntimeClasses {
-				cfg.RuntimeClasses[i] = strings.TrimSpace(cfg.RuntimeClasses[i])
-			}
-		}
-
+		cfg.RuntimeClass = promptString("Default RuntimeClass", cfg.RuntimeClass, false)
 		cfg.TrusteeCACert = promptString("Trustee CA cert location (optional)", cfg.TrusteeCACert, false)
 		cfg.KataAgentPolicy = promptString("Kata-agent policy file path (optional)", cfg.KataAgentPolicy, false)
 		cfg.InitContainerImage = promptString("Init Container image (optional)", cfg.InitContainerImage, false)
