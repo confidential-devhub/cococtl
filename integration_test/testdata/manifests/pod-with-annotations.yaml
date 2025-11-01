@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-with-annotations
+  annotations:
+    existing.annotation: "existing-value"
+spec:
+  containers:
+  - name: app
+    image: nginx:latest

@@ -1,0 +1,14 @@
+trustee_server = ''
+runtime_class = 'kata-cc'
+trustee_ca_cert = ''
+kata_agent_policy = ''
+init_container_image = 'quay.io/fedora/fedora:44'
+init_container_cmd = 'curl http://localhost:8006/cdh/resource/default/attestation-status/status'
+container_policy_uri = ''
+registry_cred_uri = ''
+registry_config_uri = ''
+
+[annotations]
+'io.katacontainers.config.hypervisor.image' = ''
+'io.katacontainers.config.hypervisor.machine_type' = ''
+'io.katacontainers.config.runtime.create_container_timeout' = ''

@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-multi-container
+spec:
+  containers:
+  - name: app
+    image: nginx:latest
+  - name: sidecar
+    image: busybox:latest
+    command: ["sleep", "3600"]

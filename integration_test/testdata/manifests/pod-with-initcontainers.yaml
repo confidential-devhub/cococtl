@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-with-init
+spec:
+  initContainers:
+  - name: existing-init
+    image: busybox:latest
+    command: ["sh", "-c", "echo existing"]
+  containers:
+  - name: app
+    image: nginx:latest
