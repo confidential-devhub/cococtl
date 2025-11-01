@@ -9,6 +9,13 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+// Default configuration values
+const (
+	DefaultRuntimeClass       = "kata-cc"
+	DefaultInitContainerImage = "quay.io/fedora/fedora:44"
+	DefaultInitContainerCmd   = "curl http://localhost:8006/cdh/resource/default/attestation-status/status"
+)
+
 // CocoConfig represents the configuration for CoCo deployments
 type CocoConfig struct {
 	TrusteeServer      string            `toml:"trustee_server" comment:"Trustee server URL (mandatory)"`
@@ -27,11 +34,11 @@ type CocoConfig struct {
 func DefaultConfig() *CocoConfig {
 	return &CocoConfig{
 		TrusteeServer:      "",
-		RuntimeClass:       "kata-cc",
+		RuntimeClass:       DefaultRuntimeClass,
 		TrusteeCACert:      "",
 		KataAgentPolicy:    "",
-		InitContainerImage: "",
-		InitContainerCmd:   "",
+		InitContainerImage: DefaultInitContainerImage,
+		InitContainerCmd:   DefaultInitContainerCmd,
 		ContainerPolicyURI: "",
 		RegistryCredURI:    "",
 		RegistryConfigURI:  "",
