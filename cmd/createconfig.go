@@ -23,7 +23,8 @@ This interactive command will prompt you for configuration values including:
   - Init Container image for attestation (optional)
   - Container policy URI (optional)
   - Container registry credentials URI (optional)
-  - Container registry config URI (optional)`,
+  - Container registry config URI (optional)
+  - Custom annotations (optional, edit config file directly)`,
 	RunE: runCreateConfig,
 }
 

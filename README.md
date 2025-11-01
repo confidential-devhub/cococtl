@@ -66,6 +66,13 @@ runtime_class = 'kata-cc'
 trustee_ca_cert = '/path/to/ca.crt'
 kata_agent_policy = '/path/to/policy.rego'
 init_container_image = 'custom-init:latest'
+
+# Custom annotations to add to pods (optional)
+# Only annotations with non-empty values will be added
+[annotations]
+"io.katacontainers.config.runtime.create_container_timeout" = "120"
+"io.katacontainers.config.hypervisor.machine_type" = "q35"
+"io.katacontainers.config.hypervisor.image" = "/path/to/custom-image"
 ```
 
 #### Non-Interactive Mode
@@ -165,7 +172,11 @@ When you run `kubectl coco apply`, the tool:
    - Mounts volume in initContainer and app containers
    - Converts kbs:// URIs to CDH endpoint URLs
 
-5. **Creates Backup**: Saves transformed manifest as `*-coco.yaml`
+5. **Adds Custom Annotations**: Applies any custom annotations from config
+   - Only annotations with non-empty values are added
+   - Common examples: container timeout, hypervisor settings, custom image paths
+
+6. **Creates Backup**: Saves transformed manifest as `*-coco.yaml`
 
 ## Example
 
@@ -224,6 +235,7 @@ The configuration file (`~/.kube/coco-config.toml`) supports:
 | `container_policy_uri` | No | Container policy URI |
 | `registry_cred_uri` | No | Registry credentials URI |
 | `registry_config_uri` | No | Registry configuration URI |
+| `annotations` | No | Map of custom annotations to add to pods (only non-empty values are applied) |
 
 ## Policy Files
 

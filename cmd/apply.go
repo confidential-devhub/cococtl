@@ -169,6 +169,20 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string) 
 		return fmt.Errorf("failed to set initdata annotation: %w", err)
 	}
 
+	// 5. Add custom annotations from config
+	if len(cfg.Annotations) > 0 {
+		fmt.Println("  - Adding custom annotations from config")
+		for key, value := range cfg.Annotations {
+			// Only add annotations with non-empty values
+			if value != "" {
+				fmt.Printf("    %s: %s\n", key, value)
+				if err := m.SetAnnotation(key, value); err != nil {
+					return fmt.Errorf("failed to set annotation %s: %w", key, err)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
