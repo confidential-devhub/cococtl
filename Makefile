@@ -14,6 +14,9 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 
+# Test parameters
+TEST?=.
+
 # Build flags
 LDFLAGS=-ldflags "-s -w"
 
@@ -45,12 +48,13 @@ clean:
 	@echo "Cleaning..."
 	$(GOCLEAN)
 	@rm -f $(BINARY_NAME)
+	@rm -f coverage.out coverage.html
 	@echo "Clean complete"
 
-## test: Run tests
+## test: Run integration tests (use TEST=<regex> to filter, e.g., make test TEST=TestConfig)
 test:
-	@echo "Running tests..."
-	$(GOTEST) -v ./...
+	@echo "Running tests (filter: $(TEST))..."
+	$(GOTEST) -v -run $(TEST) ./integration_test/...
 
 ## tidy: Tidy go modules
 tidy:
