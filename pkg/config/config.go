@@ -11,15 +11,15 @@ import (
 
 // CocoConfig represents the configuration for CoCo deployments
 type CocoConfig struct {
-	TrusteeServer         string            `toml:"trustee_server" comment:"Trustee server URL (mandatory)"`
-	RuntimeClass          string            `toml:"runtime_class" comment:"Default RuntimeClass to use when --runtime-class is not specified (default: kata-cc)"`
-	TrusteeCACert         string            `toml:"trustee_ca_cert" comment:"Trustee CA cert location (optional)"`
-	KataAgentPolicy       string            `toml:"kata_agent_policy" comment:"Kata-agent policy file path (optional)"`
-	InitContainerImage    string            `toml:"init_container_image" comment:"Init Container image for attestation (optional)"`
-	ContainerPolicyURI    string            `toml:"container_policy_uri" comment:"Container policy URI (optional)"`
-	RegistryCredURI       string            `toml:"registry_cred_uri" comment:"Container registry credentials URI (optional)"`
-	RegistryConfigURI     string            `toml:"registry_config_uri" comment:"Container registry config URI (optional)"`
-	Annotations           map[string]string `toml:"annotations" comment:"Custom annotations to add to pods (optional)"`
+	TrusteeServer      string            `toml:"trustee_server" comment:"Trustee server URL (mandatory)"`
+	RuntimeClass       string            `toml:"runtime_class" comment:"Default RuntimeClass to use when --runtime-class is not specified (default: kata-cc)"`
+	TrusteeCACert      string            `toml:"trustee_ca_cert" comment:"Trustee CA cert location (optional)"`
+	KataAgentPolicy    string            `toml:"kata_agent_policy" comment:"Kata-agent policy file path (optional)"`
+	InitContainerImage string            `toml:"init_container_image" comment:"Init Container image for attestation (optional)"`
+	ContainerPolicyURI string            `toml:"container_policy_uri" comment:"Container policy URI (optional)"`
+	RegistryCredURI    string            `toml:"registry_cred_uri" comment:"Container registry credentials URI (optional)"`
+	RegistryConfigURI  string            `toml:"registry_config_uri" comment:"Container registry config URI (optional)"`
+	Annotations        map[string]string `toml:"annotations" comment:"Custom annotations to add to pods (optional)"`
 }
 
 // DefaultConfig returns a default CoCo configuration
