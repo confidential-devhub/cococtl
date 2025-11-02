@@ -1,4 +1,4 @@
-.PHONY: build install clean test help
+.PHONY: build install clean test help release release-all
 
 # Binary name
 BINARY_NAME=kubectl-coco
@@ -19,6 +19,12 @@ TEST?=.
 
 # Build flags
 LDFLAGS=-ldflags "-s -w"
+
+# Release parameters
+GOOS?=$(shell go env GOOS)
+GOARCH?=$(shell go env GOARCH)
+RELEASE_DIR=release
+RELEASE_BINARY=$(BINARY_NAME)-$(GOOS)-$(GOARCH)
 
 # Default target
 all: build
@@ -49,6 +55,7 @@ clean:
 	$(GOCLEAN)
 	@rm -f $(BINARY_NAME)
 	@rm -f coverage.out coverage.html
+	@rm -rf $(RELEASE_DIR)
 	@echo "Clean complete"
 
 ## test: Run integration tests (use TEST=<regex> to filter, e.g., make test TEST=TestConfig)
@@ -83,3 +90,22 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@sed -n 's/^##//p' $(MAKEFILE_LIST) | column -t -s ':' | sed -e 's/^/ /'
+
+## release: Build static binary for specific OS/ARCH (use GOOS and GOARCH env vars)
+release:
+	@echo "Building release binary for $(GOOS)/$(GOARCH)..."
+	@mkdir -p $(RELEASE_DIR)
+	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -ldflags "-s -w -extldflags=-static" -o $(RELEASE_DIR)/$(RELEASE_BINARY) .
+	@chmod +x $(RELEASE_DIR)/$(RELEASE_BINARY)
+	@cd $(RELEASE_DIR) && sha256sum $(RELEASE_BINARY) > $(RELEASE_BINARY).sha256
+	@echo "Release binary created: $(RELEASE_DIR)/$(RELEASE_BINARY)"
+	@echo "Checksum: $(RELEASE_DIR)/$(RELEASE_BINARY).sha256"
+
+## release-all: Build release binaries for all supported platforms
+release-all: clean
+	@echo "Building release binaries for all platforms..."
+	@$(MAKE) release GOOS=linux GOARCH=amd64
+	@$(MAKE) release GOOS=darwin GOARCH=amd64
+	@$(MAKE) release GOOS=darwin GOARCH=arm64
+	@echo "All release binaries created in $(RELEASE_DIR)/"
+	@ls -lh $(RELEASE_DIR)/
