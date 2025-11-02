@@ -68,6 +68,12 @@ kata_agent_policy = '/path/to/policy.rego'
 init_container_image = 'quay.io/fedora/fedora:44'
 init_container_cmd = 'curl http://localhost:8006/cdh/resource/default/attestation-status/status'
 
+# Image-related configuration (optional)
+# These KBS URIs are included in the CDH configuration [image] section
+container_policy_uri = 'kbs:///default/security-policy/test'
+registry_cred_uri = 'kbs:///default/credential/test'
+registry_config_uri = 'kbs:///default/registry-configuration/test'
+
 # Custom annotations to add to pods (optional)
 # Only annotations with non-empty values will be added
 [annotations]
@@ -157,7 +163,7 @@ When you run `kubectl coco apply`, the tool:
 
 2. **Generates InitData**: Creates and adds the `io.katacontainers.config.hypervisor.cc_init_data` annotation with:
    - `aa.toml`: Attestation Agent configuration (KBS URL, certs)
-   - `cdh.toml`: Confidential Data Hub configuration
+   - `cdh.toml`: Confidential Data Hub configuration (includes image security policy, registry credentials, and registry configuration URIs if configured)
    - `policy.rego`: Agent policy (default: exec and logs disabled)
    - Compressed with gzip and base64 encoded
 
@@ -234,9 +240,9 @@ The configuration file (`~/.kube/coco-config.toml`) supports:
 | `kata_agent_policy` | No | Path to custom agent policy file (.rego) |
 | `init_container_image` | No | Default init container image (default: quay.io/fedora/fedora:44) |
 | `init_container_cmd` | No | Default init container command (default: attestation check) |
-| `container_policy_uri` | No | Container policy URI |
-| `registry_cred_uri` | No | Registry credentials URI |
-| `registry_config_uri` | No | Registry configuration URI |
+| `container_policy_uri` | No | KBS URI for image security policy (e.g., `kbs:///default/security-policy/test`) |
+| `registry_cred_uri` | No | KBS URI for authenticated registry credentials (e.g., `kbs:///default/credential/test`) |
+| `registry_config_uri` | No | KBS URI for registry configuration (e.g., `kbs:///default/registry-configuration/test`) |
 | `annotations` | No | Map of custom annotations to add to pods (only non-empty values are applied) |
 
 ## Policy Files

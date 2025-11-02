@@ -126,8 +126,23 @@ func generateCDHToml(cfg *config.CocoConfig) (string, error) {
 	}
 
 	// Add image registry configuration if provided
-	if cfg.RegistryConfigURI != "" || cfg.TrusteeCACert != "" {
+	if cfg.RegistryConfigURI != "" || cfg.RegistryCredURI != "" || cfg.ContainerPolicyURI != "" || cfg.TrusteeCACert != "" {
 		imageConfig := make(map[string]interface{})
+
+		// Add image security policy URI if provided
+		if cfg.ContainerPolicyURI != "" {
+			imageConfig["image_security_policy_uri"] = cfg.ContainerPolicyURI
+		}
+
+		// Add authenticated registry credentials URI if provided
+		if cfg.RegistryCredURI != "" {
+			imageConfig["authenticated_registry_credentials_uri"] = cfg.RegistryCredURI
+		}
+
+		// Add registry configuration URI if provided
+		if cfg.RegistryConfigURI != "" {
+			imageConfig["registry_configuration_uri"] = cfg.RegistryConfigURI
+		}
 
 		// If we have a custom CA cert, add it to extra_root_certificates
 		if cfg.TrusteeCACert != "" {
