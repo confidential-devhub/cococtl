@@ -22,12 +22,86 @@ A kubectl plugin to deploy Confidential Containers (CoCo) applications.
 
 ## Prerequisites
 
-- Go 1.21 or later (for building from source)
+- Go 1.24 or later (for building from source)
 - kubectl (for applying manifests)
 
 ## Installation
 
-### From Source
+### Install kubectl-coco release
+
+1. Download the latest release:
+
+   ```bash
+   OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+   ARCH=$(uname -m)
+   if [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi
+   curl -LO "https://github.com/confidential-devhub/cococtl/releases/latest/download/kubectl-coco-${OS}-${ARCH}"
+   ```
+
+   > **Note:** To download a specific version, replace `latest` with the specific version tag.
+   >
+   > For example, to download version `v0.1.0`:
+   > ```bash
+   > VERSION=v0.1.0
+   > curl -LO "https://github.com/confidential-devhub/cococtl/releases/download/${VERSION}/kubectl-coco-${OS}-${ARCH}"
+   > ```
+
+1. Validate the binary (optional):
+
+   Download the checksum file:
+
+   ```bash
+   curl -LO "https://github.com/confidential-devhub/cococtl/releases/latest/download/kubectl-coco-${OS}-${ARCH}.sha256"
+   ```
+
+   Validate the kubectl-coco binary against the checksum file:
+
+   ```bash
+   echo "$(cat kubectl-coco-${OS}-${ARCH}.sha256)" | sha256sum --check
+   ```
+
+   If valid, the output should be:
+
+   ```
+   kubectl-coco-<OS>-<ARCH>: OK
+   ```
+
+1. Install kubectl-coco:
+
+   **Option 1: Install to system path (requires sudo)**
+
+   ```bash
+   sudo install -m 0755 kubectl-coco-${OS}-${ARCH} /usr/local/bin/kubectl-coco
+   ```
+
+   **Option 2: Install to user directory**
+
+   ```bash
+   mkdir -p ~/.local/bin
+   install -m 0755 kubectl-coco-${OS}-${ARCH} ~/.local/bin/kubectl-coco
+   ```
+
+   Then ensure `~/.local/bin` is in your PATH:
+
+   ```bash
+   export PATH=$PATH:~/.local/bin
+   ```
+
+   Add this to your `~/.bashrc` or `~/.zshrc` to make it permanent.
+
+1. Test to ensure the version you installed is up-to-date:
+
+   ```bash
+   kubectl coco --version
+   ```
+
+1. Clean up the installation files:
+
+   ```bash
+   rm kubectl-coco-${OS}-${ARCH} kubectl-coco-${OS}-${ARCH}.sha256
+   ```
+
+### Install from Source
 
 ```bash
 git clone https://github.com/confidential-devhub/cococtl
@@ -36,7 +110,7 @@ make build
 sudo make install
 ```
 
-### Manual Installation
+### Manual Build and Installation
 
 ```bash
 go build -o kubectl-coco .
