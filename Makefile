@@ -105,6 +105,8 @@ release:
 release-all: clean
 	@echo "Building release binaries for all platforms..."
 	@$(MAKE) release GOOS=linux GOARCH=amd64
+	@$(MAKE) release GOOS=linux GOARCH=ppc64le
+	@$(MAKE) release GOOS=linux GOARCH=s390x
 	@$(MAKE) release GOOS=darwin GOARCH=amd64
 	@$(MAKE) release GOOS=darwin GOARCH=arm64
 	@echo "All release binaries created in $(RELEASE_DIR)/"
