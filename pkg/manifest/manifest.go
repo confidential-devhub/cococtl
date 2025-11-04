@@ -82,6 +82,16 @@ func (m *Manifest) GetName() string {
 	return ""
 }
 
+// GetNamespace returns the namespace of the resource
+func (m *Manifest) GetNamespace() string {
+	if metadata, ok := m.data["metadata"].(map[string]interface{}); ok {
+		if namespace, ok := metadata["namespace"].(string); ok {
+			return namespace
+		}
+	}
+	return ""
+}
+
 // SetRuntimeClass sets or updates the runtimeClassName in the spec
 func (m *Manifest) SetRuntimeClass(runtimeClass string) error {
 	spec, ok := m.data["spec"].(map[string]interface{})

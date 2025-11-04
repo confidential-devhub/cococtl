@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/config"
+	"github.com/confidential-devhub/cococtl/pkg/trustee"
 	"github.com/spf13/cobra"
 )
 
@@ -35,11 +37,17 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	initCmd.Flags().StringP("output", "o", "", "Output path for config file (default: ~/.kube/coco-config.toml)")
 	initCmd.Flags().Bool("non-interactive", false, "Use default values without prompting")
+	initCmd.Flags().Bool("skip-trustee-deploy", false, "Skip Trustee deployment")
+	initCmd.Flags().String("trustee-namespace", "", "Namespace for Trustee deployment (default: current namespace)")
+	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
 	outputPath, _ := cmd.Flags().GetString("output")
 	nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
+	skipTrusteeDeploy, _ := cmd.Flags().GetBool("skip-trustee-deploy")
+	trusteeNamespace, _ := cmd.Flags().GetString("trustee-namespace")
+	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
 
 	// Get default config path if not specified
 	if outputPath == "" {
@@ -67,17 +75,20 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	cfg := config.DefaultConfig()
 
-	if nonInteractive {
-		fmt.Println("Creating config with default values...")
-		fmt.Println("WARNING: You must edit the config file to set the mandatory trustee_server value")
-	} else {
-		fmt.Println("Creating CoCo configuration...")
-		fmt.Println()
+	// Handle Trustee setup
+	trusteeDeployed, err := handleTrusteeSetup(cfg, nonInteractive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
+	if err != nil {
+		return err
+	}
 
-		// Prompt for configuration values
-		cfg.TrusteeServer = promptString("Trustee server URL (mandatory)", cfg.TrusteeServer, true)
+	// Continue with other configuration prompts if interactive
+	if !nonInteractive {
+		fmt.Println()
 		cfg.RuntimeClass = promptString("Default RuntimeClass", cfg.RuntimeClass, false)
-		cfg.TrusteeCACert = promptString("Trustee CA cert location (optional)", cfg.TrusteeCACert, false)
+		// Only ask for CA cert if user provided their own Trustee URL
+		if !trusteeDeployed {
+			cfg.TrusteeCACert = promptString("Trustee CA cert location (optional)", cfg.TrusteeCACert, false)
+		}
 		cfg.KataAgentPolicy = promptString("Kata-agent policy file path (optional)", cfg.KataAgentPolicy, false)
 		cfg.InitContainerImage = promptString("Default init container image (optional)", cfg.InitContainerImage, false)
 		cfg.InitContainerCmd = promptString("Default init container command (optional)", cfg.InitContainerCmd, false)
@@ -88,9 +99,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Validate config
 	if err := cfg.Validate(); err != nil {
-		if nonInteractive {
+		if nonInteractive && skipTrusteeDeploy && trusteeURL == "" {
 			fmt.Printf("Warning: %v\n", err)
 			fmt.Println("Config file created but needs to be edited before use")
+		} else if nonInteractive {
+			fmt.Printf("Warning: %v\n", err)
 		} else {
 			return fmt.Errorf("invalid configuration: %w", err)
 		}
@@ -131,4 +144,103 @@ func promptString(prompt, defaultValue string, required bool) string {
 	}
 
 	return input
+}
+
+func getCurrentNamespace() (string, error) {
+	cmd := exec.Command("kubectl", "config", "view", "--minify", "-o", "jsonpath={..namespace}")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current namespace: %w", err)
+	}
+
+	namespace := strings.TrimSpace(string(output))
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	return namespace, nil
+}
+
+func handleTrusteeSetup(cfg *config.CocoConfig, nonInteractive, skipDeploy bool, namespace, url string) (bool, error) {
+	// If URL provided via flag, use it and skip deployment
+	if url != "" {
+		cfg.TrusteeServer = url
+		if !nonInteractive {
+			fmt.Printf("Using provided Trustee URL: %s\n", url)
+		}
+		return false, nil
+	}
+
+	// Interactive mode
+	if !nonInteractive {
+		fmt.Println("Initializing CoCo configuration...")
+		fmt.Println()
+
+		// Prompt for Trustee URL
+		url := promptString("Trustee server URL (leave empty to deploy)", "", false)
+		if url != "" {
+			cfg.TrusteeServer = url
+			return false, nil
+		}
+
+		// If empty, auto-deploy
+		// Prompt for namespace if not provided
+		if namespace == "" {
+			namespace = promptString("Trustee namespace (press Enter for current)", "", false)
+		}
+	} else {
+		// Non-interactive mode
+		if skipDeploy {
+			fmt.Println("Skipping Trustee deployment")
+			fmt.Println("Warning: You must set trustee_server in the config file before use")
+			return false, nil
+		}
+
+		fmt.Println("Deploying Trustee KBS...")
+	}
+
+	// Get current namespace if not specified
+	if namespace == "" {
+		var err error
+		namespace, err = getCurrentNamespace()
+		if err != nil {
+			return false, err
+		}
+	}
+
+	// Check if Trustee is already deployed
+	deployed, err := trustee.IsDeployed(namespace)
+	if err != nil {
+		return false, fmt.Errorf("failed to check Trustee deployment: %w", err)
+	}
+
+	if deployed {
+		fmt.Printf("Trustee already deployed in namespace '%s'\n", namespace)
+		cfg.TrusteeServer = trustee.GetServiceURL(namespace, "trustee-kbs")
+		return true, nil
+	}
+
+	// Deploy Trustee
+	fmt.Printf("Deploying Trustee to namespace '%s'...\n", namespace)
+
+	kbsImage := cfg.KBSImage
+	if kbsImage == "" {
+		kbsImage = config.DefaultKBSImage
+	}
+
+	trusteeCfg := &trustee.Config{
+		Namespace:   namespace,
+		ServiceName: "trustee-kbs",
+		KBSImage:    kbsImage,
+	}
+
+	if err := trustee.Deploy(trusteeCfg); err != nil {
+		return false, fmt.Errorf("failed to deploy Trustee: %w", err)
+	}
+
+	cfg.TrusteeServer = trustee.GetServiceURL(namespace, "trustee-kbs")
+	fmt.Printf("Trustee deployed successfully\n")
+	fmt.Printf("Trustee URL: %s\n", cfg.TrusteeServer)
+
+	return true, nil
 }
