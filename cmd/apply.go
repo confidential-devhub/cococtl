@@ -75,7 +75,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config (run 'kubectl coco create-config' first): %w", err)
+		return fmt.Errorf("failed to load config (run 'kubectl coco init' first): %w", err)
 	}
 
 	if err := cfg.Validate(); err != nil {

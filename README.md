@@ -13,7 +13,7 @@ A kubectl plugin to deploy Confidential Containers (CoCo) applications.
 
 ## Features
 
-- **Interactive Configuration**: Create CoCo configuration with `create-config` command
+- **Interactive Configuration**: Initialize CoCo configuration and infrastructure with `init` command
 - **Automatic Transformation**: Convert regular K8s manifests to CoCo-enabled manifests
 - **Sealed Secrets**: Generate sealed secrets using coco-tools
 - **InitData Generation**: Automatically generate initdata with proper compression and encoding
@@ -119,12 +119,12 @@ sudo mv kubectl-coco /usr/local/bin/
 
 ## Usage
 
-### 1. Create Configuration
+### 1. Initialize Configuration
 
-First, create a CoCo configuration file:
+First, initialize CoCo configuration:
 
 ```bash
-kubectl coco create-config
+kubectl coco init
 ```
 
 This creates `~/.kube/coco-config.toml` with the following settings:
@@ -159,7 +159,7 @@ registry_config_uri = 'kbs:///default/registry-configuration/test'
 #### Non-Interactive Mode
 
 ```bash
-kubectl coco create-config --non-interactive -o /path/to/config.toml
+kubectl coco init --non-interactive -o /path/to/config.toml
 ```
 
 ### 2. Transform and Apply Manifests
@@ -344,16 +344,16 @@ Edit your config file and set the Trustee server URL:
 # Edit the config
 vi ~/.kube/coco-config.toml
 
-# Or create a new one
-kubectl coco create-config
+# Or initialize a new one
+kubectl coco init
 ```
 
 ### "failed to load config"
 
-Run `create-config` first:
+Run `init` first:
 
 ```bash
-kubectl coco create-config
+kubectl coco init
 ```
 
 ## Development

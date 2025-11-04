@@ -10,32 +10,34 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var createConfigCmd = &cobra.Command{
-	Use:   "create-config",
-	Short: "Create a CoCo configuration file",
-	Long: `Create a CoCo configuration file in ~/.kube/coco-config.toml
+var initCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Initialize CoCo configuration and infrastructure",
+	Long: `Initialize CoCo configuration file in ~/.kube/coco-config.toml
 
-This interactive command will prompt you for configuration values including:
-  - Trustee server URL (mandatory)
-  - Default RuntimeClass (default: kata-cc)
-  - Trustee CA cert location (optional)
-  - Kata-agent policy file path (optional)
-  - Default init container image (optional)
-  - Default init container command (optional)
-  - Container policy URI (optional)
-  - Container registry credentials URI (optional)
-  - Container registry config URI (optional)
-  - Custom annotations (optional, edit config file directly)`,
-	RunE: runCreateConfig,
+This command will:
+  - Optionally deploy Trustee KBS to your cluster
+  - Create configuration file with Trustee URL and other settings
+  - Prompt for configuration values including:
+    - Trustee server URL (or auto-deploy)
+    - Default RuntimeClass (default: kata-cc)
+    - Trustee CA cert location (optional)
+    - Kata-agent policy file path (optional)
+    - Default init container image (optional)
+    - Default init container command (optional)
+    - Container policy URI (optional)
+    - Container registry credentials URI (optional)
+    - Container registry config URI (optional)`,
+	RunE: runInit,
 }
 
 func init() {
-	rootCmd.AddCommand(createConfigCmd)
-	createConfigCmd.Flags().StringP("output", "o", "", "Output path for config file (default: ~/.kube/coco-config.toml)")
-	createConfigCmd.Flags().Bool("non-interactive", false, "Use default values without prompting")
+	rootCmd.AddCommand(initCmd)
+	initCmd.Flags().StringP("output", "o", "", "Output path for config file (default: ~/.kube/coco-config.toml)")
+	initCmd.Flags().Bool("non-interactive", false, "Use default values without prompting")
 }
 
-func runCreateConfig(cmd *cobra.Command, args []string) error {
+func runInit(cmd *cobra.Command, args []string) error {
 	outputPath, _ := cmd.Flags().GetString("output")
 	nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
 
