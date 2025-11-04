@@ -147,9 +147,9 @@ if (initContainerImg != "" || initContainerCmd != "") && !addInitContainer {
 
 ## Key Features
 
-### 1. Config Creation (`create-config`)
-- Interactive prompts for all configuration values
-- Non-interactive mode for automation
+### 1. Config Creation (`init`)
+- Non-interactive mode by default for automation
+- Optional interactive mode (--interactive/-i) for prompted configuration
 - Validation of mandatory fields (trustee_server)
 - Default values for optional fields
 
@@ -189,7 +189,7 @@ Each commit was tested manually:
 5. Validate YAML: Ensure proper structure and formatting
 
 ### Test Cases Covered
-- Config creation (interactive and non-interactive)
+- Config creation (non-interactive by default, optional interactive mode)
 - Basic manifest transformation
 - InitContainer injection (default and custom)
 - Secret download with volume mounting

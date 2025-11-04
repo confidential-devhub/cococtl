@@ -13,7 +13,7 @@ A kubectl plugin to deploy Confidential Containers (CoCo) applications.
 
 ## Features
 
-- **Interactive Configuration**: Initialize CoCo configuration and infrastructure with `init` command
+- **Easy Configuration**: Initialize CoCo configuration and infrastructure with `init` command (non-interactive by default, optional interactive mode)
 - **Automatic Transformation**: Convert regular K8s manifests to CoCo-enabled manifests
 - **Sealed Secrets**: Generate sealed secrets using coco-tools
 - **InitData Generation**: Automatically generate initdata with proper compression and encoding
@@ -121,13 +121,13 @@ sudo mv kubectl-coco /usr/local/bin/
 
 ### 1. Initialize Configuration
 
-First, initialize CoCo configuration:
+First, initialize CoCo configuration. By default, this runs in non-interactive mode and deploys Trustee to your cluster:
 
 ```bash
 kubectl coco init
 ```
 
-This creates `~/.kube/coco-config.toml` with the following settings:
+This creates `~/.kube/coco-config.toml` with default settings:
 
 ```toml
 # Trustee server URL (mandatory)
@@ -156,10 +156,20 @@ registry_config_uri = 'kbs:///default/registry-configuration/test'
 "io.katacontainers.config.hypervisor.image" = "/path/to/custom-image"
 ```
 
-#### Non-Interactive Mode
+#### Interactive Mode
+
+By default, `init` runs in non-interactive mode using default values. To enable interactive prompts for all configuration values:
 
 ```bash
-kubectl coco init --non-interactive -o /path/to/config.toml
+kubectl coco init --interactive
+# or use the short flag
+kubectl coco init -i
+```
+
+You can also specify configuration via flags in non-interactive mode:
+
+```bash
+kubectl coco init --trustee-url https://trustee.example.com -o /path/to/config.toml
 ```
 
 ### 2. Transform and Apply Manifests

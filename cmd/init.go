@@ -36,7 +36,7 @@ This command will:
 func init() {
 	rootCmd.AddCommand(initCmd)
 	initCmd.Flags().StringP("output", "o", "", "Output path for config file (default: ~/.kube/coco-config.toml)")
-	initCmd.Flags().Bool("non-interactive", false, "Use default values without prompting")
+	initCmd.Flags().BoolP("interactive", "i", false, "Enable interactive prompts for configuration values")
 	initCmd.Flags().Bool("skip-trustee-deploy", false, "Skip Trustee deployment")
 	initCmd.Flags().String("trustee-namespace", "", "Namespace for Trustee deployment (default: current namespace)")
 	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
@@ -44,7 +44,7 @@ func init() {
 
 func runInit(cmd *cobra.Command, args []string) error {
 	outputPath, _ := cmd.Flags().GetString("output")
-	nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
+	interactive, _ := cmd.Flags().GetBool("interactive")
 	skipTrusteeDeploy, _ := cmd.Flags().GetBool("skip-trustee-deploy")
 	trusteeNamespace, _ := cmd.Flags().GetString("trustee-namespace")
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
@@ -60,7 +60,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Check if config already exists
 	if _, err := os.Stat(outputPath); err == nil {
-		if !nonInteractive {
+		if interactive {
 			fmt.Printf("Config file already exists at %s\n", outputPath)
 			fmt.Print("Overwrite? (y/N): ")
 			reader := bufio.NewReader(os.Stdin)
@@ -76,13 +76,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	cfg := config.DefaultConfig()
 
 	// Handle Trustee setup
-	trusteeDeployed, err := handleTrusteeSetup(cfg, nonInteractive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
+	trusteeDeployed, err := handleTrusteeSetup(cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
 	if err != nil {
 		return err
 	}
 
 	// Continue with other configuration prompts if interactive
-	if !nonInteractive {
+	if interactive {
 		fmt.Println()
 		cfg.RuntimeClass = promptString("Default RuntimeClass", cfg.RuntimeClass, false)
 		// Only ask for CA cert if user provided their own Trustee URL
@@ -99,10 +99,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Validate config
 	if err := cfg.Validate(); err != nil {
-		if nonInteractive && skipTrusteeDeploy && trusteeURL == "" {
+		if !interactive && skipTrusteeDeploy && trusteeURL == "" {
 			fmt.Printf("Warning: %v\n", err)
 			fmt.Println("Config file created but needs to be edited before use")
-		} else if nonInteractive {
+		} else if !interactive {
 			fmt.Printf("Warning: %v\n", err)
 		} else {
 			return fmt.Errorf("invalid configuration: %w", err)
@@ -161,18 +161,18 @@ func getCurrentNamespace() (string, error) {
 	return namespace, nil
 }
 
-func handleTrusteeSetup(cfg *config.CocoConfig, nonInteractive, skipDeploy bool, namespace, url string) (bool, error) {
+func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, namespace, url string) (bool, error) {
 	// If URL provided via flag, use it and skip deployment
 	if url != "" {
 		cfg.TrusteeServer = url
-		if !nonInteractive {
+		if interactive {
 			fmt.Printf("Using provided Trustee URL: %s\n", url)
 		}
 		return false, nil
 	}
 
 	// Interactive mode
-	if !nonInteractive {
+	if interactive {
 		fmt.Println("Initializing CoCo configuration...")
 		fmt.Println()
 
