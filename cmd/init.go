@@ -40,6 +40,7 @@ func init() {
 	initCmd.Flags().Bool("skip-trustee-deploy", false, "Skip Trustee deployment")
 	initCmd.Flags().String("trustee-namespace", "", "Namespace for Trustee deployment (default: current namespace)")
 	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
+	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -48,6 +49,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	skipTrusteeDeploy, _ := cmd.Flags().GetBool("skip-trustee-deploy")
 	trusteeNamespace, _ := cmd.Flags().GetString("trustee-namespace")
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
+	runtimeClass, _ := cmd.Flags().GetString("runtime-class")
 
 	// Get default config path if not specified
 	if outputPath == "" {
@@ -79,6 +81,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 	trusteeDeployed, err := handleTrusteeSetup(cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
 	if err != nil {
 		return err
+	}
+
+	// Set runtime class from flag if provided
+	if runtimeClass != "" {
+		cfg.RuntimeClass = runtimeClass
 	}
 
 	// Continue with other configuration prompts if interactive
