@@ -322,6 +322,11 @@ spec:
             - ALL
           seccompProfile:
             type: RuntimeDefault
+        resources:
+          requests:
+            cpu: "1"
+          limits:
+            cpu: "2"
         volumeMounts:
         - name: confidential-containers
           mountPath: /opt/confidential-containers
