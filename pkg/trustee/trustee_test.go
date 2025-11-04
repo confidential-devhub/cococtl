@@ -93,6 +93,97 @@ func TestDeployKBS_ResourceLimits(t *testing.T) {
 	}
 }
 
+// TestConfigMap_SocketsConfiguration tests that the KBS ConfigMap includes sockets configuration
+func TestConfigMap_SocketsConfiguration(t *testing.T) {
+	namespace := "test-namespace"
+	manifest := constructConfigMapManifest(namespace)
+
+	// Parse the YAML documents
+	documents := strings.Split(manifest, "\n---\n")
+	if len(documents) < 1 {
+		t.Fatal("Expected at least one YAML document in manifest")
+	}
+
+	// Parse the kbs-config ConfigMap (first document)
+	var configMap map[string]interface{}
+	if err := yaml.Unmarshal([]byte(documents[0]), &configMap); err != nil {
+		t.Fatalf("Failed to parse ConfigMap YAML: %v", err)
+	}
+
+	// Get the data section
+	data, ok := configMap["data"].(map[string]interface{})
+	if !ok {
+		t.Fatal("ConfigMap data not found")
+	}
+
+	// Get the kbs-config.toml content
+	kbsConfig, ok := data["kbs-config.toml"].(string)
+	if !ok {
+		t.Fatal("kbs-config.toml not found in ConfigMap")
+	}
+
+	// Verify sockets configuration is present
+	if !strings.Contains(kbsConfig, `sockets = ["0.0.0.0:8080"]`) {
+		t.Errorf("kbs-config.toml missing sockets configuration.\nContent:\n%s", kbsConfig)
+	}
+
+	// Verify it's in the [http_server] section
+	if !strings.Contains(kbsConfig, "[http_server]") {
+		t.Error("kbs-config.toml missing [http_server] section")
+	}
+
+	// Verify the sockets line comes after [http_server]
+	httpServerIndex := strings.Index(kbsConfig, "[http_server]")
+	socketsIndex := strings.Index(kbsConfig, `sockets = ["0.0.0.0:8080"]`)
+	if socketsIndex <= httpServerIndex {
+		t.Error("sockets configuration should come after [http_server] section")
+	}
+}
+
+// constructConfigMapManifest is a helper that constructs the ConfigMap manifest
+// This is essentially the same logic as deployConfigMaps but returns the manifest instead of applying it
+func constructConfigMapManifest(namespace string) string {
+	manifest := `
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kbs-config-cm
+  namespace: ` + namespace + `
+data:
+  kbs-config.toml: |
+    [http_server]
+    sockets = ["0.0.0.0:8080"]
+    insecure_http = true
+
+    [attestation_token]
+    insecure_key = true
+
+    [attestation_service]
+    type = "coco_as_builtin"
+    work_dir = "/opt/confidential-containers/attestation-service"
+    policy_engine = "opa"
+
+    [attestation_service.attestation_token_broker]
+    type = "Ear"
+    duration_min = 5
+
+    [attestation_service.rvps_config]
+    type = "BuiltIn"
+
+    [policy_engine]
+    policy_path = "/opt/confidential-containers/opa/policy.rego"
+
+    [admin]
+    insecure_api = true
+
+    [[plugins]]
+    name = "resource"
+    type = "LocalFs"
+    dir_path = "/opt/confidential-containers/kbs/repository"
+`
+	return manifest
+}
+
 // constructDeploymentManifest is a helper that constructs the deployment manifest
 // This is essentially the same logic as deployKBS but returns the manifest instead of applying it
 func constructDeploymentManifest(cfg *Config) string {

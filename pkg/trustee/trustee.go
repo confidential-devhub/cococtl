@@ -178,6 +178,7 @@ metadata:
 data:
   kbs-config.toml: |
     [http_server]
+    sockets = ["0.0.0.0:8080"]
     insecure_http = true
 
     [attestation_token]
