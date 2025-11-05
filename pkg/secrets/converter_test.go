@@ -84,7 +84,7 @@ func TestConvertSecrets_WithInspectedKeys(t *testing.T) {
 	refs := []SecretReference{
 		{
 			Name:        "app-config",
-			Namespace:   "default",
+			Namespace:   "",         // No namespace in manifest
 			Keys:        []string{}, // No known keys
 			NeedsLookup: true,
 			Usages: []SecretUsage{
@@ -93,8 +93,12 @@ func TestConvertSecrets_WithInspectedKeys(t *testing.T) {
 		},
 	}
 
-	inspectedKeys := map[string][]string{
-		"app-config": {"API_KEY", "DB_HOST", "LOG_LEVEL"},
+	inspectedKeys := map[string]*SecretKeys{
+		"app-config": {
+			Name:      "app-config",
+			Namespace: "production",
+			Keys:      []string{"API_KEY", "DB_HOST", "LOG_LEVEL"},
+		},
 	}
 
 	sealed, err := ConvertSecrets(refs, inspectedKeys)
@@ -110,6 +114,10 @@ func TestConvertSecrets_WithInspectedKeys(t *testing.T) {
 	keys := make(map[string]bool)
 	for _, s := range sealed {
 		keys[s.Key] = true
+		// Verify namespace is from kubectl response
+		if s.Namespace != "production" {
+			t.Errorf("Expected namespace 'production', got %q", s.Namespace)
+		}
 	}
 
 	expected := []string{"API_KEY", "DB_HOST", "LOG_LEVEL"}

@@ -404,12 +404,12 @@ func TestGetManifestNamespace(t *testing.T) {
 					"name": "test",
 				},
 			},
-			want: "default",
+			want: "",
 		},
 		{
 			name:     "no metadata",
 			manifest: map[string]interface{}{},
-			want:     "default",
+			want:     "",
 		},
 	}
 

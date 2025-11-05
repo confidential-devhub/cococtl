@@ -24,10 +24,18 @@ type K8sSecret struct {
 }
 
 // InspectSecret queries K8s to get all keys in a secret
+// If namespace is empty, uses current context namespace (no -n flag)
 // Returns error if kubectl fails or secret doesn't exist
 func InspectSecret(secretName, namespace string) (*SecretKeys, error) {
 	// Build kubectl command
-	cmd := exec.Command("kubectl", "get", "secret", secretName, "-n", namespace, "-o", "json")
+	var cmd *exec.Cmd
+	if namespace != "" {
+		// Explicit namespace specified
+		cmd = exec.Command("kubectl", "get", "secret", secretName, "-n", namespace, "-o", "json")
+	} else {
+		// No namespace specified - use current context namespace
+		cmd = exec.Command("kubectl", "get", "secret", secretName, "-o", "json")
+	}
 
 	// Execute command
 	output, err := cmd.Output()
@@ -51,25 +59,34 @@ func InspectSecret(secretName, namespace string) (*SecretKeys, error) {
 		keys = append(keys, key)
 	}
 
+	// Use the actual namespace from kubectl response (not the input parameter)
+	actualNamespace := k8sSecret.Metadata.Namespace
+
 	return &SecretKeys{
 		Name:      secretName,
-		Namespace: namespace,
+		Namespace: actualNamespace,
 		Keys:      keys,
 	}, nil
 }
 
 // InspectSecrets queries multiple secrets in batch
-// Returns a map of secretName -> []keys
-// Continues on errors and returns partial results
-func InspectSecrets(refs []SecretReference) (map[string][]string, error) {
-	result := make(map[string][]string)
-	var lastError error
+// Returns a map of secretName -> SecretKeys (includes namespace and keys)
+// Fails immediately on first error
+func InspectSecrets(refs []SecretReference) (map[string]*SecretKeys, error) {
+	result := make(map[string]*SecretKeys)
 
 	for _, ref := range refs {
 		// Skip if lookup not needed (all keys already known)
 		if !ref.NeedsLookup {
 			if len(ref.Keys) > 0 {
-				result[ref.Name] = ref.Keys
+				// For secrets that don't need lookup, we still need namespace
+				// Use the namespace from ref (could be empty or explicit)
+				// If empty, it will be resolved during conversion
+				result[ref.Name] = &SecretKeys{
+					Name:      ref.Name,
+					Namespace: ref.Namespace,
+					Keys:      ref.Keys,
+				}
 			}
 			continue
 		}
@@ -77,9 +94,12 @@ func InspectSecrets(refs []SecretReference) (map[string][]string, error) {
 		// Inspect the secret
 		secretKeys, err := InspectSecret(ref.Name, ref.Namespace)
 		if err != nil {
-			// Store error but continue processing other secrets
-			lastError = fmt.Errorf("failed to inspect secret %s/%s: %w", ref.Namespace, ref.Name, err)
-			continue
+			// Fail immediately
+			nsInfo := "current context namespace"
+			if ref.Namespace != "" {
+				nsInfo = "namespace " + ref.Namespace
+			}
+			return nil, fmt.Errorf("failed to inspect secret %s in %s: %w", ref.Name, nsInfo, err)
 		}
 
 		// Merge with known keys
@@ -97,10 +117,15 @@ func InspectSecrets(refs []SecretReference) (map[string][]string, error) {
 			keys = append(keys, key)
 		}
 
-		result[ref.Name] = keys
+		// Store with actual namespace from kubectl
+		result[ref.Name] = &SecretKeys{
+			Name:      ref.Name,
+			Namespace: secretKeys.Namespace,
+			Keys:      keys,
+		}
 	}
 
-	return result, lastError
+	return result, nil
 }
 
 // GenerateSealedSecretYAML generates YAML for a K8s secret with sealed secret values

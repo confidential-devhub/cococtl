@@ -38,36 +38,48 @@ func ConvertToSealed(namespace, secretName, key string) (*SealedSecretData, erro
 
 // ConvertSecrets converts all secret references to sealed secrets
 // Uses inspectedKeys to get all keys for secrets that need lookup
-func ConvertSecrets(refs []SecretReference, inspectedKeys map[string][]string) ([]*SealedSecretData, error) {
+func ConvertSecrets(refs []SecretReference, inspectedKeys map[string]*SecretKeys) ([]*SealedSecretData, error) {
 	var result []*SealedSecretData
 
 	for _, ref := range refs {
-		// Determine which keys to convert
+		// Determine which keys to convert and actual namespace
 		var keysToConvert []string
+		var namespace string
 
 		if inspectedKeys != nil {
 			// Use inspected keys if available
-			if keys, ok := inspectedKeys[ref.Name]; ok {
-				keysToConvert = keys
+			if secretKeys, ok := inspectedKeys[ref.Name]; ok {
+				keysToConvert = secretKeys.Keys
+				namespace = secretKeys.Namespace
 			} else if len(ref.Keys) > 0 {
 				// Fall back to known keys
 				keysToConvert = ref.Keys
+				namespace = ref.Namespace
 			} else {
-				// No keys available - skip this secret
-				return nil, fmt.Errorf("no keys found for secret %s/%s (inspection may have failed)", ref.Namespace, ref.Name)
+				// No keys available
+				nsInfo := "current context namespace"
+				if ref.Namespace != "" {
+					nsInfo = "namespace " + ref.Namespace
+				}
+				return nil, fmt.Errorf("no keys found for secret %s in %s (inspection may have failed)", ref.Name, nsInfo)
 			}
 		} else {
 			// No inspection data - use only known keys
 			if len(ref.Keys) > 0 {
 				keysToConvert = ref.Keys
+				namespace = ref.Namespace
 			} else {
-				return nil, fmt.Errorf("no keys found for secret %s/%s (kubectl inspection failed and no explicit keys in manifest)", ref.Namespace, ref.Name)
+				nsInfo := "current context namespace"
+				if ref.Namespace != "" {
+					nsInfo = "namespace " + ref.Namespace
+				}
+				return nil, fmt.Errorf("no keys found for secret %s in %s (kubectl inspection failed and no explicit keys in manifest)", ref.Name, nsInfo)
 			}
 		}
 
 		// Convert each key to sealed secret
 		for _, key := range keysToConvert {
-			sealed, err := ConvertToSealed(ref.Namespace, ref.Name, key)
+			sealed, err := ConvertToSealed(namespace, ref.Name, key)
 			if err != nil {
 				return nil, err
 			}

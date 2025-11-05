@@ -248,13 +248,14 @@ func addVolumeMountPaths(container map[string]interface{}, containerName string,
 }
 
 // getManifestNamespace extracts the namespace from manifest metadata
+// Returns empty string if not specified (let kubectl use current context namespace)
 func getManifestNamespace(manifestData map[string]interface{}) string {
 	if metadata, ok := manifestData["metadata"].(map[string]interface{}); ok {
 		if namespace, ok := metadata["namespace"].(string); ok && namespace != "" {
 			return namespace
 		}
 	}
-	return "default"
+	return ""
 }
 
 // getContainerName extracts the container name
