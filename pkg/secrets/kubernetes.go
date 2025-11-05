@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // SecretKeys holds the keys found in a K8s secret
@@ -100,4 +101,141 @@ func InspectSecrets(refs []SecretReference) (map[string][]string, error) {
 	}
 
 	return result, lastError
+}
+
+// GenerateSealedSecretYAML generates YAML for a K8s secret with sealed secret values
+// Secret name will be original name with "-sealed" suffix
+// Returns the sealed secret name and YAML content
+func GenerateSealedSecretYAML(secretName, namespace string, sealedData map[string]string) (string, string, error) {
+	sealedSecretName := secretName + "-sealed"
+
+	// Build kubectl command to create secret
+	args := []string{"create", "secret", "generic", sealedSecretName}
+
+	// Add namespace if specified
+	if namespace != "" {
+		args = append(args, "-n", namespace)
+	}
+
+	// Add each sealed secret as a literal
+	for key, sealedValue := range sealedData {
+		args = append(args, fmt.Sprintf("--from-literal=%s=%s", key, sealedValue))
+	}
+
+	// Add --dry-run=client and -o yaml to generate YAML without applying
+	args = append(args, "--dry-run=client", "-o", "yaml")
+
+	// Execute command to generate YAML
+	cmd := exec.Command("kubectl", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return "", "", fmt.Errorf("kubectl create secret failed: %s", string(exitErr.Stderr))
+		}
+		return "", "", fmt.Errorf("kubectl create secret failed: %w", err)
+	}
+
+	return sealedSecretName, string(output), nil
+}
+
+// CreateSealedSecret creates a K8s secret with sealed secret values
+// Secret name will be original name with "-sealed" suffix
+// Returns the name of the created secret
+func CreateSealedSecret(secretName, namespace string, sealedData map[string]string) (string, error) {
+	sealedSecretName, yamlContent, err := GenerateSealedSecretYAML(secretName, namespace, sealedData)
+	if err != nil {
+		return "", err
+	}
+
+	// Now apply the secret
+	applyCmd := exec.Command("kubectl", "apply", "-f", "-")
+	if namespace != "" {
+		applyCmd = exec.Command("kubectl", "apply", "-f", "-", "-n", namespace)
+	}
+	applyCmd.Stdin = strings.NewReader(yamlContent)
+
+	if output, err := applyCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("kubectl apply secret failed: %s", string(output))
+	}
+
+	return sealedSecretName, nil
+}
+
+// GenerateSealedSecretsYAML generates YAML manifests for sealed secrets
+// Returns a map of original secret name -> sealed secret name, and a combined YAML string
+func GenerateSealedSecretsYAML(sealedSecrets []*SealedSecretData) (map[string]string, string, error) {
+	// Group by secret name
+	secretMap := make(map[string]map[string]string) // secretName -> key -> sealedValue
+
+	for _, sealed := range sealedSecrets {
+		if secretMap[sealed.SecretName] == nil {
+			secretMap[sealed.SecretName] = make(map[string]string)
+		}
+		secretMap[sealed.SecretName][sealed.Key] = sealed.SealedSecret
+	}
+
+	// Generate YAML for each sealed secret
+	result := make(map[string]string)
+	var yamlParts []string
+
+	for secretName, sealedData := range secretMap {
+		// Use namespace from first sealed secret entry
+		var namespace string
+		for _, sealed := range sealedSecrets {
+			if sealed.SecretName == secretName {
+				namespace = sealed.Namespace
+				break
+			}
+		}
+
+		sealedSecretName, yamlContent, err := GenerateSealedSecretYAML(secretName, namespace, sealedData)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to generate sealed secret YAML for %s: %w", secretName, err)
+		}
+
+		result[secretName] = sealedSecretName
+		yamlParts = append(yamlParts, yamlContent)
+	}
+
+	// Combine all YAMLs with --- separator
+	combinedYAML := strings.Join(yamlParts, "---\n")
+
+	return result, combinedYAML, nil
+}
+
+// CreateSealedSecrets creates K8s sealed secrets for all provided sealed secret data
+// Returns a map of original secret name -> sealed secret name
+func CreateSealedSecrets(sealedSecrets []*SealedSecretData) (map[string]string, error) {
+	// Group by secret name
+	secretMap := make(map[string]map[string]string) // secretName -> key -> sealedValue
+
+	for _, sealed := range sealedSecrets {
+		if secretMap[sealed.SecretName] == nil {
+			secretMap[sealed.SecretName] = make(map[string]string)
+		}
+		secretMap[sealed.SecretName][sealed.Key] = sealed.SealedSecret
+	}
+
+	// Create sealed secrets
+	result := make(map[string]string)
+
+	for secretName, sealedData := range secretMap {
+		// Use namespace from first sealed secret entry
+		var namespace string
+		for _, sealed := range sealedSecrets {
+			if sealed.SecretName == secretName {
+				namespace = sealed.Namespace
+				break
+			}
+		}
+
+		sealedSecretName, err := CreateSealedSecret(secretName, namespace, sealedData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create sealed secret for %s: %w", secretName, err)
+		}
+
+		result[secretName] = sealedSecretName
+	}
+
+	return result, nil
 }

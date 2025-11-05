@@ -237,6 +237,19 @@ func (m *Manifest) ReplaceSecretName(oldName, newName string) error {
 						}
 					}
 				}
+
+				// Replace in envFrom
+				if envFrom, ok := c["envFrom"].([]interface{}); ok {
+					for _, ef := range envFrom {
+						if envFromItem, ok := ef.(map[string]interface{}); ok {
+							if secretRef, ok := envFromItem["secretRef"].(map[string]interface{}); ok {
+								if name, ok := secretRef["name"].(string); ok && name == oldName {
+									secretRef["name"] = newName
+								}
+							}
+						}
+					}
+				}
 			}
 		}
 	}

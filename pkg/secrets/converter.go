@@ -61,7 +61,7 @@ func ConvertSecrets(refs []SecretReference, inspectedKeys map[string][]string) (
 			if len(ref.Keys) > 0 {
 				keysToConvert = ref.Keys
 			} else {
-				return nil, fmt.Errorf("no keys specified for secret %s/%s (use --skip-secret-lookup=false to auto-detect)", ref.Namespace, ref.Name)
+				return nil, fmt.Errorf("no keys found for secret %s/%s (kubectl inspection failed and no explicit keys in manifest)", ref.Namespace, ref.Name)
 			}
 		}
 

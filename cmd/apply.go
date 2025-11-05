@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/confidential-devhub/cococtl/pkg/initdata"
 	"github.com/confidential-devhub/cococtl/pkg/manifest"
+	"github.com/confidential-devhub/cococtl/pkg/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -43,6 +46,7 @@ var (
 	initContainerCmd string
 	skipApply        bool
 	configPath       string
+	convertSecrets   bool
 )
 
 func init() {
@@ -55,6 +59,7 @@ func init() {
 	applyCmd.Flags().StringVar(&initContainerCmd, "init-container-cmd", "", "Custom init container command (requires --init-container)")
 	applyCmd.Flags().BoolVar(&skipApply, "skip-apply", false, "Skip kubectl apply, only transform the manifest")
 	applyCmd.Flags().StringVar(&configPath, "config", "", "Path to CoCo config file (default: ~/.kube/coco-config.toml)")
+	applyCmd.Flags().BoolVar(&convertSecrets, "convert-secrets", true, "Automatically convert K8s secrets to sealed secrets")
 
 	applyCmd.MarkFlagRequired("filename")
 }
@@ -100,7 +105,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 	}
 
 	// Transform manifest
-	if err := transformManifest(m, cfg, rc); err != nil {
+	if err := transformManifest(m, cfg, rc, skipApply); err != nil {
 		return fmt.Errorf("failed to transform manifest: %w", err)
 	}
 
@@ -125,25 +130,33 @@ func runApply(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string) error {
+func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool) error {
 	// 1. Set RuntimeClass
 	fmt.Printf("  - Setting runtimeClassName: %s\n", rc)
 	if err := m.SetRuntimeClass(rc); err != nil {
 		return fmt.Errorf("failed to set runtime class: %w", err)
 	}
 
-	// 2. Add initContainer if requested
+	// 2. Convert secrets if enabled
+	if convertSecrets {
+		if err := handleSecrets(m, cfg, skipApply); err != nil {
+			return fmt.Errorf("failed to convert secrets: %w", err)
+		}
+	} else {
+		// Just warn about secrets
+		secretRefs := m.GetSecretRefs()
+		if len(secretRefs) > 0 {
+			fmt.Printf("  ⚠ Warning: Found %d secret reference(s) in manifest: %v\n", len(secretRefs), secretRefs)
+			fmt.Println("    Secrets should be converted to sealed secrets for CoCo.")
+			fmt.Println("    Use --convert-secrets to enable automatic conversion.")
+		}
+	}
+
+	// 3. Add initContainer if requested
 	if addInitContainer {
 		if err := handleInitContainer(m, cfg); err != nil {
 			return fmt.Errorf("failed to add initContainer: %w", err)
 		}
-	}
-
-	// 3. Warn about secrets (will be replaced with automatic conversion)
-	secretRefs := m.GetSecretRefs()
-	if len(secretRefs) > 0 {
-		fmt.Printf("  ⚠ Warning: Found %d secret reference(s) in manifest: %v\n", len(secretRefs), secretRefs)
-		fmt.Println("    Secrets should be converted to sealed secrets for CoCo.")
 	}
 
 	// 4. Generate and add initdata annotation
@@ -206,6 +219,103 @@ func handleInitContainer(m *manifest.Manifest, cfg *config.CocoConfig) error {
 	fmt.Printf("  - Adding initContainer 'get-attn-status' (image: %s)\n", image)
 	if err := m.AddInitContainer("get-attn-status", image, command); err != nil {
 		return fmt.Errorf("failed to add initContainer: %w", err)
+	}
+
+	return nil
+}
+
+func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) error {
+	// 1. Detect all secret references
+	secretRefs, err := secrets.DetectSecrets(m.GetData())
+	if err != nil {
+		return err
+	}
+
+	if len(secretRefs) == 0 {
+		return nil // No secrets to convert
+	}
+
+	fmt.Printf("  - Found %d K8s secret(s) to convert\n", len(secretRefs))
+
+	// 2. Inspect K8s secrets
+	inspectedKeys, err := secrets.InspectSecrets(secretRefs)
+	if err != nil {
+		return fmt.Errorf("failed to inspect secrets via kubectl: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the secrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
+	}
+
+	// 3. Convert to sealed secrets
+	sealedSecrets, err := secrets.ConvertSecrets(secretRefs, inspectedKeys)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("  - Generated %d sealed secret(s)\n", len(sealedSecrets))
+
+	// 4. Create or save sealed secrets based on skipApply flag
+	var sealedSecretNames map[string]string
+	if skipApply {
+		// Generate YAML and save to file instead of creating in cluster
+		fmt.Println("  - Generating sealed secret manifests")
+		var yamlContent string
+		sealedSecretNames, yamlContent, err = secrets.GenerateSealedSecretsYAML(sealedSecrets)
+		if err != nil {
+			return fmt.Errorf("failed to generate sealed secret YAML: %w", err)
+		}
+
+		// Save to file
+		ext := filepath.Ext(m.GetName())
+		if ext == "" {
+			ext = ".yaml"
+		}
+		baseName := strings.TrimSuffix(manifestFile, ext)
+		sealedSecretsPath := baseName + "-sealed-secrets.yaml"
+
+		if err := os.WriteFile(sealedSecretsPath, []byte(yamlContent), 0644); err != nil {
+			return fmt.Errorf("failed to write sealed secrets file: %w", err)
+		}
+
+		fmt.Printf("  - Sealed secrets saved to: %s\n", sealedSecretsPath)
+	} else {
+		// Create sealed secrets in cluster
+		fmt.Println("  - Creating K8s sealed secrets in cluster")
+		sealedSecretNames, err = secrets.CreateSealedSecrets(sealedSecrets)
+		if err != nil {
+			return fmt.Errorf("failed to create sealed secrets: %w", err)
+		}
+	}
+
+	// 5. Update manifest to use sealed secret names
+	fmt.Println("  - Updating manifest to use sealed secrets")
+	if err := updateManifestSecretNames(m, sealedSecretNames); err != nil {
+		return err
+	}
+
+	// 6. Generate Trustee configuration
+	ext := filepath.Ext(m.GetName())
+	if ext == "" {
+		ext = ".yaml"
+	}
+	baseName := strings.TrimSuffix(manifestFile, ext)
+	trusteeConfigPath := baseName + "-trustee-secrets.json"
+
+	if err := secrets.GenerateTrusteeConfig(sealedSecrets, trusteeConfigPath); err != nil {
+		return fmt.Errorf("failed to generate Trustee config: %w", err)
+	}
+
+	// 7. Print instructions
+	secrets.PrintTrusteeInstructions(sealedSecrets, trusteeConfigPath)
+
+	return nil
+}
+
+// updateManifestSecretNames replaces all secret references with sealed secret names
+func updateManifestSecretNames(m *manifest.Manifest, sealedSecretNames map[string]string) error {
+	// Replace each original secret name with its sealed variant
+	for originalName, sealedName := range sealedSecretNames {
+		if err := m.ReplaceSecretName(originalName, sealedName); err != nil {
+			return fmt.Errorf("failed to replace secret name %s: %w", originalName, err)
+		}
+		fmt.Printf("    %s → %s\n", originalName, sealedName)
 	}
 
 	return nil
