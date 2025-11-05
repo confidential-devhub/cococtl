@@ -382,3 +382,240 @@ func (m *Manifest) AddVolumeMountToContainer(containerName, volumeName, mountPat
 
 	return nil
 }
+
+// ConvertEnvSecretToSealed replaces secretKeyRef with sealed secret value
+func (m *Manifest) ConvertEnvSecretToSealed(containerName, envVarName, sealedSecret string) error {
+	spec, err := m.GetSpec()
+	if err != nil {
+		return err
+	}
+
+	containers, ok := spec["containers"].([]interface{})
+	if !ok {
+		return fmt.Errorf("no containers found in spec")
+	}
+
+	// Find the container and env variable
+	for _, container := range containers {
+		c, ok := container.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Check if this is the target container
+		name, _ := c["name"].(string)
+		if containerName != "" && name != containerName {
+			continue
+		}
+
+		// Find the env variable
+		env, ok := c["env"].([]interface{})
+		if !ok {
+			continue
+		}
+
+		for _, e := range env {
+			envVar, ok := e.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			envName, _ := envVar["name"].(string)
+			if envName != envVarName {
+				continue
+			}
+
+			// Replace secretKeyRef with value
+			delete(envVar, "valueFrom")
+			envVar["value"] = sealedSecret
+			return nil
+		}
+	}
+
+	return fmt.Errorf("env variable %s not found in container %s", envVarName, containerName)
+}
+
+// ConvertVolumeSecretToInitContainer replaces secret volume with initContainer download
+func (m *Manifest) ConvertVolumeSecretToInitContainer(
+	secretName string,
+	sealedSecrets map[string]string, // key -> sealed secret
+	volumeName string,
+	mountPath string,
+	initContainerImage string,
+) error {
+	spec, err := m.GetSpec()
+	if err != nil {
+		return err
+	}
+
+	// 1. Remove the secret volume and replace with emptyDir
+	if err := m.RemoveSecretVolume(volumeName); err != nil {
+		return err
+	}
+
+	emptyDirConfig := map[string]interface{}{
+		"medium": "Memory",
+	}
+	if err := m.AddVolume(volumeName, "emptyDir", emptyDirConfig); err != nil {
+		return err
+	}
+
+	// 2. Create initContainer to download each secret key
+	var downloadCommands []string
+	for key := range sealedSecrets {
+		// Build CDH URL from resource URI
+		namespace := m.GetNamespace()
+		if namespace == "" {
+			namespace = "default"
+		}
+		resourceURI := fmt.Sprintf("kbs:///%s/%s/%s", namespace, secretName, key)
+		cdhURL := strings.Replace(resourceURI, "kbs://", "http://127.0.0.1:8006/cdh/resource", 1)
+
+		// Build file path
+		filePath := fmt.Sprintf("%s/%s", strings.TrimSuffix(mountPath, "/"), key)
+
+		// Add download command
+		downloadCommands = append(downloadCommands, fmt.Sprintf("curl -o %s %s", filePath, cdhURL))
+	}
+
+	// Combine all commands
+	fullCommand := strings.Join(downloadCommands, " && ")
+
+	// Create initContainer
+	initContainer := map[string]interface{}{
+		"name":    "get-secrets-" + secretName,
+		"image":   initContainerImage,
+		"command": []interface{}{"sh", "-c", fullCommand},
+		"volumeMounts": []interface{}{
+			map[string]interface{}{
+				"name":      volumeName,
+				"mountPath": mountPath,
+			},
+		},
+	}
+
+	// Add initContainer
+	var initContainers []interface{}
+	if existing, ok := spec["initContainers"].([]interface{}); ok {
+		initContainers = append(existing, initContainer)
+	} else {
+		initContainers = []interface{}{initContainer}
+	}
+	spec["initContainers"] = initContainers
+
+	return nil
+}
+
+// RemoveSecretVolume removes a secret-type volume from the spec
+func (m *Manifest) RemoveSecretVolume(volumeName string) error {
+	spec, err := m.GetSpec()
+	if err != nil {
+		return err
+	}
+
+	volumes, ok := spec["volumes"].([]interface{})
+	if !ok {
+		return nil // No volumes to remove
+	}
+
+	// Find and remove the volume
+	var newVolumes []interface{}
+	for _, vol := range volumes {
+		v, ok := vol.(map[string]interface{})
+		if !ok {
+			newVolumes = append(newVolumes, vol)
+			continue
+		}
+
+		name, _ := v["name"].(string)
+		if name == volumeName {
+			// Skip this volume (remove it)
+			continue
+		}
+
+		newVolumes = append(newVolumes, vol)
+	}
+
+	spec["volumes"] = newVolumes
+	return nil
+}
+
+// ConvertEnvFromSecret converts envFrom secretRef to individual env vars with sealed secrets
+func (m *Manifest) ConvertEnvFromSecret(containerName, secretName string, sealedSecretsMap map[string]string) error {
+	spec, err := m.GetSpec()
+	if err != nil {
+		return err
+	}
+
+	containers, ok := spec["containers"].([]interface{})
+	if !ok {
+		return fmt.Errorf("no containers found in spec")
+	}
+
+	// Find the container
+	for _, container := range containers {
+		c, ok := container.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Check if this is the target container
+		name, _ := c["name"].(string)
+		if containerName != "" && name != containerName {
+			continue
+		}
+
+		// Remove envFrom entry for this secret
+		envFrom, ok := c["envFrom"].([]interface{})
+		if ok {
+			var newEnvFrom []interface{}
+			for _, ef := range envFrom {
+				efMap, ok := ef.(map[string]interface{})
+				if !ok {
+					newEnvFrom = append(newEnvFrom, ef)
+					continue
+				}
+
+				secretRef, ok := efMap["secretRef"].(map[string]interface{})
+				if !ok {
+					newEnvFrom = append(newEnvFrom, ef)
+					continue
+				}
+
+				refName, _ := secretRef["name"].(string)
+				if refName != secretName {
+					newEnvFrom = append(newEnvFrom, ef)
+				}
+				// Skip this secretRef (we're converting it to env vars)
+			}
+
+			if len(newEnvFrom) > 0 {
+				c["envFrom"] = newEnvFrom
+			} else {
+				delete(c, "envFrom")
+			}
+		}
+
+		// Add individual env variables
+		var env []interface{}
+		if existing, ok := c["env"].([]interface{}); ok {
+			env = existing
+		} else {
+			env = []interface{}{}
+		}
+
+		// Add each sealed secret as an env var
+		for key, sealedSecret := range sealedSecretsMap {
+			envVar := map[string]interface{}{
+				"name":  key,
+				"value": sealedSecret,
+			}
+			env = append(env, envVar)
+		}
+
+		c["env"] = env
+		return nil
+	}
+
+	return fmt.Errorf("container %s not found", containerName)
+}
