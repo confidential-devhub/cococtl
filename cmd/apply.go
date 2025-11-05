@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/confidential-devhub/cococtl/pkg/initdata"
@@ -24,16 +23,15 @@ var applyCmd = &cobra.Command{
 This command will:
   1. Load the specified manifest
   2. Add/update RuntimeClass
-  3. Convert K8s secrets to sealed secrets (if present)
-  4. Add initdata annotation
-  5. Add first initContainer for attestation
-  6. Save a backup of the transformed manifest (*-coco.yaml)
-  7. Apply the transformed manifest using kubectl
+  3. Add initdata annotation
+  4. Add first initContainer for attestation (if requested)
+  5. Save a backup of the transformed manifest (*-coco.yaml)
+  6. Apply the transformed manifest using kubectl
 
 Example:
   kubectl coco apply -f app.yaml
   kubectl coco apply -f app.yaml --runtime-class kata-remote
-  kubectl coco apply -f app.yaml --init-container myimage:latest`,
+  kubectl coco apply -f app.yaml --init-container`,
 	RunE: runApply,
 }
 
@@ -43,7 +41,6 @@ var (
 	addInitContainer bool
 	initContainerImg string
 	initContainerCmd string
-	secretSpec       string
 	skipApply        bool
 	configPath       string
 )
@@ -56,7 +53,6 @@ func init() {
 	applyCmd.Flags().BoolVar(&addInitContainer, "init-container", false, "Add default attestation initContainer")
 	applyCmd.Flags().StringVar(&initContainerImg, "init-container-img", "", "Custom init container image (requires --init-container)")
 	applyCmd.Flags().StringVar(&initContainerCmd, "init-container-cmd", "", "Custom init container command (requires --init-container)")
-	applyCmd.Flags().StringVar(&secretSpec, "secret", "", "Secret specification (format: kbs://uri::path, e.g., kbs:///default/kbsres1/key1::/keys/key1)")
 	applyCmd.Flags().BoolVar(&skipApply, "skip-apply", false, "Skip kubectl apply, only transform the manifest")
 	applyCmd.Flags().StringVar(&configPath, "config", "", "Path to CoCo config file (default: ~/.kube/coco-config.toml)")
 
@@ -143,19 +139,11 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string) 
 		}
 	}
 
-	// 3. Handle secrets if --secret is provided
-	if secretSpec != "" {
-		if err := handleSecret(m, secretSpec, cfg); err != nil {
-			return fmt.Errorf("failed to handle secret: %w", err)
-		}
-	} else {
-		// Auto-detect secrets and warn if found
-		secrets := m.GetSecretRefs()
-		if len(secrets) > 0 {
-			fmt.Printf("  ⚠ Warning: Found %d secret reference(s) in manifest: %v\n", len(secrets), secrets)
-			fmt.Println("    Secrets should be converted to sealed secrets for CoCo.")
-			fmt.Println("    Use --secret flag to handle secrets (format: kbs://uri::path).")
-		}
+	// 3. Warn about secrets (will be replaced with automatic conversion)
+	secretRefs := m.GetSecretRefs()
+	if len(secretRefs) > 0 {
+		fmt.Printf("  ⚠ Warning: Found %d secret reference(s) in manifest: %v\n", len(secretRefs), secretRefs)
+		fmt.Println("    Secrets should be converted to sealed secrets for CoCo.")
 	}
 
 	// 4. Generate and add initdata annotation
@@ -221,94 +209,6 @@ func handleInitContainer(m *manifest.Manifest, cfg *config.CocoConfig) error {
 	}
 
 	return nil
-}
-
-func handleSecret(m *manifest.Manifest, secretSpec string, cfg *config.CocoConfig) error {
-	// Parse secret specification: kbs://uri::path
-	parts := strings.Split(secretSpec, "::")
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid secret format, expected 'kbs://uri::path', got: %s", secretSpec)
-	}
-
-	resourceURI := parts[0]
-	targetPath := parts[1]
-
-	fmt.Printf("  - Handling secret (resource: %s, path: %s)\n", resourceURI, targetPath)
-
-	// Convert kbs:// to CDH endpoint format
-	// kbs:///default/kbsres1/key1 -> http://127.0.0.1:8006/cdh/resource/default/kbsres1/key1
-	cdhURL := strings.Replace(resourceURI, "kbs://", "http://127.0.0.1:8006/cdh/resource", 1)
-
-	// Extract volume name from target path (use parent directory name or "keys")
-	volumeName := "keys"
-	mountPath := strings.TrimSuffix(targetPath, "/"+getFileName(targetPath))
-	if mountPath == "" {
-		mountPath = "/keys"
-	}
-
-	// 1. Add emptyDir volume
-	fmt.Printf("    Adding emptyDir volume '%s'\n", volumeName)
-	emptyDirConfig := map[string]interface{}{
-		"medium": "Memory",
-	}
-	if err := m.AddVolume(volumeName, "emptyDir", emptyDirConfig); err != nil {
-		return fmt.Errorf("failed to add volume: %w", err)
-	}
-
-	// 2. Add initContainer to download secret
-	fmt.Printf("    Adding secret download initContainer\n")
-	initContainerCmd := fmt.Sprintf("curl -o %s %s", targetPath, cdhURL)
-	command := []string{"sh", "-c", initContainerCmd}
-
-	// Determine init container image
-	image := defaultInitContainerImage
-	if cfg.InitContainerImage != "" {
-		image = cfg.InitContainerImage
-	}
-
-	// Create initContainer with volumeMount
-	initContainer := map[string]interface{}{
-		"name":    "get-key",
-		"image":   image,
-		"command": command,
-		"volumeMounts": []interface{}{
-			map[string]interface{}{
-				"name":      volumeName,
-				"mountPath": mountPath,
-			},
-		},
-	}
-
-	// Add initContainer manually (more control)
-	spec, err := m.GetSpec()
-	if err != nil {
-		return fmt.Errorf("failed to get spec: %w", err)
-	}
-
-	var initContainers []interface{}
-	if existing, ok := spec["initContainers"].([]interface{}); ok {
-		initContainers = append(existing, initContainer)
-	} else {
-		initContainers = []interface{}{initContainer}
-	}
-	spec["initContainers"] = initContainers
-
-	// 3. Add volumeMount to all containers
-	fmt.Printf("    Adding volumeMount to containers (path: %s)\n", mountPath)
-	if err := m.AddVolumeMountToContainer("", volumeName, mountPath); err != nil {
-		return fmt.Errorf("failed to add volumeMount: %w", err)
-	}
-
-	return nil
-}
-
-// getFileName extracts the file name from a path
-func getFileName(path string) string {
-	parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-	return ""
 }
 
 func applyWithKubectl(manifestPath string) error {
