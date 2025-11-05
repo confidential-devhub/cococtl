@@ -15,10 +15,11 @@ A kubectl plugin to deploy Confidential Containers (CoCo) applications.
 
 - **Easy Configuration**: Initialize CoCo configuration and infrastructure with `init` command (non-interactive by default, optional interactive mode)
 - **Automatic Transformation**: Convert regular K8s manifests to CoCo-enabled manifests
-- **Sealed Secrets**: Generate sealed secrets using coco-tools
+- **Automatic Secret Conversion**: Detect and convert K8s secrets to sealed secrets automatically
 - **InitData Generation**: Automatically generate initdata with proper compression and encoding
 - **Backup Management**: Save original manifests with `-coco` suffix
 - **kubectl Integration**: Seamlessly apply transformed manifests
+- **Trustee Integration**: Generate Trustee KBS configuration for sealed secrets
 
 ## Prerequisites
 
@@ -192,9 +193,6 @@ kubectl coco apply -f app.yaml --skip-apply
 # Use custom config file
 kubectl coco apply -f app.yaml --config /path/to/config.toml
 
-# Add secret download initContainer
-kubectl coco apply -f app.yaml --secret "kbs:///default/kbsres1/key1::/keys/key1"
-
 # Add default attestation initContainer
 kubectl coco apply -f app.yaml --init-container
 
@@ -204,39 +202,146 @@ kubectl coco apply -f app.yaml --init-container --init-container-img custom:late
 # Add custom initContainer with specific command
 kubectl coco apply -f app.yaml --init-container --init-container-cmd "echo 'attestation check'"
 
-# Combine multiple options
-kubectl coco apply -f app.yaml --init-container --secret "kbs:///default/kbsres1/key1::/keys/key1" --runtime-class kata-remote
+# Disable automatic secret conversion
+kubectl coco apply -f app.yaml --convert-secrets=false
 ```
 
 ### 3. Working with Secrets
 
-When you need to inject secrets from the KBS into your containers, use the `--secret` flag:
+`kubectl-coco` automatically detects and converts K8s secrets to sealed secrets. This happens by default when you run `apply`.
 
-```bash
-kubectl coco apply -f app.yaml --secret "kbs:///default/kbsres1/key1::/keys/key1"
+#### Automatic Secret Conversion
+
+When your manifest references K8s secrets, `kubectl-coco` will:
+
+1. **Detect** all secret references (env variables, volumes, envFrom)
+2. **Inspect** secrets via kubectl to discover all keys
+3. **Convert** each secret key to sealed secret format (`sealed.fakejwsheader.{base64url_json}.fakesignature`)
+4. **Create** new K8s secrets with sealed values:
+   - Secret name: `{original-name}-sealed` (e.g., `db-creds` → `db-creds-sealed`)
+   - Each key contains the sealed secret string instead of the original value
+   - When using `--skip-apply`, sealed secret YAML is saved to `*-sealed-secrets.yaml` instead
+5. **Update** the manifest to reference sealed secret names:
+   - All `secretKeyRef`, `secretRef`, and volume `secretName` fields updated to use `-sealed` suffix
+   - Example: `secretKeyRef.name: db-creds` → `secretKeyRef.name: db-creds-sealed`
+6. **Generate** Trustee configuration file (`*-trustee-secrets.json`)
+7. **Display** setup instructions for adding secrets to Trustee KBS
+
+#### Example: Environment Variable Secrets
+
+**Original manifest:**
+```yaml
+env:
+  - name: DB_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: db-creds
+        key: password
 ```
 
-The format is: `kbs://resource-uri::target-path`
+**After transformation:**
 
-This will:
-
-1. Create an emptyDir volume (medium: Memory)
-2. Add an initContainer that downloads the secret via attestation
-3. Mount the volume in both initContainer and app containers
-
-Example initContainer generated:
-
+1. **New sealed secret is created** in K8s:
 ```yaml
-initContainers:
-  - name: get-key
-    image: registry.access.redhat.com/ubi9/ubi:9.3
-    command:
-      - sh
-      - -c
-      - curl -o /keys/key1 http://127.0.0.1:8006/cdh/resource/default/kbsres1/key1
-    volumeMounts:
-      - name: keys
-        mountPath: /keys
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-creds-sealed  # Note the -sealed suffix
+data:
+  password: c2VhbGVkLmZha2Vqd3NoZWFkZXIuZXlKMlpYSnphVzl1SWpvaU1DNHhMakFpTENKMGVYQmxJam9pZG1GMWJIUWlMQ0p1WW0xbElqb2lhMkp6T2k4dkwyUmxabUYxYkhRdlpHSXRZM0psWkhNdmNHRnpjM2R2Y21RaUxDSndjbTkyYVdSbGNpSTZJbXRpY3lJc0luQnliM1pwWkdWeVgzTmxkSFJwYm1keklqcDdmU3dpWVc1dWIzUmhkR2x2Ym5NaU9udDlmUS5mYWtlc2lnbmF0dXJl
+```
+
+2. **Manifest is updated** to reference the sealed secret:
+```yaml
+env:
+  - name: DB_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: db-creds-sealed  # Updated to use sealed secret name
+        key: password           # Same key name
+```
+
+#### Example: Volume-Mounted Secrets
+
+**Original manifest:**
+```yaml
+volumes:
+  - name: certs
+    secret:
+      secretName: tls-secret
+```
+
+**After transformation:**
+
+1. **New sealed secret is created** in K8s:
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tls-secret-sealed  # Note the -sealed suffix
+data:
+  tls.crt: c2VhbGVkLmZha2Vqd3NoZWFkZXIuZXlK...  # Sealed secret value for tls.crt
+  tls.key: c2VhbGVkLmZha2Vqd3NoZWFkZXIuZXlK...  # Sealed secret value for tls.key
+```
+
+2. **Manifest is updated** to reference the sealed secret:
+```yaml
+volumes:
+  - name: certs
+    secret:
+      secretName: tls-secret-sealed  # Updated to use sealed secret name
+```
+
+#### Trustee Configuration Output
+
+After conversion, a Trustee configuration file is generated (e.g., `app-trustee-secrets.json`):
+
+```json
+{
+  "secrets": [
+    {
+      "resourceUri": "kbs:///default/db-creds/password",
+      "sealedSecret": "sealed.fakejwsheader.eyJ2ZXJzaW9u...",
+      "json": {
+        "version": "0.1.0",
+        "type": "vault",
+        "name": "kbs:///default/db-creds/password",
+        "provider": "kbs",
+        "provider_settings": {},
+        "annotations": {}
+      }
+    }
+  ]
+}
+```
+
+You must add these secrets to your Trustee KBS before deploying the application.
+
+#### How Sealed Secrets Work
+
+The sealed secret conversion creates a secure flow:
+
+1. **In K8s**: A sealed secret is created (e.g., `db-creds-sealed`) containing the sealed format string
+   - The sealed string has the format: `sealed.fakejwsheader.{base64url_json}.fakesignature`
+   - The JSON payload contains the KBS resource URI (e.g., `kbs:///default/db-creds/password`)
+
+2. **In Trustee KBS**: You store the actual secret value at the KBS URI
+   - Use the generated `*-trustee-secrets.json` file to configure Trustee
+   - The actual password/credential is stored securely in Trustee
+
+3. **At Runtime**: The pod retrieves secrets through attestation
+   - Pod reads the sealed secret from K8s (gets the sealed format string)
+   - Pod performs attestation with Trustee KBS
+   - Trustee validates the attestation and returns the actual secret value
+   - Pod uses the actual secret value in the application
+
+This ensures secrets are never exposed in plaintext in the K8s cluster.
+
+#### Secret Conversion Flag
+
+```bash
+# Disable automatic secret conversion (show warning only)
+kubectl coco apply -f app.yaml --convert-secrets=false
 ```
 
 ## What Gets Transformed
@@ -245,23 +350,31 @@ When you run `kubectl coco apply`, the tool:
 
 1. **Adds RuntimeClass**: Sets `runtimeClassName` to kata-cc (or your configured runtime)
 
-2. **Generates InitData**: Creates and adds the `io.katacontainers.config.hypervisor.cc_init_data` annotation with:
+2. **Converts Secrets** (automatic, unless `--convert-secrets=false`):
+   - Detects K8s secret references in the manifest
+   - Inspects secrets via kubectl to discover all keys
+   - Converts each secret key to sealed secret format (`sealed.fakejwsheader.{base64url_json}.fakesignature`)
+   - Creates new K8s secrets with `-sealed` suffix containing sealed values:
+     * Example: `db-creds` → `db-creds-sealed`
+     * When using `--skip-apply`, generates YAML file instead of creating in cluster
+   - Updates manifest to reference sealed secret names:
+     * `secretKeyRef.name`: `db-creds` → `db-creds-sealed`
+     * Volume `secretName`: `tls-secret` → `tls-secret-sealed`
+     * `envFrom.secretRef.name`: `app-config` → `app-config-sealed`
+   - Generates Trustee configuration file with all sealed secrets and their KBS URIs
+   - Displays setup instructions for adding secrets to Trustee KBS
+
+3. **Generates InitData**: Creates and adds the `io.katacontainers.config.hypervisor.cc_init_data` annotation with:
    - `aa.toml`: Attestation Agent configuration (KBS URL, certs)
    - `cdh.toml`: Confidential Data Hub configuration (includes image security policy, registry credentials, and registry configuration URIs if configured)
    - `policy.rego`: Agent policy (default: exec and logs disabled)
    - Compressed with gzip and base64 encoded
 
-3. **Adds InitContainer** (if `--init-container` flag provided):
+4. **Adds InitContainer** (if `--init-container` flag provided):
    - Prepends an initContainer named 'get-attn-status'
    - Default: Queries attestation status from CDH
    - Custom image: Use `--init-container-img`
    - Custom command: Use `--init-container-cmd`
-
-4. **Adds Secret Download** (if `--secret` flag provided):
-   - Creates emptyDir volume with Memory medium
-   - Adds initContainer to download secret from KBS
-   - Mounts volume in initContainer and app containers
-   - Converts kbs:// URIs to CDH endpoint URLs
 
 5. **Adds Custom Annotations**: Applies any custom annotations from config
    - Only annotations with non-empty values are added
@@ -278,25 +391,39 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: my-pod
+  namespace: default
 spec:
   containers:
     - name: my-container
       image: quay.io/fedora/fedora:44
       env:
-      - name: MY_SECRET
+      - name: DB_PASSWORD
         valueFrom:
           secretKeyRef:
-            name: mysecret
-            key: mysecret
+            name: db-creds
+            key: password
 ```
 
 ### After Transformation
 
+1. **New sealed secret is created** in K8s (`db-creds-sealed`):
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-creds-sealed
+  namespace: default
+data:
+  password: c2VhbGVkLmZha2Vqd3NoZWFkZXIuZXlKMlpYSnphVzl1SWpvaU1DNHhMakFpTENKMGVYQmxJam9pZG1GMWJIUWlMQ0p1WW0xbElqb2lhMkp6T2k4dkwyUmxabUYxYkhRdlpHSXRZM0psWkhNdmNHRnpjM2R2Y21RaUxDSndjbTkyYVdSbGNpSTZJbXRpY3lJc0luQnliM1pwWkdWeVgzTmxkSFJwYm1keklqcDdmU3dpWVc1dWIzUmhkR2x2Ym5NaU9udDlmUS5mYWtlc2lnbmF0dXJl
+```
+
+2. **Pod manifest is updated** to reference the sealed secret:
 ```yaml
 apiVersion: v1
 kind: Pod
 metadata:
   name: my-pod
+  namespace: default
   annotations:
     io.katacontainers.config.hypervisor.cc_init_data: H4sIAAAAAAAA/4yUT2...
 spec:
@@ -305,12 +432,37 @@ spec:
     - name: my-container
       image: quay.io/fedora/fedora:44
       env:
-      - name: MY_SECRET
+      - name: DB_PASSWORD
         valueFrom:
           secretKeyRef:
-            name: sealed-secret
-            key: secret
+            name: db-creds-sealed  # Updated to reference sealed secret
+            key: password
 ```
+
+### Trustee Configuration Generated
+
+File: `my-pod-trustee-secrets.json`
+
+```json
+{
+  "secrets": [
+    {
+      "resourceUri": "kbs:///default/db-creds/password",
+      "sealedSecret": "sealed.fakejwsheader.eyJ2ZXJzaW9uIjoiMC4xLjAi...",
+      "json": {
+        "version": "0.1.0",
+        "type": "vault",
+        "name": "kbs:///default/db-creds/password",
+        "provider": "kbs",
+        "provider_settings": {},
+        "annotations": {}
+      }
+    }
+  ]
+}
+```
+
+**Important:** You must add the actual secret values to your Trustee KBS using the URIs above (e.g., `kbs:///default/db-creds/password`). The sealed secrets in K8s (`db-creds-sealed`) only contain the sealed format strings that reference these KBS URIs. The pod will retrieve the actual secret values from Trustee KBS during attestation.
 
 ## Configuration File Format
 
