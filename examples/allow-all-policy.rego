@@ -40,18 +40,6 @@ default UpdateRoutesRequest := true
 default WaitProcessRequest := true
 default WriteStreamRequest := true
 default CreateContainerRequest := true
+default SetPolicyRequest := true
+default ExecProcessRequest := true
 
-default SetPolicyRequest := false
-default ExecProcessRequest := false
-
-ExecProcessRequest if {
-    input_command = concat(" ", input.process.Args)
-    some allowed_command in policy_data.allowed_commands
-    input_command == allowed_command
-}
-
-policy_data := {
-  "allowed_commands": [
-        "curl -s http://localhost:8006/cdh/resource/default/attestation-status/status"
-  ]
-}
