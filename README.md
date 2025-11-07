@@ -1,6 +1,9 @@
 # kubectl-coco
 
 A kubectl plugin to deploy Confidential Containers (CoCo) applications.
+Note that the focus is primarily for developers to CoCo-fy their apps and test it with Trustee.
+Trustee is the Remote Attestation Solution for CoCo. Read more details [here](https://confidentialcontainers.org/).
+
 
 ## Overview
 
@@ -122,7 +125,12 @@ sudo mv kubectl-coco /usr/local/bin/
 
 ### 1. Initialize Configuration
 
-First, initialize CoCo configuration. By default, this runs in non-interactive mode and deploys Trustee to your cluster:
+First, initialize CoCo configuration.
+By default, this runs in non-interactive mode and deploys Trustee to your cluster.
+This installs Trustee in the current namespace. As mentioned previousl, the primary
+aim is for developers to test how a typical K8s manifest gets deployed as CoCo and how
+Trustee gets used by the CoCo-fied app. You can use an existing Trustee by providing the
+trustee-url during configuration (refer to `kubectl coco init --help` for details).
 
 ```bash
 kubectl coco init
