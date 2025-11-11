@@ -54,7 +54,7 @@ func TestInitData_Generate_MinimalConfig(t *testing.T) {
 		t.Fatalf("Failed to parse TOML: %v", err)
 	}
 
-	// Verify version and algorithm
+	// Verify version and algorithm at top level
 	if data["version"] != initdata.InitDataVersion {
 		t.Errorf("version = %v, want %v", data["version"], initdata.InitDataVersion)
 	}
@@ -62,24 +62,25 @@ func TestInitData_Generate_MinimalConfig(t *testing.T) {
 		t.Errorf("algorithm = %v, want %v", data["algorithm"], initdata.InitDataAlgorithm)
 	}
 
-	// Verify aa.toml is present
-	aaToml, ok := data["aa.toml"]
-	if !ok || aaToml == "" {
-		t.Error("aa.toml is missing or empty")
-	}
-
-	// Verify cdh.toml is present
-	cdhToml, ok := data["cdh.toml"]
-	if !ok || cdhToml == "" {
-		t.Error("cdh.toml is missing or empty")
-	}
-
-	// Verify policy.rego in data section
+	// Verify data section exists
 	dataSection, ok := data["data"].(map[string]interface{})
 	if !ok {
 		t.Fatal("data section is missing or invalid")
 	}
 
+	// Verify aa.toml is present in data section
+	aaToml, ok := dataSection["aa.toml"]
+	if !ok || aaToml == "" {
+		t.Error("aa.toml is missing or empty in data section")
+	}
+
+	// Verify cdh.toml is present in data section
+	cdhToml, ok := dataSection["cdh.toml"]
+	if !ok || cdhToml == "" {
+		t.Error("cdh.toml is missing or empty in data section")
+	}
+
+	// Verify policy.rego in data section
 	policyRego, ok := dataSection["policy.rego"]
 	if !ok || policyRego == "" {
 		t.Error("policy.rego is missing or empty in data section")
@@ -305,8 +306,9 @@ func TestInitData_AAToml_Structure(t *testing.T) {
 		t.Fatalf("Failed to parse TOML: %v", err)
 	}
 
-	// Extract aa.toml
-	aaToml := data["aa.toml"].(string)
+	// Extract aa.toml from data section
+	dataSection := data["data"].(map[string]interface{})
+	aaToml := dataSection["aa.toml"].(string)
 
 	// Parse aa.toml
 	var aaData map[string]interface{}
@@ -367,8 +369,9 @@ func TestInitData_CDHToml_Structure(t *testing.T) {
 		t.Fatalf("Failed to parse TOML: %v", err)
 	}
 
-	// Extract cdh.toml
-	cdhToml := data["cdh.toml"].(string)
+	// Extract cdh.toml from data section
+	dataSection := data["data"].(map[string]interface{})
+	cdhToml := dataSection["cdh.toml"].(string)
 
 	// Parse cdh.toml
 	var cdhData map[string]interface{}

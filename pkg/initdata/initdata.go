@@ -54,16 +54,16 @@ func Generate(cfg *config.CocoConfig) (string, error) {
 
 	// Manually construct TOML with multiline strings for proper formatting
 	var tomlBuilder strings.Builder
-	tomlBuilder.WriteString(fmt.Sprintf("version = '%s'\n", InitDataVersion))
-	tomlBuilder.WriteString(fmt.Sprintf("algorithm = '%s'\n", InitDataAlgorithm))
-	tomlBuilder.WriteString("'aa.toml' = '''\n")
+	tomlBuilder.WriteString(fmt.Sprintf("algorithm = \"%s\"\n", InitDataAlgorithm))
+	tomlBuilder.WriteString(fmt.Sprintf("version = \"%s\"\n", InitDataVersion))
+	tomlBuilder.WriteString("\n[data]\n")
+	tomlBuilder.WriteString("\"aa.toml\" = '''\n")
 	tomlBuilder.WriteString(aaToml)
 	tomlBuilder.WriteString("'''\n")
-	tomlBuilder.WriteString("'cdh.toml' = '''\n")
+	tomlBuilder.WriteString("\"cdh.toml\" = '''\n")
 	tomlBuilder.WriteString(cdhToml)
-	tomlBuilder.WriteString("'''\n\n")
-	tomlBuilder.WriteString("[data]\n")
-	tomlBuilder.WriteString("'policy.rego' = '''\n")
+	tomlBuilder.WriteString("'''\n")
+	tomlBuilder.WriteString("\"policy.rego\" = '''\n")
 	tomlBuilder.WriteString(policy)
 	tomlBuilder.WriteString("'''\n")
 
