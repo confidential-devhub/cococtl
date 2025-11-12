@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/config"
@@ -151,21 +150,6 @@ func promptString(prompt, defaultValue string, required bool) string {
 	}
 
 	return input
-}
-
-func getCurrentNamespace() (string, error) {
-	cmd := exec.Command("kubectl", "config", "view", "--minify", "-o", "jsonpath={..namespace}")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current namespace: %w", err)
-	}
-
-	namespace := strings.TrimSpace(string(output))
-	if namespace == "" {
-		namespace = "default"
-	}
-
-	return namespace, nil
 }
 
 func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, namespace, url string) (bool, error) {
