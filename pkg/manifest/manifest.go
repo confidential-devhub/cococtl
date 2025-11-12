@@ -92,14 +92,14 @@ func (m *Manifest) GetNamespace() string {
 	return ""
 }
 
-// SetRuntimeClass sets or updates the runtimeClassName in the spec
+// SetRuntimeClass sets or updates the runtimeClassName in the pod spec
 func (m *Manifest) SetRuntimeClass(runtimeClass string) error {
-	spec, ok := m.data["spec"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("spec field not found or invalid")
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		return err
 	}
 
-	spec["runtimeClassName"] = runtimeClass
+	podSpec["runtimeClassName"] = runtimeClass
 	return nil
 }
 
@@ -154,6 +154,31 @@ func (m *Manifest) GetSpec() (map[string]interface{}, error) {
 	if !ok {
 		return nil, fmt.Errorf("spec field not found or invalid")
 	}
+	return spec, nil
+}
+
+// GetPodSpec returns the pod spec, whether it's a direct Pod or a Deployment/StatefulSet/DaemonSet
+func (m *Manifest) GetPodSpec() (map[string]interface{}, error) {
+	kind := m.GetKind()
+	spec, err := m.GetSpec()
+	if err != nil {
+		return nil, err
+	}
+
+	// For Deployment, StatefulSet, DaemonSet, ReplicaSet, Job
+	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+		template, ok := spec["template"].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("template field not found in %s spec", kind)
+		}
+		podSpec, ok := template["spec"].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("spec field not found in template")
+		}
+		return podSpec, nil
+	}
+
+	// For Pod, return the spec directly
 	return spec, nil
 }
 
