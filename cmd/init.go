@@ -26,6 +26,7 @@ This command will:
     - Kata-agent policy file path (optional)
     - Default init container image (optional)
     - Default init container command (optional)
+    - PCCS URL for SGX attestation (optional)
     - Container policy URI (optional)
     - Container registry credentials URI (optional)
     - Container registry config URI (optional)`,
@@ -98,6 +99,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		cfg.KataAgentPolicy = promptString("Kata-agent policy file path (optional)", cfg.KataAgentPolicy, false)
 		cfg.InitContainerImage = promptString("Default init container image (optional)", cfg.InitContainerImage, false)
 		cfg.InitContainerCmd = promptString("Default init container command (optional)", cfg.InitContainerCmd, false)
+		cfg.PCCSURL = promptString("PCCS URL for SGX attestation (optional)", cfg.PCCSURL, false)
 		cfg.ContainerPolicyURI = promptString("Container policy URI (optional)", cfg.ContainerPolicyURI, false)
 		cfg.RegistryCredURI = promptString("Container registry credentials URI (optional)", cfg.RegistryCredURI, false)
 		cfg.RegistryConfigURI = promptString("Container registry config URI (optional)", cfg.RegistryConfigURI, false)
@@ -223,6 +225,7 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 		Namespace:   namespace,
 		ServiceName: "trustee-kbs",
 		KBSImage:    kbsImage,
+		PCCSURL:     cfg.PCCSURL,
 	}
 
 	if err := trustee.Deploy(trusteeCfg); err != nil {

@@ -22,6 +22,7 @@ type Config struct {
 	Namespace   string
 	ServiceName string
 	KBSImage    string
+	PCCSURL     string
 	Secrets     []SecretResource
 }
 
@@ -68,6 +69,13 @@ func Deploy(cfg *Config) error {
 
 	if err := deployConfigMaps(cfg.Namespace); err != nil {
 		return fmt.Errorf("failed to deploy ConfigMaps: %w", err)
+	}
+
+	// Deploy PCCS ConfigMap if PCCSURL is configured
+	if cfg.PCCSURL != "" {
+		if err := deployPCCSConfigMap(cfg.Namespace, cfg.PCCSURL); err != nil {
+			return fmt.Errorf("failed to deploy PCCS ConfigMap: %w", err)
+		}
 	}
 
 	if err := deployKBS(cfg); err != nil {
@@ -285,7 +293,71 @@ data:
 	return applyManifest(manifest)
 }
 
+func deployPCCSConfigMap(namespace, pccsURL string) error {
+	qcnlConfig := fmt.Sprintf(`{"collateral_service":"%s"}`, pccsURL)
+
+	manifest := fmt.Sprintf(`
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dcap-attestation-conf
+  namespace: %s
+data:
+  sgx_default_qcnl.conf: '%s'
+`, namespace, qcnlConfig)
+
+	return applyManifest(manifest)
+}
+
 func deployKBS(cfg *Config) error {
+	// Build volumeMounts - base mounts
+	volumeMounts := `        - name: confidential-containers
+          mountPath: /opt/confidential-containers
+        - name: kbs-config
+          mountPath: /etc/kbs-config
+        - name: opa
+          mountPath: /opt/confidential-containers/opa
+        - name: auth-secret
+          mountPath: /etc/auth-secret
+        - name: reference-values
+          mountPath: /opt/confidential-containers/rvps/reference-values`
+
+	// Add PCCS volumeMount if configured
+	if cfg.PCCSURL != "" {
+		volumeMounts += `
+        - name: qplconf
+          mountPath: /etc/sgx_default_qcnl.conf
+          subPath: sgx_default_qcnl.conf`
+	}
+
+	// Build volumes - base volumes
+	volumes := `      - name: confidential-containers
+        emptyDir:
+          medium: Memory
+      - name: kbs-config
+        configMap:
+          name: kbs-config-cm
+      - name: opa
+        configMap:
+          name: resource-policy
+      - name: auth-secret
+        secret:
+          secretName: kbs-auth-public-key
+      - name: reference-values
+        configMap:
+          name: rvps-reference-values`
+
+	// Add PCCS volume if configured
+	if cfg.PCCSURL != "" {
+		volumes += `
+      - name: qplconf
+        configMap:
+          name: dcap-attestation-conf
+          items:
+          - key: sgx_default_qcnl.conf
+            path: sgx_default_qcnl.conf`
+	}
+
 	manifest := fmt.Sprintf(`
 apiVersion: apps/v1
 kind: Deployment
@@ -329,33 +401,10 @@ spec:
           limits:
             cpu: "2"
         volumeMounts:
-        - name: confidential-containers
-          mountPath: /opt/confidential-containers
-        - name: kbs-config
-          mountPath: /etc/kbs-config
-        - name: opa
-          mountPath: /opt/confidential-containers/opa
-        - name: auth-secret
-          mountPath: /etc/auth-secret
-        - name: reference-values
-          mountPath: /opt/confidential-containers/rvps/reference-values
+%s
       restartPolicy: Always
       volumes:
-      - name: confidential-containers
-        emptyDir:
-          medium: Memory
-      - name: kbs-config
-        configMap:
-          name: kbs-config-cm
-      - name: opa
-        configMap:
-          name: resource-policy
-      - name: auth-secret
-        secret:
-          secretName: kbs-auth-public-key
-      - name: reference-values
-        configMap:
-          name: rvps-reference-values
+%s
 ---
 apiVersion: v1
 kind: Service
@@ -369,7 +418,7 @@ spec:
   - port: 8080
     targetPort: 8080
     protocol: TCP
-`, cfg.Namespace, cfg.KBSImage, cfg.ServiceName, cfg.Namespace)
+`, cfg.Namespace, cfg.KBSImage, volumeMounts, volumes, cfg.ServiceName, cfg.Namespace)
 
 	return applyManifest(manifest)
 }

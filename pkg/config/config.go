@@ -15,6 +15,7 @@ const (
 	DefaultInitContainerImage = "quay.io/fedora/fedora:44"
 	DefaultInitContainerCmd   = "curl http://localhost:8006/cdh/resource/default/attestation-status/status"
 	DefaultKBSImage           = "ghcr.io/confidential-containers/key-broker-service:built-in-as-v0.15.0"
+	DefaultPCCSURL            = "https://api.trustedservices.intel.com/sgx/certification/v4/"
 )
 
 // CocoConfig represents the configuration for CoCo deployments
@@ -26,6 +27,7 @@ type CocoConfig struct {
 	InitContainerImage string            `toml:"init_container_image" comment:"Default init container image (optional, default: quay.io/fedora/fedora:44)"`
 	InitContainerCmd   string            `toml:"init_container_cmd" comment:"Default init container command (optional, default: attestation check)"`
 	KBSImage           string            `toml:"kbs_image" comment:"KBS all-in-one image for Trustee deployment (optional, default: ghcr.io/confidential-containers/key-broker-service:built-in-as-v0.15.0)"`
+	PCCSURL            string            `toml:"pccs_url" comment:"PCCS URL for SGX attestation (optional, default: https://api.trustedservices.intel.com/sgx/certification/v4/)"`
 	ContainerPolicyURI string            `toml:"container_policy_uri" comment:"Container policy URI (optional)"`
 	RegistryCredURI    string            `toml:"registry_cred_uri" comment:"Container registry credentials URI (optional)"`
 	RegistryConfigURI  string            `toml:"registry_config_uri" comment:"Container registry config URI (optional)"`
@@ -42,6 +44,7 @@ func DefaultConfig() *CocoConfig {
 		InitContainerImage: DefaultInitContainerImage,
 		InitContainerCmd:   DefaultInitContainerCmd,
 		KBSImage:           DefaultKBSImage,
+		PCCSURL:            DefaultPCCSURL,
 		ContainerPolicyURI: "",
 		RegistryCredURI:    "",
 		RegistryConfigURI:  "",
