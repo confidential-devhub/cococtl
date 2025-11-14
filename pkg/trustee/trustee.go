@@ -455,3 +455,93 @@ func ParseSecretSpec(spec string) (*SecretResource, error) {
 		Data: data,
 	}, nil
 }
+
+// AddK8sSecretToTrustee adds a Kubernetes secret to the Trustee KBS repository
+// This is a temporary solution until proper CLI tooling is available
+//
+// The secret data is stored in the KBS repository with the following structure:
+// /opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}
+//
+// For example, a secret named "reg-cred" with key "root" and value "password"
+// in namespace "coco" will be stored at:
+// /opt/confidential-containers/kbs/repository/coco/reg-cred/root
+func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
+	// Get the KBS pod name
+	cmd := exec.Command("kubectl", "get", "pod", "-n", trusteeNamespace,
+		"-l", "app=kbs", "-o", "jsonpath={.items[0].metadata.name}")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to get KBS pod: %w\n%s", err, output)
+	}
+	podName := strings.TrimSpace(string(output))
+
+	if podName == "" {
+		return fmt.Errorf("no KBS pod found in namespace %s", trusteeNamespace)
+	}
+
+	// Wait for pod to be ready
+	cmd = exec.Command("kubectl", "wait", "--for=condition=ready", "--timeout=30s",
+		"-n", trusteeNamespace, fmt.Sprintf("pod/%s", podName))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("pod not ready: %w\n%s", err, output)
+	}
+
+	// Get the secret data from Kubernetes
+	cmd = exec.Command("kubectl", "get", "secret", secretName, "-n", secretNamespace,
+		"-o", "jsonpath={.data}")
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to get secret %s in namespace %s: %w\n%s", secretName, secretNamespace, err, output)
+	}
+
+	// Parse the secret data
+	var secretData map[string]string
+	if err := json.Unmarshal(output, &secretData); err != nil {
+		return fmt.Errorf("failed to parse secret data: %w", err)
+	}
+
+	if len(secretData) == 0 {
+		return fmt.Errorf("secret %s has no data", secretName)
+	}
+
+	// Create a temporary directory to prepare the secret files
+	tmpDir, err := os.MkdirTemp("", "kbs-secret-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create the directory structure: {tmpDir}/{secretNamespace}/{secretName}/
+	secretDir := filepath.Join(tmpDir, secretNamespace, secretName)
+	if err := os.MkdirAll(secretDir, 0755); err != nil {
+		return fmt.Errorf("failed to create secret directory: %w", err)
+	}
+
+	// Write each key-value pair as a file
+	for key, encodedValue := range secretData {
+		// Decode the base64-encoded value
+		decodedValue, err := base64.StdEncoding.DecodeString(encodedValue)
+		if err != nil {
+			return fmt.Errorf("failed to decode secret value for key %s: %w", key, err)
+		}
+
+		// Write the decoded value to a file
+		filePath := filepath.Join(secretDir, key)
+		if err := os.WriteFile(filePath, decodedValue, 0644); err != nil {
+			return fmt.Errorf("failed to write secret file for key %s: %w", key, err)
+		}
+	}
+
+	// Copy the entire directory structure to the KBS pod
+	// The structure will be: /opt/confidential-containers/kbs/repository/{secretNamespace}/{secretName}/{key}
+	srcPath := filepath.Join(tmpDir, secretNamespace) + "/."
+	destPath := fmt.Sprintf("%s:/opt/confidential-containers/kbs/repository/%s/", podName, secretNamespace)
+
+	cmd = exec.Command("kubectl", "cp", "-n", trusteeNamespace, srcPath, destPath)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to copy secret to KBS pod: %w\n%s", err, output)
+	}
+
+	return nil
+}

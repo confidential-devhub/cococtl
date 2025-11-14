@@ -11,6 +11,7 @@ import (
 	"github.com/confidential-devhub/cococtl/pkg/initdata"
 	"github.com/confidential-devhub/cococtl/pkg/manifest"
 	"github.com/confidential-devhub/cococtl/pkg/secrets"
+	"github.com/confidential-devhub/cococtl/pkg/trustee"
 	"github.com/spf13/cobra"
 )
 
@@ -290,7 +291,24 @@ func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool)
 		return err
 	}
 
-	// 6. Generate Trustee configuration
+	// 6. Add secrets to Trustee KBS repository (temporary solution)
+	autoUploadSuccess := false
+	trusteeNamespace, err := getTrusteeNamespace(cfg.TrusteeServer)
+	if err != nil {
+		fmt.Printf("  ⚠ Warning: Could not determine Trustee namespace from URL: %v\n", err)
+		fmt.Println("    Skipping automatic secret upload to Trustee")
+	} else {
+		fmt.Println("  - Adding secrets to Trustee KBS repository")
+		if err := addSecretsToTrustee(secretRefs, trusteeNamespace); err != nil {
+			fmt.Printf("  ⚠ Warning: Failed to add secrets to Trustee: %v\n", err)
+			fmt.Println("    You will need to add secrets manually")
+		} else {
+			fmt.Printf("  ✓ Successfully added %d secret(s) to Trustee\n", len(secretRefs))
+			autoUploadSuccess = true
+		}
+	}
+
+	// 7. Generate Trustee configuration
 	ext := filepath.Ext(m.GetName())
 	if ext == "" {
 		ext = ".yaml"
@@ -302,8 +320,8 @@ func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool)
 		return fmt.Errorf("failed to generate Trustee config: %w", err)
 	}
 
-	// 7. Print instructions
-	secrets.PrintTrusteeInstructions(sealedSecrets, trusteeConfigPath)
+	// 8. Print instructions
+	secrets.PrintTrusteeInstructions(sealedSecrets, trusteeConfigPath, autoUploadSuccess)
 
 	return nil
 }
@@ -331,4 +349,69 @@ func applyWithKubectl(manifestPath string) error {
 	}
 
 	return nil
+}
+
+// getTrusteeNamespace extracts the namespace from the Trustee server URL
+// Expected format: http://trustee-kbs.{namespace}.svc.cluster.local:8080
+func getTrusteeNamespace(trusteeURL string) (string, error) {
+	if trusteeURL == "" {
+		return "", fmt.Errorf("trustee server URL is empty")
+	}
+
+	// Remove protocol
+	url := strings.TrimPrefix(trusteeURL, "http://")
+	url = strings.TrimPrefix(url, "https://")
+
+	// Remove port
+	if idx := strings.Index(url, ":"); idx != -1 {
+		url = url[:idx]
+	}
+
+	// Split by dots to get parts
+	// Expected: trustee-kbs.{namespace}.svc.cluster.local
+	parts := strings.Split(url, ".")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("unexpected URL format: %s", trusteeURL)
+	}
+
+	// Check if it's a cluster-local service URL
+	if len(parts) >= 3 && parts[2] == "svc" {
+		// Second part is the namespace
+		return parts[1], nil
+	}
+
+	// If not a cluster-local URL, we can't determine the namespace
+	return "", fmt.Errorf("cannot determine namespace from non-cluster URL: %s", trusteeURL)
+}
+
+// addSecretsToTrustee adds all K8s secrets to the Trustee KBS repository
+// This is a temporary solution until proper CLI tooling is available
+func addSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeNamespace string) error {
+	// Import the trustee package function
+	for _, ref := range secretRefs {
+		// Determine the namespace for the secret
+		// If the secret reference has a namespace, use it
+		// Otherwise, use the current namespace
+		secretNamespace := ref.Namespace
+		if secretNamespace == "" {
+			var err error
+			secretNamespace, err = getCurrentNamespace()
+			if err != nil {
+				return fmt.Errorf("failed to get current namespace for secret %s: %w", ref.Name, err)
+			}
+		}
+
+		// Add the secret to Trustee
+		if err := addK8sSecretToTrustee(trusteeNamespace, ref.Name, secretNamespace); err != nil {
+			return fmt.Errorf("failed to add secret %s: %w", ref.Name, err)
+		}
+	}
+
+	return nil
+}
+
+// addK8sSecretToTrustee is a wrapper that calls the trustee package function
+// This is kept separate to maintain the isolation of the temporary functionality
+func addK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
+	return trustee.AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
 }

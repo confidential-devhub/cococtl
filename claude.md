@@ -178,6 +178,30 @@ if (initContainerImg != "" || initContainerCmd != "") && !addInitContainer {
 - Create emptyDir volume (Memory medium)
 - Mount volume in all containers
 
+### 6. Automatic Secret Addition to Trustee (Temporary)
+- Automatically adds K8s secrets to Trustee KBS repository during conversion
+- Integrated into the `apply` command secret conversion flow
+- Isolated implementation for easy removal when proper tooling is available
+- **How it works:**
+  - Detects Trustee namespace from the Trustee server URL in config
+  - After converting K8s secrets to sealed secrets, automatically copies them to Trustee
+  - Uses `kubectl exec` to access the Trustee pod and write secret files
+  - Creates directory structure: `/opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}`
+- **Implementation details:**
+  - Function `AddK8sSecretToTrustee` in `pkg/trustee/trustee.go` (trustee.go:459)
+  - Wrapper functions in `cmd/apply.go` (apply.go:351-415):
+    - `getTrusteeNamespace`: Extracts namespace from Trustee URL
+    - `addSecretsToTrustee`: Iterates over all secrets and adds them
+    - `addK8sSecretToTrustee`: Isolated wrapper for easy removal
+- **Error handling:**
+  - Gracefully handles failures with warnings
+  - Continues with manifest transformation even if secret upload fails
+  - Provides fallback instructions for manual secret configuration
+- **Example:**
+  - K8s secret `reg-cred` in namespace `coco` with key `root=password`
+  - Stored at: `/opt/confidential-containers/kbs/repository/coco/reg-cred/root`
+  - File content: `password` (decoded from base64)
+
 ## Testing Strategy
 
 ### Manual Testing Approach

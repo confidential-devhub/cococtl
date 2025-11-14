@@ -56,7 +56,8 @@ func GenerateTrusteeConfig(sealedSecrets []*SealedSecretData, outputPath string)
 }
 
 // PrintTrusteeInstructions prints console instructions for setting up Trustee
-func PrintTrusteeInstructions(sealedSecrets []*SealedSecretData, configPath string) {
+// autoUploadSuccess indicates whether secrets were automatically uploaded to Trustee
+func PrintTrusteeInstructions(sealedSecrets []*SealedSecretData, configPath string, autoUploadSuccess bool) {
 	if len(sealedSecrets) == 0 {
 		return
 	}
@@ -64,7 +65,15 @@ func PrintTrusteeInstructions(sealedSecrets []*SealedSecretData, configPath stri
 	fmt.Println()
 	fmt.Println("Trustee KBS Configuration")
 	fmt.Println("═════════════════════════════════════════════════════════")
-	fmt.Printf("The following %d secret(s) must be added to your Trustee KBS:\n\n", len(sealedSecrets))
+
+	if autoUploadSuccess {
+		fmt.Printf("✓ Successfully added %d secret(s) to Trustee KBS\n\n", len(sealedSecrets))
+		fmt.Println("The following sealed secrets are configured:")
+	} else {
+		fmt.Printf("The following %d sealed secret(s) need to be added to your Trustee KBS:\n\n", len(sealedSecrets))
+	}
+
+	fmt.Println()
 
 	for i, sealed := range sealedSecrets {
 		fmt.Printf("%d. %s\n", i+1, sealed.ResourceURI)
@@ -89,11 +98,14 @@ func PrintTrusteeInstructions(sealedSecrets []*SealedSecretData, configPath stri
 	fmt.Printf("Full configuration saved to: %s\n", configPath)
 	fmt.Println()
 
-	// TODO: Future enhancement - automatically push to Trustee KBS
-	// TODO: Add flag like --auto-push-trustee to enable automatic upload
-	// TODO: Will need Trustee endpoint and credentials configuration
-	fmt.Println("Note: Automatic Trustee upload not yet implemented.")
-	fmt.Println("      Please manually configure these secrets in your Trustee KBS.")
+	if autoUploadSuccess {
+		fmt.Println("Note: Secrets have been automatically uploaded to Trustee KBS.")
+		fmt.Println("      The configuration file above is saved for your reference.")
+	} else {
+		fmt.Println("Note: Automatic Trustee upload failed or was skipped.")
+		fmt.Println("      Please manually configure these secrets in your Trustee KBS")
+		fmt.Println("      using the configuration file above.")
+	}
 	fmt.Println()
 }
 
