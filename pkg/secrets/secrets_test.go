@@ -332,6 +332,7 @@ func TestDetectSecrets_MixedSecrets(t *testing.T) {
 	// Verify db-creds
 	if dbCreds == nil {
 		t.Fatal("db-creds secret not found")
+		return
 	}
 	if len(dbCreds.Keys) != 2 {
 		t.Errorf("db-creds: expected 2 keys, got %d", len(dbCreds.Keys))
@@ -343,6 +344,7 @@ func TestDetectSecrets_MixedSecrets(t *testing.T) {
 	// Verify app-config
 	if appConfig == nil {
 		t.Fatal("app-config secret not found")
+		return
 	}
 	if !appConfig.NeedsLookup {
 		t.Error("app-config: NeedsLookup should be true")
@@ -351,6 +353,7 @@ func TestDetectSecrets_MixedSecrets(t *testing.T) {
 	// Verify tls-secret
 	if tlsSecret == nil {
 		t.Fatal("tls-secret secret not found")
+		return
 	}
 	if !tlsSecret.NeedsLookup {
 		t.Error("tls-secret: NeedsLookup should be true")

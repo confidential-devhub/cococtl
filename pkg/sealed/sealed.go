@@ -14,7 +14,7 @@ type SecretSpec struct {
 	Type             string                 `json:"type"`
 	Name             string                 `json:"name"`
 	Provider         string                 `json:"provider"`
-	ProviderSettings map[string]interface{} `json:"provider_settings"`
+	ProviderSettings map[string]interface{} `json:"providerSettings"`
 	Annotations      map[string]interface{} `json:"annotations"`
 }
 

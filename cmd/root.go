@@ -32,12 +32,6 @@ func init() {
 	cobra.OnInitialize()
 }
 
-// exitWithError prints error message and exits
-func exitWithError(msg string, err error) {
-	fmt.Fprintf(os.Stderr, "Error: %s: %v\n", msg, err)
-	os.Exit(1)
-}
-
 // getCurrentNamespace gets the current namespace from kubectl config
 func getCurrentNamespace() (string, error) {
 	ctx := context.Background()
