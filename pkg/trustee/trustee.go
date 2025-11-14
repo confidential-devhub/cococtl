@@ -15,6 +15,11 @@ import (
 
 const (
 	trusteeLabel = "app=kbs"
+
+	// Default attestation status secret path and content
+	// This is used by the default init container to check attestation status
+	defaultAttestationStatusPath    = "/opt/confidential-containers/kbs/repository/default/attestation-status/status"
+	defaultAttestationStatusContent = "success"
 )
 
 // Config holds Trustee deployment configuration
@@ -80,6 +85,11 @@ func Deploy(cfg *Config) error {
 
 	if err := deployKBS(cfg); err != nil {
 		return fmt.Errorf("failed to deploy KBS: %w", err)
+	}
+
+	// Create default attestation status secret for init container
+	if err := createDefaultAttestationStatus(cfg.Namespace); err != nil {
+		return fmt.Errorf("failed to create default attestation status: %w", err)
 	}
 
 	if len(cfg.Secrets) > 0 {
@@ -541,6 +551,49 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 	output, err = cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to copy secret to KBS pod: %w\n%s", err, output)
+	}
+
+	return nil
+}
+
+// createDefaultAttestationStatus creates a default attestation-status secret in Trustee
+// This is used by the default init container command to check attestation status
+func createDefaultAttestationStatus(namespace string) error {
+	// Get the KBS pod name
+	cmd := exec.Command("kubectl", "get", "pod", "-n", namespace,
+		"-l", "app=kbs", "-o", "jsonpath={.items[0].metadata.name}")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to get KBS pod: %w\n%s", err, output)
+	}
+	podName := strings.TrimSpace(string(output))
+
+	if podName == "" {
+		return fmt.Errorf("no KBS pod found in namespace %s", namespace)
+	}
+
+	// Wait for pod to be ready
+	cmd = exec.Command("kubectl", "wait", "--for=condition=ready", "--timeout=120s",
+		"-n", namespace, fmt.Sprintf("pod/%s", podName))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("pod not ready: %w\n%s", err, output)
+	}
+
+	// Create the directory structure and file using kubectl exec
+	// Path: /opt/confidential-containers/kbs/repository/default/attestation-status/status
+	mkdirCmd := "mkdir -p /opt/confidential-containers/kbs/repository/default/attestation-status"
+	cmd = exec.Command("kubectl", "exec", "-n", namespace, podName, "--", "sh", "-c", mkdirCmd)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create directory in KBS pod: %w\n%s", err, output)
+	}
+
+	// Write the content to the file
+	writeCmd := fmt.Sprintf("echo -n '%s' > %s", defaultAttestationStatusContent, defaultAttestationStatusPath)
+	cmd = exec.Command("kubectl", "exec", "-n", namespace, podName, "--", "sh", "-c", writeCmd)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to write attestation status file: %w\n%s", err, output)
 	}
 
 	return nil

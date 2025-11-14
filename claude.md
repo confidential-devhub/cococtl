@@ -202,6 +202,24 @@ if (initContainerImg != "" || initContainerCmd != "") && !addInitContainer {
   - Stored at: `/opt/confidential-containers/kbs/repository/coco/reg-cred/root`
   - File content: `password` (decoded from base64)
 
+### 7. Default Attestation Status Secret
+- Automatically creates a default attestation status secret during Trustee deployment
+- Required for the default init container attestation check command
+- **Implementation details:**
+  - Constants defined in `pkg/trustee/trustee.go` (trustee.go:19-22):
+    - `defaultAttestationStatusPath`: `/opt/confidential-containers/kbs/repository/default/attestation-status/status`
+    - `defaultAttestationStatusContent`: `success`
+  - Function `createDefaultAttestationStatus` in `pkg/trustee/trustee.go` (trustee.go:554-595)
+  - Called automatically during `Deploy` (trustee.go:90-93)
+- **Purpose:**
+  - Provides a resource for the default init container command to verify attestation
+  - Default init container command: `curl http://localhost:8006/cdh/resource/default/attestation-status/status`
+  - Returns "success" when attestation is verified
+- **Integration:**
+  - Created automatically after KBS deployment completes
+  - No K8s secret required - directly written to KBS repository
+  - Uses `kubectl exec` to create directory and write file
+
 ## Testing Strategy
 
 ### Manual Testing Approach
