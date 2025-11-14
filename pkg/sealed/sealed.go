@@ -14,7 +14,7 @@ type SecretSpec struct {
 	Type             string                 `json:"type"`
 	Name             string                 `json:"name"`
 	Provider         string                 `json:"provider"`
-	ProviderSettings map[string]interface{} `json:"providerSettings"`
+	ProviderSettings map[string]interface{} `json:"provider_settings"` //nolint:tagliatelle // CoCo spec requires snake_case
 	Annotations      map[string]interface{} `json:"annotations"`
 }
 
