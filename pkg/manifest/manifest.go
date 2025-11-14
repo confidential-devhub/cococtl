@@ -1,3 +1,4 @@
+// Package manifest handles Kubernetes manifest manipulation and transformation.
 package manifest
 
 import (
@@ -499,7 +500,7 @@ func (m *Manifest) ConvertVolumeSecretToInitContainer(
 	}
 
 	// 2. Create initContainer to download each secret key
-	var downloadCommands []string
+	downloadCommands := make([]string, 0, len(sealedSecrets))
 	for key := range sealedSecrets {
 		// Build CDH URL from resource URI
 		namespace := m.GetNamespace()
@@ -557,7 +558,7 @@ func (m *Manifest) RemoveSecretVolume(volumeName string) error {
 	}
 
 	// Find and remove the volume
-	var newVolumes []interface{}
+	newVolumes := make([]interface{}, 0, len(volumes))
 	for _, vol := range volumes {
 		v, ok := vol.(map[string]interface{})
 		if !ok {

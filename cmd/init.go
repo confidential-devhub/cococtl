@@ -43,7 +43,7 @@ func init() {
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
 }
 
-func runInit(cmd *cobra.Command, args []string) error {
+func runInit(cmd *cobra.Command, _ []string) error {
 	outputPath, _ := cmd.Flags().GetString("output")
 	interactive, _ := cmd.Flags().GetBool("interactive")
 	skipTrusteeDeploy, _ := cmd.Flags().GetBool("skip-trustee-deploy")

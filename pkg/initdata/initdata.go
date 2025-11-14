@@ -12,6 +12,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+// InitData constants define the version and algorithm for initdata generation
 const (
 	InitDataVersion   = "0.1.0"
 	InitDataAlgorithm = "sha256"

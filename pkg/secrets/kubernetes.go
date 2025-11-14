@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,14 +29,15 @@ type K8sSecret struct {
 // If namespace is empty, uses current context namespace (no -n flag)
 // Returns error if kubectl fails or secret doesn't exist
 func InspectSecret(secretName, namespace string) (*SecretKeys, error) {
+	ctx := context.Background()
 	// Build kubectl command
 	var cmd *exec.Cmd
 	if namespace != "" {
 		// Explicit namespace specified
-		cmd = exec.Command("kubectl", "get", "secret", secretName, "-n", namespace, "-o", "json")
+		cmd = exec.CommandContext(ctx, "kubectl", "get", "secret", secretName, "-n", namespace, "-o", "json")
 	} else {
 		// No namespace specified - use current context namespace
-		cmd = exec.Command("kubectl", "get", "secret", secretName, "-o", "json")
+		cmd = exec.CommandContext(ctx, "kubectl", "get", "secret", secretName, "-o", "json")
 	}
 
 	// Execute command
@@ -204,7 +206,7 @@ func GenerateSealedSecretsYAML(sealedSecrets []*SealedSecretData) (map[string]st
 
 	// Generate YAML for each sealed secret
 	result := make(map[string]string)
-	var yamlParts []string
+	yamlParts := make([]string, 0, len(secretMap))
 
 	for secretName, sealedData := range secretMap {
 		// Use namespace from first sealed secret entry

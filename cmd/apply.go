@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -67,7 +68,7 @@ func init() {
 	}
 }
 
-func runApply(cmd *cobra.Command, args []string) error {
+func runApply(_ *cobra.Command, _ []string) error {
 	// Load configuration
 	if configPath == "" {
 		var err error
@@ -342,7 +343,8 @@ func updateManifestSecretNames(m *manifest.Manifest, sealedSecretNames map[strin
 }
 
 func applyWithKubectl(manifestPath string) error {
-	cmd := exec.Command("kubectl", "apply", "-f", manifestPath)
+	ctx := context.Background()
+	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", manifestPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

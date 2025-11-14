@@ -1,3 +1,4 @@
+// Package sealed handles sealed secret generation for Confidential Containers.
 package sealed
 
 import (

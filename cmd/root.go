@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -39,7 +40,8 @@ func exitWithError(msg string, err error) {
 
 // getCurrentNamespace gets the current namespace from kubectl config
 func getCurrentNamespace() (string, error) {
-	cmd := exec.Command("kubectl", "config", "view", "--minify", "-o", "jsonpath={..namespace}")
+	ctx := context.Background()
+	cmd := exec.CommandContext(ctx, "kubectl", "config", "view", "--minify", "-o", "jsonpath={..namespace}")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to get current namespace: %w", err)
