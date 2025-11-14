@@ -1,4 +1,4 @@
-.PHONY: build install clean test help release release-all
+.PHONY: build install clean test help release release-all lint
 
 # Binary name
 BINARY_NAME=kubectl-coco
@@ -77,6 +77,12 @@ fmt:
 vet:
 	@echo "Running go vet..."
 	$(GOCMD) vet ./...
+
+## lint: Run golangci-lint
+lint:
+	@echo "Running golangci-lint..."
+	@which golangci-lint > /dev/null || (echo "golangci-lint not found. Install it from https://golangci-lint.run/usage/install/" && exit 1)
+	golangci-lint run ./...
 
 ## deps: Download dependencies
 deps:

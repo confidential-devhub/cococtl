@@ -1,0 +1,39 @@
+version: "2"
+
+linters:
+  # Set to true runs only fast linters.
+  # Good option for 'lint on save', pre-commit hook or CI.
+  fast: false
+
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - contextcheck
+    - durationcheck
+    - errcheck
+    - errname
+    - errorlint
+    # configure it properly, see https://github.com/securego/gosec#available-rules
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - nakedret
+    - nilerr
+    - nilnil
+    - prealloc
+    - predeclared
+    - reassign
+    - revive
+    - rowserrcheck
+    - staticcheck
+    - tagliatelle
+    - testableexamples
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - wastedassign
