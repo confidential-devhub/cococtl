@@ -37,3 +37,10 @@ linters:
     - unused
     - usestdlibvars
     - wastedassign
+
+  exclusions:
+    rules:
+      # Exclude some linters from running on tests files.
+      - path: _test\.go
+        linters:
+          - gosec
