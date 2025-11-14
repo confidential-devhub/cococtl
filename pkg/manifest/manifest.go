@@ -10,13 +10,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Manifest represents a Kubernetes manifest
+// Manifest represents a Kubernetes manifest.
 type Manifest struct {
 	data map[string]interface{}
 	path string
 }
 
-// Load reads and parses a Kubernetes manifest from a file
+// Load reads and parses a Kubernetes manifest from a file.
 func Load(path string) (*Manifest, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -34,7 +34,7 @@ func Load(path string) (*Manifest, error) {
 	}, nil
 }
 
-// Save writes the manifest to a file
+// Save writes the manifest to a file.
 func (m *Manifest) Save(path string) error {
 	data, err := yaml.Marshal(m.data)
 	if err != nil {

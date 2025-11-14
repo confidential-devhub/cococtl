@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// SecretSpec represents the sealed secret specification
+// SecretSpec represents the sealed secret specification.
 type SecretSpec struct {
 	Version          string                 `json:"version"`
 	Type             string                 `json:"type"`
@@ -18,8 +18,8 @@ type SecretSpec struct {
 	Annotations      map[string]interface{} `json:"annotations"`
 }
 
-// GenerateSealedSecret creates a sealed secret from a KBS resource URI
-// Format: sealed.fakejwsheader.{base64url_encoded_json}.fakesignature
+// GenerateSealedSecret creates a sealed secret from a KBS resource URI.
+// Format: sealed.fakejwsheader.{base64url_encoded_json}.fakesignature.
 func GenerateSealedSecret(resourceURI string) (string, error) {
 	// Create the secret specification
 	spec := SecretSpec{
@@ -46,8 +46,8 @@ func GenerateSealedSecret(resourceURI string) (string, error) {
 	return sealedSecret, nil
 }
 
-// ParseResourceURI extracts the path components from a KBS resource URI
-// Example: kbs:///default/mysecret/user -> namespace=default, resource=mysecret, key=user
+// ParseResourceURI extracts the path components from a KBS resource URI.
+// Example: kbs:///default/mysecret/user -> namespace=default, resource=mysecret, key=user.
 func ParseResourceURI(uri string) (namespace, resource, key string, err error) {
 	// Remove kbs:// prefix
 	if !strings.HasPrefix(uri, "kbs://") {

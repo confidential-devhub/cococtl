@@ -381,7 +381,11 @@ func TestWorkflow_CompleteWithAllFeatures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create gzip reader: %v", err)
 	}
-	defer gzipReader.Close()
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
 
 	decompressed, err := io.ReadAll(gzipReader)
 	if err != nil {

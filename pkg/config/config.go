@@ -10,7 +10,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// Default configuration values
+// Default configuration values.
 const (
 	DefaultRuntimeClass       = "kata-cc"
 	DefaultInitContainerImage = "quay.io/fedora/fedora:44"
@@ -19,7 +19,7 @@ const (
 	DefaultPCCSURL            = "https://api.trustedservices.intel.com/sgx/certification/v4/"
 )
 
-// CocoConfig represents the configuration for CoCo deployments
+// CocoConfig represents the configuration for CoCo deployments.
 type CocoConfig struct {
 	TrusteeServer      string            `toml:"trustee_server" comment:"Trustee server URL (mandatory)"`
 	RuntimeClass       string            `toml:"runtime_class" comment:"Default RuntimeClass to use when --runtime-class is not specified (default: kata-cc)"`
@@ -35,7 +35,7 @@ type CocoConfig struct {
 	Annotations        map[string]string `toml:"annotations" comment:"Custom annotations to add to pods (optional)"`
 }
 
-// DefaultConfig returns a default CoCo configuration
+// DefaultConfig returns a default CoCo configuration.
 func DefaultConfig() *CocoConfig {
 	return &CocoConfig{
 		TrusteeServer:      "",
@@ -57,7 +57,7 @@ func DefaultConfig() *CocoConfig {
 	}
 }
 
-// GetConfigPath returns the default config file path
+// GetConfigPath returns the default config file path.
 func GetConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -66,7 +66,7 @@ func GetConfigPath() (string, error) {
 	return filepath.Join(home, ".kube", "coco-config.toml"), nil
 }
 
-// Load reads the configuration from the specified path
+// Load reads the configuration from the specified path.
 func Load(path string) (*CocoConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -81,7 +81,7 @@ func Load(path string) (*CocoConfig, error) {
 	return &cfg, nil
 }
 
-// Save writes the configuration to the specified path
+// Save writes the configuration to the specified path.
 func (c *CocoConfig) Save(path string) error {
 	// Ensure the directory exists
 	dir := filepath.Dir(path)

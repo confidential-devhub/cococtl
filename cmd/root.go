@@ -1,9 +1,9 @@
+// Package cmd provides the command-line interface for kubectl-coco.
 package cmd
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 

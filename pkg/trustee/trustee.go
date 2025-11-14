@@ -1,3 +1,4 @@
+// Package trustee handles Trustee KBS deployment and management.
 package trustee
 
 import (

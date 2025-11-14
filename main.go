@@ -1,3 +1,4 @@
+// kubectl-coco is a kubectl plugin for deploying Confidential Containers.
 package main
 
 import (

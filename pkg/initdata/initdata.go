@@ -1,3 +1,4 @@
+// Package initdata handles generation of initdata for Confidential Containers.
 package initdata
 
 import (

@@ -1,3 +1,4 @@
+// Package secrets provides secret conversion and management for sealed secrets.
 package secrets
 
 import (
