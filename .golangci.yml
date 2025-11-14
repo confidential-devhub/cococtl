@@ -1,10 +1,6 @@
 version: "2"
 
 linters:
-  # Set to true runs only fast linters.
-  # Good option for 'lint on save', pre-commit hook or CI.
-  fast: false
-
   enable:
     - asasalint
     - asciicheck
