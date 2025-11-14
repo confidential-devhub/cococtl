@@ -157,7 +157,11 @@ func createAuthSecretFromKeys(namespace string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to remove temp directory %s: %v\n", tmpDir, err)
+		}
+	}()
 
 	// Write keys to temporary files
 	privateKeyPath := filepath.Join(tmpDir, "private.key")
@@ -407,7 +411,11 @@ func populateSecrets(namespace string, secrets []SecretResource) error {
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to remove temp directory %s: %v\n", tmpDir, err)
+		}
+	}()
 
 	for _, secret := range secrets {
 		resourcePath := strings.TrimPrefix(secret.URI, "kbs://")
@@ -519,7 +527,11 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to remove temp directory %s: %v\n", tmpDir, err)
+		}
+	}()
 
 	// Create the directory structure: {tmpDir}/{secretNamespace}/{secretName}/
 	secretDir := filepath.Join(tmpDir, secretNamespace, secretName)

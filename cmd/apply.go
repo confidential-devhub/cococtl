@@ -62,7 +62,9 @@ func init() {
 	applyCmd.Flags().StringVar(&configPath, "config", "", "Path to CoCo config file (default: ~/.kube/coco-config.toml)")
 	applyCmd.Flags().BoolVar(&convertSecrets, "convert-secrets", true, "Automatically convert K8s secrets to sealed secrets")
 
-	applyCmd.MarkFlagRequired("filename")
+	if err := applyCmd.MarkFlagRequired("filename"); err != nil {
+		panic(fmt.Sprintf("failed to mark filename flag as required: %v", err))
+	}
 }
 
 func runApply(cmd *cobra.Command, args []string) error {

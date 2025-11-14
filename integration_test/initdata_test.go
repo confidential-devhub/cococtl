@@ -40,7 +40,11 @@ func TestInitData_Generate_MinimalConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create gzip reader: %v", err)
 	}
-	defer gzipReader.Close()
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
 
 	decompressed, err := io.ReadAll(gzipReader)
 	if err != nil {
@@ -114,7 +118,11 @@ func TestInitData_Generate_WithCACert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create gzip reader: %v", err)
 	}
-	defer gzipReader.Close()
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
 
 	decompressed, err := io.ReadAll(gzipReader)
 	if err != nil {
@@ -157,7 +165,11 @@ func TestInitData_Generate_WithCustomPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create gzip reader: %v", err)
 	}
-	defer gzipReader.Close()
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
 
 	decompressed, err := io.ReadAll(gzipReader)
 	if err != nil {
@@ -202,7 +214,11 @@ func TestInitData_Generate_DefaultPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create gzip reader: %v", err)
 	}
-	defer gzipReader.Close()
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
 
 	decompressed, err := io.ReadAll(gzipReader)
 	if err != nil {
@@ -251,7 +267,11 @@ func TestInitData_Encoding_GzipAndBase64(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create gzip reader: %v", err)
 	}
-	defer gzipReader.Close()
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
 
 	decompressed, err := io.ReadAll(gzipReader)
 	if err != nil {
@@ -292,7 +312,11 @@ func TestInitData_AAToml_Structure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create gzip reader: %v", err)
 	}
-	defer gzipReader.Close()
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
 
 	decompressed, err := io.ReadAll(gzipReader)
 	if err != nil {
@@ -355,7 +379,11 @@ func TestInitData_CDHToml_Structure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create gzip reader: %v", err)
 	}
-	defer gzipReader.Close()
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
 
 	decompressed, err := io.ReadAll(gzipReader)
 	if err != nil {

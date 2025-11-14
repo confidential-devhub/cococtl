@@ -16,9 +16,15 @@ func TestInitCommand_WithRuntimeClassFlag(t *testing.T) {
 
 	// Create and execute init command with flags
 	cmd := initCmd
-	cmd.Flags().Set("output", configPath)
-	cmd.Flags().Set("skip-trustee-deploy", "true")
-	cmd.Flags().Set("runtime-class", "kata-remote")
+	if err := cmd.Flags().Set("output", configPath); err != nil {
+		t.Fatalf("Failed to set output flag: %v", err)
+	}
+	if err := cmd.Flags().Set("skip-trustee-deploy", "true"); err != nil {
+		t.Fatalf("Failed to set skip-trustee-deploy flag: %v", err)
+	}
+	if err := cmd.Flags().Set("runtime-class", "kata-remote"); err != nil {
+		t.Fatalf("Failed to set runtime-class flag: %v", err)
+	}
 
 	err := runInit(cmd, []string{})
 	if err != nil {
@@ -50,9 +56,15 @@ func TestInitCommand_WithoutRuntimeClassFlag(t *testing.T) {
 
 	// Create and execute init command without runtime-class flag
 	cmd := initCmd
-	cmd.Flags().Set("output", configPath)
-	cmd.Flags().Set("skip-trustee-deploy", "true")
-	cmd.Flags().Set("runtime-class", "") // Explicitly clear the flag
+	if err := cmd.Flags().Set("output", configPath); err != nil {
+		t.Fatalf("Failed to set output flag: %v", err)
+	}
+	if err := cmd.Flags().Set("skip-trustee-deploy", "true"); err != nil {
+		t.Fatalf("Failed to set skip-trustee-deploy flag: %v", err)
+	}
+	if err := cmd.Flags().Set("runtime-class", ""); err != nil { // Explicitly clear the flag
+		t.Fatalf("Failed to set runtime-class flag: %v", err)
+	}
 
 	err := runInit(cmd, []string{})
 	if err != nil {
@@ -84,9 +96,15 @@ func TestInitCommand_RuntimeClassWithTrusteeURL(t *testing.T) {
 
 	// Create and execute init command with both flags
 	cmd := initCmd
-	cmd.Flags().Set("output", configPath)
-	cmd.Flags().Set("trustee-url", "https://trustee.example.com:8080")
-	cmd.Flags().Set("runtime-class", "kata-qemu")
+	if err := cmd.Flags().Set("output", configPath); err != nil {
+		t.Fatalf("Failed to set output flag: %v", err)
+	}
+	if err := cmd.Flags().Set("trustee-url", "https://trustee.example.com:8080"); err != nil {
+		t.Fatalf("Failed to set trustee-url flag: %v", err)
+	}
+	if err := cmd.Flags().Set("runtime-class", "kata-qemu"); err != nil {
+		t.Fatalf("Failed to set runtime-class flag: %v", err)
+	}
 
 	err := runInit(cmd, []string{})
 	if err != nil {
