@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -41,7 +42,8 @@ func InspectSecret(secretName, namespace string) (*SecretKeys, error) {
 	output, err := cmd.Output()
 	if err != nil {
 		// Check if it's an exit error with stderr
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			return nil, fmt.Errorf("kubectl get secret failed: %s", string(exitErr.Stderr))
 		}
 		return nil, fmt.Errorf("kubectl get secret failed: %w", err)
@@ -154,7 +156,8 @@ func GenerateSealedSecretYAML(secretName, namespace string, sealedData map[strin
 	cmd := exec.Command("kubectl", args...)
 	output, err := cmd.Output()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			return "", "", fmt.Errorf("kubectl create secret failed: %s", string(exitErr.Stderr))
 		}
 		return "", "", fmt.Errorf("kubectl create secret failed: %w", err)
