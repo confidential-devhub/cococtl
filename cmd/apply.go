@@ -274,7 +274,7 @@ func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool)
 		baseName := strings.TrimSuffix(manifestFile, ext)
 		sealedSecretsPath := baseName + "-sealed-secrets.yaml"
 
-		if err := os.WriteFile(sealedSecretsPath, []byte(yamlContent), 0644); err != nil {
+		if err := os.WriteFile(sealedSecretsPath, []byte(yamlContent), 0600); err != nil {
 			return fmt.Errorf("failed to write sealed secrets file: %w", err)
 		}
 

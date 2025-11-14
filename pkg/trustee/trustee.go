@@ -172,11 +172,12 @@ func createAuthSecretFromKeys(namespace string) error {
 		return fmt.Errorf("failed to write private key: %w", err)
 	}
 
-	if err := os.WriteFile(publicKeyPath, publicKeyPEM, 0644); err != nil {
+	if err := os.WriteFile(publicKeyPath, publicKeyPEM, 0600); err != nil {
 		return fmt.Errorf("failed to write public key: %w", err)
 	}
 
 	// Create secret from files
+	// #nosec G204 - namespace is from function parameter (application-controlled), paths are from os.MkdirTemp
 	cmd := exec.Command("kubectl", "create", "secret", "generic",
 		"kbs-auth-public-key", "-n", namespace,
 		fmt.Sprintf("--from-file=%s", publicKeyPath),
@@ -402,6 +403,7 @@ func populateSecrets(namespace string, secrets []SecretResource) error {
 		return fmt.Errorf("no KBS pod found in namespace %s", namespace)
 	}
 
+	// #nosec G204 - namespace is from function parameter, podName is from kubectl get output
 	cmd = exec.Command("kubectl", "wait", "--for=condition=ready", "--timeout=120s",
 		"-n", namespace, fmt.Sprintf("pod/%s", podName))
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -423,15 +425,16 @@ func populateSecrets(namespace string, secrets []SecretResource) error {
 		resourcePath = strings.TrimPrefix(resourcePath, "/")
 
 		fullPath := filepath.Join(tmpDir, resourcePath)
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0750); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
 
-		if err := os.WriteFile(fullPath, secret.Data, 0644); err != nil {
+		if err := os.WriteFile(fullPath, secret.Data, 0600); err != nil {
 			return fmt.Errorf("failed to write secret: %w", err)
 		}
 	}
 
+	// #nosec G204 - namespace is from function parameter, tmpDir is from os.MkdirTemp, podName is from kubectl get
 	cmd = exec.Command("kubectl", "cp", "-n", namespace,
 		tmpDir+"/.", podName+":/opt/confidential-containers/kbs/repository/")
 	output, err = cmd.CombinedOutput()
@@ -462,9 +465,37 @@ func ParseSecretSpec(spec string) (*SecretResource, error) {
 			return nil, fmt.Errorf("failed to decode base64 data: %w", err)
 		}
 	} else {
-		data, err = os.ReadFile(pathOrData)
+		// Validate and sanitize the path to prevent directory traversal
+		// Source - https://stackoverflow.com/a/57534618
+		// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
+		// Retrieved 2025-11-14, License - CC BY-SA 4.0
+		cleanPath := filepath.Clean(pathOrData)
+
+		// For absolute paths, validate they don't escape the filesystem root
+		// For relative paths, ensure they're relative to current directory
+		if filepath.IsAbs(cleanPath) {
+			// Absolute paths are allowed for secret files
+			// but ensure path doesn't contain traversal attempts
+			if strings.Contains(pathOrData, "..") {
+				return nil, fmt.Errorf("invalid secret path: contains directory traversal")
+			}
+		} else {
+			// For relative paths, ensure they resolve within current directory
+			cwd, err := os.Getwd()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get current directory: %w", err)
+			}
+			absPath := filepath.Join(cwd, cleanPath)
+			if !strings.HasPrefix(absPath, cwd) {
+				return nil, fmt.Errorf("invalid secret path: escapes current directory")
+			}
+			cleanPath = absPath
+		}
+
+		// #nosec G304 - Path is validated above
+		data, err = os.ReadFile(cleanPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read secret file %s: %w", pathOrData, err)
+			return nil, fmt.Errorf("failed to read secret file %s: %w", cleanPath, err)
 		}
 	}
 
@@ -499,6 +530,7 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 	}
 
 	// Wait for pod to be ready
+	// #nosec G204 - trusteeNamespace is from function parameter, podName is from kubectl get output
 	cmd = exec.Command("kubectl", "wait", "--for=condition=ready", "--timeout=30s",
 		"-n", trusteeNamespace, fmt.Sprintf("pod/%s", podName))
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -536,7 +568,7 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 
 	// Create the directory structure: {tmpDir}/{secretNamespace}/{secretName}/
 	secretDir := filepath.Join(tmpDir, secretNamespace, secretName)
-	if err := os.MkdirAll(secretDir, 0755); err != nil {
+	if err := os.MkdirAll(secretDir, 0750); err != nil {
 		return fmt.Errorf("failed to create secret directory: %w", err)
 	}
 
@@ -550,7 +582,7 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 
 		// Write the decoded value to a file
 		filePath := filepath.Join(secretDir, key)
-		if err := os.WriteFile(filePath, decodedValue, 0644); err != nil {
+		if err := os.WriteFile(filePath, decodedValue, 0600); err != nil {
 			return fmt.Errorf("failed to write secret file for key %s: %w", key, err)
 		}
 	}
@@ -560,6 +592,7 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 	srcPath := filepath.Join(tmpDir, secretNamespace) + "/."
 	destPath := fmt.Sprintf("%s:/opt/confidential-containers/kbs/repository/%s/", podName, secretNamespace)
 
+	// #nosec G204 - trusteeNamespace is from function parameter, srcPath uses os.MkdirTemp tmpDir, podName is from kubectl get
 	cmd = exec.Command("kubectl", "cp", "-n", trusteeNamespace, srcPath, destPath)
 	output, err = cmd.CombinedOutput()
 	if err != nil {
@@ -586,6 +619,7 @@ func createDefaultAttestationStatus(namespace string) error {
 	}
 
 	// Wait for pod to be ready
+	// #nosec G204 - namespace is from function parameter, podName is from kubectl get output
 	cmd = exec.Command("kubectl", "wait", "--for=condition=ready", "--timeout=120s",
 		"-n", namespace, fmt.Sprintf("pod/%s", podName))
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -595,6 +629,7 @@ func createDefaultAttestationStatus(namespace string) error {
 	// Create the directory structure and file using kubectl exec
 	// Path: /opt/confidential-containers/kbs/repository/default/attestation-status/status
 	mkdirCmd := "mkdir -p /opt/confidential-containers/kbs/repository/default/attestation-status"
+	// #nosec G204 - namespace is from function parameter, podName is from kubectl get, mkdirCmd is a constant string
 	cmd = exec.Command("kubectl", "exec", "-n", namespace, podName, "--", "sh", "-c", mkdirCmd)
 	output, err = cmd.CombinedOutput()
 	if err != nil {
@@ -603,6 +638,7 @@ func createDefaultAttestationStatus(namespace string) error {
 
 	// Write the content to the file
 	writeCmd := fmt.Sprintf("echo -n '%s' > %s", defaultAttestationStatusContent, defaultAttestationStatusPath)
+	// #nosec G204 - namespace is from function parameter, podName is from kubectl get, writeCmd uses constants
 	cmd = exec.Command("kubectl", "exec", "-n", namespace, podName, "--", "sh", "-c", writeCmd)
 	output, err = cmd.CombinedOutput()
 	if err != nil {

@@ -68,7 +68,33 @@ func GetConfigPath() (string, error) {
 
 // Load reads the configuration from the specified path.
 func Load(path string) (*CocoConfig, error) {
-	data, err := os.ReadFile(path)
+	// Validate and sanitize the path to prevent directory traversal
+	// Source - https://stackoverflow.com/a/57534618
+	cleanPath := filepath.Clean(path)
+
+	// For absolute paths, validate they don't escape the filesystem root
+	// For relative paths, ensure they're relative to current directory
+	if filepath.IsAbs(cleanPath) {
+		// Absolute paths are allowed for config files (user may store anywhere)
+		// but ensure path doesn't contain traversal attempts
+		if strings.Contains(path, "..") {
+			return nil, fmt.Errorf("invalid config path: contains directory traversal")
+		}
+	} else {
+		// For relative paths, ensure they resolve within current directory
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current directory: %w", err)
+		}
+		absPath := filepath.Join(cwd, cleanPath)
+		if !strings.HasPrefix(absPath, cwd) {
+			return nil, fmt.Errorf("invalid config path: escapes current directory")
+		}
+		cleanPath = absPath
+	}
+
+	// #nosec G304 - Path is validated above
+	data, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -85,7 +111,7 @@ func Load(path string) (*CocoConfig, error) {
 func (c *CocoConfig) Save(path string) error {
 	// Ensure the directory exists
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -94,7 +120,7 @@ func (c *CocoConfig) Save(path string) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 

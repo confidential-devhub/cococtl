@@ -18,7 +18,35 @@ type Manifest struct {
 
 // Load reads and parses a Kubernetes manifest from a file.
 func Load(path string) (*Manifest, error) {
-	data, err := os.ReadFile(path)
+	// Validate and sanitize the path to prevent directory traversal
+	// Source - https://stackoverflow.com/a/57534618
+	// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
+	// Retrieved 2025-11-14, License - CC BY-SA 4.0
+	cleanPath := filepath.Clean(path)
+
+	// For absolute paths, validate they don't escape the filesystem root
+	// For relative paths, ensure they're relative to current directory
+	if filepath.IsAbs(cleanPath) {
+		// Absolute paths are allowed for manifest files
+		// but ensure path doesn't contain traversal attempts
+		if strings.Contains(path, "..") {
+			return nil, fmt.Errorf("invalid manifest path: contains directory traversal")
+		}
+	} else {
+		// For relative paths, ensure they resolve within current directory
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current directory: %w", err)
+		}
+		absPath := filepath.Join(cwd, cleanPath)
+		if !strings.HasPrefix(absPath, cwd) {
+			return nil, fmt.Errorf("invalid manifest path: escapes current directory")
+		}
+		cleanPath = absPath
+	}
+
+	// #nosec G304 - Path is validated above
+	data, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read manifest file: %w", err)
 	}
@@ -30,7 +58,7 @@ func Load(path string) (*Manifest, error) {
 
 	return &Manifest{
 		data: manifestData,
-		path: path,
+		path: cleanPath,
 	}, nil
 }
 
@@ -41,7 +69,7 @@ func (m *Manifest) Save(path string) error {
 		return fmt.Errorf("failed to marshal manifest: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write manifest file: %w", err)
 	}
 

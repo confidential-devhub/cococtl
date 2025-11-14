@@ -155,6 +155,8 @@ func GenerateSealedSecretYAML(secretName, namespace string, sealedData map[strin
 	args = append(args, "--dry-run=client", "-o", "yaml")
 
 	// Execute command to generate YAML
+	// #nosec G204 - args are constructed from application-controlled inputs (secret name, namespace, sealed values)
+	// No arbitrary user input is passed to kubectl
 	cmd := exec.Command("kubectl", args...)
 	output, err := cmd.Output()
 	if err != nil {

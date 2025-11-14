@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/config"
@@ -170,7 +171,35 @@ func generateCDHToml(cfg *config.CocoConfig) (string, error) {
 
 // loadPolicyFile reads a policy file from disk
 func loadPolicyFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	// Validate and sanitize the path to prevent directory traversal
+	// Source - https://stackoverflow.com/a/57534618
+	// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
+	// Retrieved 2025-11-14, License - CC BY-SA 4.0
+	cleanPath := filepath.Clean(path)
+
+	// For absolute paths, validate they don't escape the filesystem root
+	// For relative paths, ensure they're relative to current directory
+	if filepath.IsAbs(cleanPath) {
+		// Absolute paths are allowed for policy files
+		// but ensure path doesn't contain traversal attempts
+		if strings.Contains(path, "..") {
+			return "", fmt.Errorf("invalid policy path: contains directory traversal")
+		}
+	} else {
+		// For relative paths, ensure they resolve within current directory
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to get current directory: %w", err)
+		}
+		absPath := filepath.Join(cwd, cleanPath)
+		if !strings.HasPrefix(absPath, cwd) {
+			return "", fmt.Errorf("invalid policy path: escapes current directory")
+		}
+		cleanPath = absPath
+	}
+
+	// #nosec G304 - Path is validated above
+	data, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return "", err
 	}
