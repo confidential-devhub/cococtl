@@ -512,6 +512,9 @@ func ParseSecretSpec(spec string) (*SecretResource, error) {
 // The secret data is stored in the KBS repository with the following structure:
 // /opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}
 //
+// Note: Leading dots in key names are automatically stripped as KBS doesn't support them in URIs.
+// For example, ".dockerconfigjson" is stored as "dockerconfigjson".
+//
 // For example, a secret named "reg-cred" with key "root" and value "password"
 // in namespace "coco" will be stored at:
 // /opt/confidential-containers/kbs/repository/coco/reg-cred/root
@@ -580,10 +583,14 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 			return fmt.Errorf("failed to decode secret value for key %s: %w", key, err)
 		}
 
+		// Strip leading "." from key name as KBS doesn't support it in URIs
+		// e.g., ".dockerconfigjson" becomes "dockerconfigjson"
+		cleanKey := strings.TrimPrefix(key, ".")
+
 		// Write the decoded value to a file
-		filePath := filepath.Join(secretDir, key)
+		filePath := filepath.Join(secretDir, cleanKey)
 		if err := os.WriteFile(filePath, decodedValue, 0600); err != nil {
-			return fmt.Errorf("failed to write secret file for key %s: %w", key, err)
+			return fmt.Errorf("failed to write secret file for key %s: %w", cleanKey, err)
 		}
 	}
 
@@ -608,10 +615,14 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 // The secret data is stored in the KBS repository with the following structure:
 // /opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}
 //
+// Note: Leading dots in key names (e.g., .dockerconfigjson) are automatically stripped
+// by AddK8sSecretToTrustee as KBS doesn't support them in URIs.
+//
 // This function is isolated for easy removal when proper tooling is available
 func AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
 	// Reuse the existing AddK8sSecretToTrustee function
 	// ImagePullSecrets are just regular K8s secrets, so the logic is the same
+	// Leading dots in key names are automatically stripped in AddK8sSecretToTrustee
 	return AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
 }
 

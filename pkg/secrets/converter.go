@@ -3,6 +3,7 @@ package secrets
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/sealed"
 )
@@ -18,9 +19,13 @@ type SealedSecretData struct {
 
 // ConvertToSealed converts a secret reference to sealed secret format
 func ConvertToSealed(namespace, secretName, key string) (*SealedSecretData, error) {
+	// Strip leading "." from key name as KBS doesn't support it in URIs
+	// e.g., ".dockerconfigjson" becomes "dockerconfigjson"
+	cleanKey := strings.TrimPrefix(key, ".")
+
 	// Build KBS resource URI
 	// Format: kbs:///namespace/secretName/key
-	resourceURI := fmt.Sprintf("kbs:///%s/%s/%s", namespace, secretName, key)
+	resourceURI := fmt.Sprintf("kbs:///%s/%s/%s", namespace, secretName, cleanKey)
 
 	// Generate sealed secret using existing sealed package
 	sealedSecret, err := sealed.GenerateSealedSecret(resourceURI)
@@ -32,7 +37,7 @@ func ConvertToSealed(namespace, secretName, key string) (*SealedSecretData, erro
 		ResourceURI:  resourceURI,
 		SealedSecret: sealedSecret,
 		SecretName:   secretName,
-		Key:          key,
+		Key:          cleanKey,
 		Namespace:    namespace,
 	}, nil
 }

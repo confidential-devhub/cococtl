@@ -430,11 +430,12 @@ func TestInitData_Generate_WithImagePullSecrets(t *testing.T) {
 	}
 
 	// Create imagePullSecrets info
+	// Note: The key should already have the leading "." stripped by handleImagePullSecrets
 	imagePullSecrets := []initdata.ImagePullSecretInfo{
 		{
 			Namespace:  "default",
 			SecretName: "regcred",
-			Key:        ".dockerconfigjson",
+			Key:        "dockerconfigjson",
 		},
 	}
 
@@ -502,7 +503,8 @@ func TestInitData_Generate_WithImagePullSecrets(t *testing.T) {
 		t.Fatal("authenticated_registry_credentials_uri not found in image config")
 	}
 
-	expectedURI := "kbs:///default/regcred/.dockerconfigjson"
+	// Note: The key should NOT have the leading "." as it's stripped during processing
+	expectedURI := "kbs:///default/regcred/dockerconfigjson"
 	if authRegCred != expectedURI {
 		t.Errorf("authenticated_registry_credentials_uri = %q, want %q", authRegCred, expectedURI)
 	}
@@ -584,21 +586,22 @@ func TestInitData_Generate_WithMultipleImagePullSecrets(t *testing.T) {
 
 	// Create multiple imagePullSecrets info
 	// Only the first one should be used in cdh.toml
+	// Note: The key should already have the leading "." stripped by handleImagePullSecrets
 	imagePullSecrets := []initdata.ImagePullSecretInfo{
 		{
 			Namespace:  "default",
 			SecretName: "regcred-first",
-			Key:        ".dockerconfigjson",
+			Key:        "dockerconfigjson",
 		},
 		{
 			Namespace:  "default",
 			SecretName: "regcred-second",
-			Key:        ".dockerconfigjson",
+			Key:        "dockerconfigjson",
 		},
 		{
 			Namespace:  "default",
 			SecretName: "regcred-third",
-			Key:        ".dockerconfigjson",
+			Key:        "dockerconfigjson",
 		},
 	}
 
@@ -667,7 +670,8 @@ func TestInitData_Generate_WithMultipleImagePullSecrets(t *testing.T) {
 	}
 
 	// Should only use the first imagePullSecret
-	expectedURI := "kbs:///default/regcred-first/.dockerconfigjson"
+	// Note: The key should NOT have the leading "." as it's stripped during processing
+	expectedURI := "kbs:///default/regcred-first/dockerconfigjson"
 	if authRegCred != expectedURI {
 		t.Errorf("authenticated_registry_credentials_uri = %q, want %q", authRegCred, expectedURI)
 	}
@@ -675,5 +679,80 @@ func TestInitData_Generate_WithMultipleImagePullSecrets(t *testing.T) {
 	// Verify it doesn't contain the second or third secret
 	if strings.Contains(authRegCred, "regcred-second") || strings.Contains(authRegCred, "regcred-third") {
 		t.Error("authenticated_registry_credentials_uri should only use the first imagePullSecret")
+	}
+}
+
+func TestInitData_Generate_ImagePullSecrets_StripLeadingDot(t *testing.T) {
+	cfg, err := config.Load("testdata/configs/config-minimal.toml")
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Test that keys with leading dots are properly handled
+	// In the actual flow, handleImagePullSecrets strips the leading "." before creating ImagePullSecretInfo
+	// This test verifies that if a key already has the dot stripped, it works correctly
+	imagePullSecrets := []initdata.ImagePullSecretInfo{
+		{
+			Namespace:  "default",
+			SecretName: "regcred",
+			Key:        "dockerconfigjson", // No leading dot
+		},
+	}
+
+	initdataValue, err := initdata.Generate(cfg, imagePullSecrets)
+	if err != nil {
+		t.Fatalf("Generate() failed: %v", err)
+	}
+
+	// Decode and decompress
+	decoded, err := base64.StdEncoding.DecodeString(initdataValue)
+	if err != nil {
+		t.Fatalf("Failed to decode base64: %v", err)
+	}
+
+	gzipReader, err := gzip.NewReader(bytes.NewReader(decoded))
+	if err != nil {
+		t.Fatalf("Failed to create gzip reader: %v", err)
+	}
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
+
+	decompressed, err := io.ReadAll(gzipReader)
+	if err != nil {
+		t.Fatalf("Failed to decompress: %v", err)
+	}
+
+	// Parse TOML
+	var data map[string]interface{}
+	err = toml.Unmarshal(decompressed, &data)
+	if err != nil {
+		t.Fatalf("Failed to parse TOML: %v", err)
+	}
+
+	// Get cdh.toml and parse it
+	dataSection := data["data"].(map[string]interface{})
+	cdhTomlStr := dataSection["cdh.toml"].(string)
+
+	var cdhData map[string]interface{}
+	err = toml.Unmarshal([]byte(cdhTomlStr), &cdhData)
+	if err != nil {
+		t.Fatalf("Failed to parse cdh.toml: %v", err)
+	}
+
+	imageConfig := cdhData["image"].(map[string]interface{})
+	authRegCred := imageConfig["authenticated_registry_credentials_uri"].(string)
+
+	// Verify the URI does NOT have a leading dot in the key
+	expectedURI := "kbs:///default/regcred/dockerconfigjson"
+	if authRegCred != expectedURI {
+		t.Errorf("authenticated_registry_credentials_uri = %q, want %q", authRegCred, expectedURI)
+	}
+
+	// Explicitly verify no leading dot
+	if strings.Contains(authRegCred, "/.") {
+		t.Error("authenticated_registry_credentials_uri should not contain leading dot in key name")
 	}
 }

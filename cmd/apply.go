@@ -496,10 +496,14 @@ func handleImagePullSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipAp
 
 		// For each key in the imagePullSecret, create an entry
 		for _, key := range secretKeys.Keys {
+			// Strip leading "." from key name for KBS storage
+			// e.g., ".dockerconfigjson" becomes "dockerconfigjson"
+			kbsKey := strings.TrimPrefix(key, ".")
+
 			imagePullSecretsInfo = append(imagePullSecretsInfo, initdata.ImagePullSecretInfo{
 				Namespace:  secretKeys.Namespace,
 				SecretName: ref.Name,
-				Key:        key,
+				Key:        kbsKey,
 			})
 		}
 	}
