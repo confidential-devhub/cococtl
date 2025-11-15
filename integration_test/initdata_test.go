@@ -20,7 +20,7 @@ func TestInitData_Generate_MinimalConfig(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestInitData_Generate_WithCACert(t *testing.T) {
 		cfg.TrusteeCACert = "integration_test/testdata/certs/test-ca.crt"
 	}
 
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestInitData_Generate_WithCustomPolicy(t *testing.T) {
 		cfg.KataAgentPolicy = "integration_test/testdata/policies/custom-policy.rego"
 	}
 
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestInitData_Generate_DefaultPolicy(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestInitData_Encoding_GzipAndBase64(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestInitData_AAToml_Structure(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestInitData_CDHToml_Structure(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -420,5 +420,260 @@ func TestInitData_CDHToml_Structure(t *testing.T) {
 	}
 	if kbcConfig["url"] != cfg.TrusteeServer {
 		t.Errorf("kbc url = %v, want %v", kbcConfig["url"], cfg.TrusteeServer)
+	}
+}
+
+func TestInitData_Generate_WithImagePullSecrets(t *testing.T) {
+	cfg, err := config.Load("testdata/configs/config-minimal.toml")
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Create imagePullSecrets info
+	imagePullSecrets := []initdata.ImagePullSecretInfo{
+		{
+			Namespace:  "default",
+			SecretName: "regcred",
+			Key:        ".dockerconfigjson",
+		},
+	}
+
+	initdataValue, err := initdata.Generate(cfg, imagePullSecrets)
+	if err != nil {
+		t.Fatalf("Generate() failed: %v", err)
+	}
+
+	// Decode and decompress
+	decoded, err := base64.StdEncoding.DecodeString(initdataValue)
+	if err != nil {
+		t.Fatalf("Failed to decode base64: %v", err)
+	}
+
+	gzipReader, err := gzip.NewReader(bytes.NewReader(decoded))
+	if err != nil {
+		t.Fatalf("Failed to create gzip reader: %v", err)
+	}
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
+
+	decompressed, err := io.ReadAll(gzipReader)
+	if err != nil {
+		t.Fatalf("Failed to decompress: %v", err)
+	}
+
+	// Parse TOML
+	var data map[string]interface{}
+	err = toml.Unmarshal(decompressed, &data)
+	if err != nil {
+		t.Fatalf("Failed to parse TOML: %v", err)
+	}
+
+	// Get data section
+	dataSection, ok := data["data"].(map[string]interface{})
+	if !ok {
+		t.Fatal("data section is missing or invalid")
+	}
+
+	// Get cdh.toml
+	cdhTomlStr, ok := dataSection["cdh.toml"].(string)
+	if !ok || cdhTomlStr == "" {
+		t.Fatal("cdh.toml is missing or empty in data section")
+	}
+
+	// Parse cdh.toml
+	var cdhData map[string]interface{}
+	err = toml.Unmarshal([]byte(cdhTomlStr), &cdhData)
+	if err != nil {
+		t.Fatalf("Failed to parse cdh.toml: %v", err)
+	}
+
+	// Verify image section exists
+	imageConfig, ok := cdhData["image"].(map[string]interface{})
+	if !ok {
+		t.Fatal("image config not found in cdh.toml")
+	}
+
+	// Verify authenticated_registry_credentials_uri is set
+	authRegCred, ok := imageConfig["authenticated_registry_credentials_uri"].(string)
+	if !ok {
+		t.Fatal("authenticated_registry_credentials_uri not found in image config")
+	}
+
+	expectedURI := "kbs:///default/regcred/.dockerconfigjson"
+	if authRegCred != expectedURI {
+		t.Errorf("authenticated_registry_credentials_uri = %q, want %q", authRegCred, expectedURI)
+	}
+}
+
+func TestInitData_Generate_WithoutImagePullSecrets(t *testing.T) {
+	cfg, err := config.Load("testdata/configs/config-minimal.toml")
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Generate without imagePullSecrets
+	initdataValue, err := initdata.Generate(cfg, nil)
+	if err != nil {
+		t.Fatalf("Generate() failed: %v", err)
+	}
+
+	// Decode and decompress
+	decoded, err := base64.StdEncoding.DecodeString(initdataValue)
+	if err != nil {
+		t.Fatalf("Failed to decode base64: %v", err)
+	}
+
+	gzipReader, err := gzip.NewReader(bytes.NewReader(decoded))
+	if err != nil {
+		t.Fatalf("Failed to create gzip reader: %v", err)
+	}
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
+
+	decompressed, err := io.ReadAll(gzipReader)
+	if err != nil {
+		t.Fatalf("Failed to decompress: %v", err)
+	}
+
+	// Parse TOML
+	var data map[string]interface{}
+	err = toml.Unmarshal(decompressed, &data)
+	if err != nil {
+		t.Fatalf("Failed to parse TOML: %v", err)
+	}
+
+	// Get data section
+	dataSection, ok := data["data"].(map[string]interface{})
+	if !ok {
+		t.Fatal("data section is missing or invalid")
+	}
+
+	// Get cdh.toml
+	cdhTomlStr, ok := dataSection["cdh.toml"].(string)
+	if !ok || cdhTomlStr == "" {
+		t.Fatal("cdh.toml is missing or empty in data section")
+	}
+
+	// Parse cdh.toml
+	var cdhData map[string]interface{}
+	err = toml.Unmarshal([]byte(cdhTomlStr), &cdhData)
+	if err != nil {
+		t.Fatalf("Failed to parse cdh.toml: %v", err)
+	}
+
+	// Verify image section does not exist (no image config in minimal config)
+	// OR if it exists, authenticated_registry_credentials_uri should not be set
+	if imageConfig, ok := cdhData["image"].(map[string]interface{}); ok {
+		if _, hasAuthCred := imageConfig["authenticated_registry_credentials_uri"]; hasAuthCred {
+			t.Error("authenticated_registry_credentials_uri should not be set when no imagePullSecrets provided")
+		}
+	}
+}
+
+func TestInitData_Generate_WithMultipleImagePullSecrets(t *testing.T) {
+	cfg, err := config.Load("testdata/configs/config-minimal.toml")
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Create multiple imagePullSecrets info
+	// Only the first one should be used in cdh.toml
+	imagePullSecrets := []initdata.ImagePullSecretInfo{
+		{
+			Namespace:  "default",
+			SecretName: "regcred-first",
+			Key:        ".dockerconfigjson",
+		},
+		{
+			Namespace:  "default",
+			SecretName: "regcred-second",
+			Key:        ".dockerconfigjson",
+		},
+		{
+			Namespace:  "default",
+			SecretName: "regcred-third",
+			Key:        ".dockerconfigjson",
+		},
+	}
+
+	initdataValue, err := initdata.Generate(cfg, imagePullSecrets)
+	if err != nil {
+		t.Fatalf("Generate() failed: %v", err)
+	}
+
+	// Decode and decompress
+	decoded, err := base64.StdEncoding.DecodeString(initdataValue)
+	if err != nil {
+		t.Fatalf("Failed to decode base64: %v", err)
+	}
+
+	gzipReader, err := gzip.NewReader(bytes.NewReader(decoded))
+	if err != nil {
+		t.Fatalf("Failed to create gzip reader: %v", err)
+	}
+	defer func() {
+		if err := gzipReader.Close(); err != nil {
+			t.Errorf("Failed to close gzip reader: %v", err)
+		}
+	}()
+
+	decompressed, err := io.ReadAll(gzipReader)
+	if err != nil {
+		t.Fatalf("Failed to decompress: %v", err)
+	}
+
+	// Parse TOML
+	var data map[string]interface{}
+	err = toml.Unmarshal(decompressed, &data)
+	if err != nil {
+		t.Fatalf("Failed to parse TOML: %v", err)
+	}
+
+	// Get data section
+	dataSection, ok := data["data"].(map[string]interface{})
+	if !ok {
+		t.Fatal("data section is missing or invalid")
+	}
+
+	// Get cdh.toml
+	cdhTomlStr, ok := dataSection["cdh.toml"].(string)
+	if !ok || cdhTomlStr == "" {
+		t.Fatal("cdh.toml is missing or empty in data section")
+	}
+
+	// Parse cdh.toml
+	var cdhData map[string]interface{}
+	err = toml.Unmarshal([]byte(cdhTomlStr), &cdhData)
+	if err != nil {
+		t.Fatalf("Failed to parse cdh.toml: %v", err)
+	}
+
+	// Verify image section exists
+	imageConfig, ok := cdhData["image"].(map[string]interface{})
+	if !ok {
+		t.Fatal("image config not found in cdh.toml")
+	}
+
+	// Verify authenticated_registry_credentials_uri is set to the FIRST secret only
+	authRegCred, ok := imageConfig["authenticated_registry_credentials_uri"].(string)
+	if !ok {
+		t.Fatal("authenticated_registry_credentials_uri not found in image config")
+	}
+
+	// Should only use the first imagePullSecret
+	expectedURI := "kbs:///default/regcred-first/.dockerconfigjson"
+	if authRegCred != expectedURI {
+		t.Errorf("authenticated_registry_credentials_uri = %q, want %q", authRegCred, expectedURI)
+	}
+
+	// Verify it doesn't contain the second or third secret
+	if strings.Contains(authRegCred, "regcred-second") || strings.Contains(authRegCred, "regcred-third") {
+		t.Error("authenticated_registry_credentials_uri should only use the first imagePullSecret")
 	}
 }

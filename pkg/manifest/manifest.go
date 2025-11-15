@@ -607,6 +607,44 @@ func (m *Manifest) RemoveSecretVolume(volumeName string) error {
 	return nil
 }
 
+// GetImagePullSecrets returns all imagePullSecrets in the manifest
+func (m *Manifest) GetImagePullSecrets() []string {
+	secrets := make([]string, 0)
+
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		return secrets
+	}
+
+	imagePullSecrets, ok := podSpec["imagePullSecrets"].([]interface{})
+	if !ok {
+		return secrets
+	}
+
+	for _, ips := range imagePullSecrets {
+		if ipsMap, ok := ips.(map[string]interface{}); ok {
+			if name, ok := ipsMap["name"].(string); ok && name != "" {
+				secrets = append(secrets, name)
+			}
+		}
+	}
+
+	return secrets
+}
+
+// RemoveImagePullSecrets removes all imagePullSecrets from the manifest
+// These will be handled via initdata instead
+func (m *Manifest) RemoveImagePullSecrets() error {
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		return err
+	}
+
+	// Remove imagePullSecrets field
+	delete(podSpec, "imagePullSecrets")
+	return nil
+}
+
 // ConvertEnvFromSecret converts envFrom secretRef to individual env vars with sealed secrets
 func (m *Manifest) ConvertEnvFromSecret(containerName, secretName string, sealedSecretsMap map[string]string) error {
 	spec, err := m.GetSpec()

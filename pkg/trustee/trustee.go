@@ -602,6 +602,19 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 	return nil
 }
 
+// AddImagePullSecretToTrustee adds an imagePullSecret to the Trustee KBS repository
+// This is a temporary solution until proper CLI tooling is available
+//
+// The secret data is stored in the KBS repository with the following structure:
+// /opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}
+//
+// This function is isolated for easy removal when proper tooling is available
+func AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
+	// Reuse the existing AddK8sSecretToTrustee function
+	// ImagePullSecrets are just regular K8s secrets, so the logic is the same
+	return AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
+}
+
 // createDefaultAttestationStatus creates a default attestation-status secret in Trustee
 // This is used by the default init container command to check attestation status
 func createDefaultAttestationStatus(namespace string) error {

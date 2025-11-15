@@ -360,3 +360,200 @@ func TestSecrets_ConvertToSealed_Integration(t *testing.T) {
 		}
 	}
 }
+
+func TestManifest_GetImagePullSecrets(t *testing.T) {
+	m, err := manifest.Load("testdata/manifests/pod-with-imagepullsecrets.yaml")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	imagePullSecrets := m.GetImagePullSecrets()
+	if len(imagePullSecrets) != 1 {
+		t.Fatalf("Expected 1 imagePullSecret, got %d", len(imagePullSecrets))
+	}
+
+	if imagePullSecrets[0] != "regcred" {
+		t.Errorf("imagePullSecret name = %q, want %q", imagePullSecrets[0], "regcred")
+	}
+}
+
+func TestManifest_RemoveImagePullSecrets(t *testing.T) {
+	m, err := manifest.Load("testdata/manifests/pod-with-imagepullsecrets.yaml")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Verify imagePullSecrets exist before removal
+	imagePullSecretsBefore := m.GetImagePullSecrets()
+	if len(imagePullSecretsBefore) == 0 {
+		t.Fatal("No imagePullSecrets found in test manifest")
+	}
+
+	// Remove imagePullSecrets
+	err = m.RemoveImagePullSecrets()
+	if err != nil {
+		t.Fatalf("RemoveImagePullSecrets() failed: %v", err)
+	}
+
+	// Verify imagePullSecrets were removed
+	imagePullSecretsAfter := m.GetImagePullSecrets()
+	if len(imagePullSecretsAfter) != 0 {
+		t.Errorf("Expected 0 imagePullSecrets after removal, got %d", len(imagePullSecretsAfter))
+	}
+
+	// Verify in podSpec directly
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		t.Fatalf("GetPodSpec() failed: %v", err)
+	}
+
+	if _, exists := podSpec["imagePullSecrets"]; exists {
+		t.Error("imagePullSecrets field still exists in podSpec after removal")
+	}
+}
+
+func TestSecrets_DetectImagePullSecrets(t *testing.T) {
+	m, err := manifest.Load("testdata/manifests/pod-with-imagepullsecrets.yaml")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	refs, err := secrets.DetectSecrets(m.GetData())
+	if err != nil {
+		t.Fatalf("DetectSecrets() failed: %v", err)
+	}
+
+	// Should detect 1 secret (regcred)
+	if len(refs) != 1 {
+		t.Fatalf("Expected 1 secret, got %d", len(refs))
+	}
+
+	// Verify it's detected as imagePullSecrets type
+	if refs[0].Name != "regcred" {
+		t.Errorf("Secret name = %q, want %q", refs[0].Name, "regcred")
+	}
+
+	// Verify usage type
+	foundImagePullSecret := false
+	for _, usage := range refs[0].Usages {
+		if usage.Type == "imagePullSecrets" {
+			foundImagePullSecret = true
+			break
+		}
+	}
+
+	if !foundImagePullSecret {
+		t.Error("imagePullSecrets usage type not found")
+	}
+
+	// Verify NeedsLookup is true (we need to inspect the secret for keys)
+	if !refs[0].NeedsLookup {
+		t.Error("NeedsLookup should be true for imagePullSecrets")
+	}
+}
+
+func TestSecrets_DetectMultipleImagePullSecrets(t *testing.T) {
+	m, err := manifest.Load("testdata/manifests/pod-with-multiple-imagepullsecrets.yaml")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	refs, err := secrets.DetectSecrets(m.GetData())
+	if err != nil {
+		t.Fatalf("DetectSecrets() failed: %v", err)
+	}
+
+	// Should detect 3 secrets (regcred-first, regcred-second, regcred-third)
+	if len(refs) != 3 {
+		t.Fatalf("Expected 3 secrets, got %d", len(refs))
+	}
+
+	// Verify all are detected as imagePullSecrets type
+	expectedNames := map[string]bool{
+		"regcred-first":  false,
+		"regcred-second": false,
+		"regcred-third":  false,
+	}
+
+	for _, ref := range refs {
+		if _, exists := expectedNames[ref.Name]; exists {
+			expectedNames[ref.Name] = true
+
+			// Verify it has imagePullSecrets usage
+			foundImagePullSecret := false
+			for _, usage := range ref.Usages {
+				if usage.Type == "imagePullSecrets" {
+					foundImagePullSecret = true
+					break
+				}
+			}
+
+			if !foundImagePullSecret {
+				t.Errorf("Secret %s does not have imagePullSecrets usage type", ref.Name)
+			}
+		}
+	}
+
+	// Verify all expected secrets were found
+	for name, found := range expectedNames {
+		if !found {
+			t.Errorf("Expected secret %s not found", name)
+		}
+	}
+}
+
+func TestSecrets_DetectSecretsAndImagePullSecrets_Separately(t *testing.T) {
+	m, err := manifest.Load("testdata/manifests/pod-with-secrets-and-imagepullsecrets.yaml")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	refs, err := secrets.DetectSecrets(m.GetData())
+	if err != nil {
+		t.Fatalf("DetectSecrets() failed: %v", err)
+	}
+
+	// Should detect 2 secrets total: db-creds (env) and regcred (imagePullSecrets)
+	if len(refs) != 2 {
+		t.Fatalf("Expected 2 secrets, got %d", len(refs))
+	}
+
+	// Verify that we can distinguish between regular secrets and imagePullSecrets
+	var regularSecrets []secrets.SecretReference
+	var imagePullSecrets []secrets.SecretReference
+
+	for _, ref := range refs {
+		isImagePullSecret := false
+		for _, usage := range ref.Usages {
+			if usage.Type == "imagePullSecrets" {
+				isImagePullSecret = true
+				break
+			}
+		}
+
+		if isImagePullSecret {
+			imagePullSecrets = append(imagePullSecrets, ref)
+		} else {
+			regularSecrets = append(regularSecrets, ref)
+		}
+	}
+
+	// Verify counts
+	if len(regularSecrets) != 1 {
+		t.Errorf("Expected 1 regular secret, got %d", len(regularSecrets))
+	}
+
+	if len(imagePullSecrets) != 1 {
+		t.Errorf("Expected 1 imagePullSecret, got %d", len(imagePullSecrets))
+	}
+
+	// Verify the regular secret is db-creds
+	if len(regularSecrets) > 0 && regularSecrets[0].Name != "db-creds" {
+		t.Errorf("Regular secret name = %q, want %q", regularSecrets[0].Name, "db-creds")
+	}
+
+	// Verify the imagePullSecret is regcred
+	if len(imagePullSecrets) > 0 && imagePullSecrets[0].Name != "regcred" {
+		t.Errorf("ImagePullSecret name = %q, want %q", imagePullSecrets[0].Name, "regcred")
+	}
+}

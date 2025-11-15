@@ -29,8 +29,16 @@ type InitData struct {
 	Data      map[string]string `toml:"data"`
 }
 
+// ImagePullSecretInfo holds information about imagePullSecrets for initdata generation
+type ImagePullSecretInfo struct {
+	Namespace  string
+	SecretName string
+	Key        string
+}
+
 // Generate creates initdata based on the CoCo configuration
-func Generate(cfg *config.CocoConfig) (string, error) {
+// imagePullSecrets is optional - pass nil if no imagePullSecrets need to be added
+func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (string, error) {
 	// Generate aa.toml (Attestation Agent configuration)
 	aaToml, err := generateAAToml(cfg)
 	if err != nil {
@@ -38,7 +46,7 @@ func Generate(cfg *config.CocoConfig) (string, error) {
 	}
 
 	// Generate cdh.toml (Confidential Data Hub configuration)
-	cdhToml, err := generateCDHToml(cfg)
+	cdhToml, err := generateCDHToml(cfg, imagePullSecrets)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate cdh.toml: %w", err)
 	}
@@ -110,7 +118,7 @@ func generateAAToml(cfg *config.CocoConfig) (string, error) {
 }
 
 // generateCDHToml creates the Confidential Data Hub configuration
-func generateCDHToml(cfg *config.CocoConfig) (string, error) {
+func generateCDHToml(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (string, error) {
 	cdhConfig := map[string]interface{}{
 		"kbc": map[string]interface{}{
 			"name": "cc_kbc",
@@ -128,8 +136,8 @@ func generateCDHToml(cfg *config.CocoConfig) (string, error) {
 		kbcConfig["kbs_cert"] = string(cert)
 	}
 
-	// Add image registry configuration if provided
-	if cfg.RegistryConfigURI != "" || cfg.RegistryCredURI != "" || cfg.ContainerPolicyURI != "" || cfg.TrusteeCACert != "" {
+	// Add image registry configuration if provided or if imagePullSecrets exist
+	if cfg.RegistryConfigURI != "" || cfg.RegistryCredURI != "" || cfg.ContainerPolicyURI != "" || cfg.TrusteeCACert != "" || len(imagePullSecrets) > 0 {
 		imageConfig := make(map[string]interface{})
 
 		// Add image security policy URI if provided
@@ -137,8 +145,17 @@ func generateCDHToml(cfg *config.CocoConfig) (string, error) {
 			imageConfig["image_security_policy_uri"] = cfg.ContainerPolicyURI
 		}
 
-		// Add authenticated registry credentials URI if provided
-		if cfg.RegistryCredURI != "" {
+		// Add authenticated registry credentials URI
+		// Priority: imagePullSecrets (dynamic) > config.RegistryCredURI (static)
+		if len(imagePullSecrets) > 0 {
+			// CDH spec only supports a single authenticated_registry_credentials_uri
+			// Use the first (and typically only) imagePullSecret
+			// Format: kbs:///namespace/secret-name/key
+			ips := imagePullSecrets[0]
+			uri := fmt.Sprintf("kbs:///%s/%s/%s", ips.Namespace, ips.SecretName, ips.Key)
+			imageConfig["authenticated_registry_credentials_uri"] = uri
+		} else if cfg.RegistryCredURI != "" {
+			// Fall back to config value if no imagePullSecrets
 			imageConfig["authenticated_registry_credentials_uri"] = cfg.RegistryCredURI
 		}
 

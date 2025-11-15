@@ -39,7 +39,7 @@ func TestWorkflow_BasicTransformation(t *testing.T) {
 	}
 
 	// 4. Generate and set initdata annotation
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Failed to generate initdata: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestWorkflow_WithInitContainer(t *testing.T) {
 	}
 
 	// Generate initdata
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Failed to generate initdata: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestWorkflow_WithCustomAnnotations(t *testing.T) {
 	}
 
 	// Generate and set initdata
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Failed to generate initdata: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestWorkflow_CompleteWithAllFeatures(t *testing.T) {
 	}
 
 	// 4. Generate and add initdata annotation
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Failed to generate initdata: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestWorkflow_MultipleManifests(t *testing.T) {
 			t.Fatalf("Failed to set runtime class: %v", err)
 		}
 
-		initdataValue, err := initdata.Generate(cfg)
+		initdataValue, err := initdata.Generate(cfg, nil)
 		if err != nil {
 			t.Fatalf("Failed to generate initdata: %v", err)
 		}
@@ -499,7 +499,7 @@ func TestWorkflow_PreserveExisting(t *testing.T) {
 		t.Fatalf("Failed to add initContainer: %v", err)
 	}
 
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, nil)
 	if err != nil {
 		t.Fatalf("Failed to generate initdata: %v", err)
 	}

@@ -156,16 +156,26 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 		}
 	}
 
-	// 3. Add initContainer if requested
+	// 3. Handle imagePullSecrets if present
+	var imagePullSecretsInfo []initdata.ImagePullSecretInfo
+	if convertSecrets {
+		var err error
+		imagePullSecretsInfo, err = handleImagePullSecrets(m, cfg, skipApply)
+		if err != nil {
+			return fmt.Errorf("failed to handle imagePullSecrets: %w", err)
+		}
+	}
+
+	// 4. Add initContainer if requested
 	if addInitContainer {
 		if err := handleInitContainer(m, cfg); err != nil {
 			return fmt.Errorf("failed to add initContainer: %w", err)
 		}
 	}
 
-	// 4. Generate and add initdata annotation
+	// 5. Generate and add initdata annotation
 	fmt.Println("  - Generating initdata annotation")
-	initdataValue, err := initdata.Generate(cfg)
+	initdataValue, err := initdata.Generate(cfg, imagePullSecretsInfo)
 	if err != nil {
 		return fmt.Errorf("failed to generate initdata: %w", err)
 	}
@@ -174,7 +184,7 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 		return fmt.Errorf("failed to set initdata annotation: %w", err)
 	}
 
-	// 5. Add custom annotations from config
+	// 6. Add custom annotations from config
 	if len(cfg.Annotations) > 0 {
 		fmt.Println("  - Adding custom annotations from config")
 		for key, value := range cfg.Annotations {
@@ -230,9 +240,25 @@ func handleInitContainer(m *manifest.Manifest, cfg *config.CocoConfig) error {
 
 func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) error {
 	// 1. Detect all secret references
-	secretRefs, err := secrets.DetectSecrets(m.GetData())
+	allSecretRefs, err := secrets.DetectSecrets(m.GetData())
 	if err != nil {
 		return err
+	}
+
+	// Filter out imagePullSecrets - they should NOT be converted to sealed secrets
+	// They remain as regular K8s secrets and are only added to KBS via handleImagePullSecrets
+	var secretRefs []secrets.SecretReference
+	for _, ref := range allSecretRefs {
+		isImagePullSecret := false
+		for _, usage := range ref.Usages {
+			if usage.Type == "imagePullSecrets" {
+				isImagePullSecret = true
+				break
+			}
+		}
+		if !isImagePullSecret {
+			secretRefs = append(secretRefs, ref)
+		}
 	}
 
 	if len(secretRefs) == 0 {
@@ -418,4 +444,114 @@ func addSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeNamespace 
 // This is kept separate to maintain the isolation of the temporary functionality
 func addK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
 	return trustee.AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
+}
+
+// handleImagePullSecrets processes imagePullSecrets from the manifest
+// It detects, uploads to KBS, and prepares them for initdata
+func handleImagePullSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) ([]initdata.ImagePullSecretInfo, error) {
+	// Detect imagePullSecrets in the manifest
+	secretRefs, err := secrets.DetectSecrets(m.GetData())
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter for only imagePullSecrets
+	var imagePullSecretRefs []secrets.SecretReference
+	for _, ref := range secretRefs {
+		for _, usage := range ref.Usages {
+			if usage.Type == "imagePullSecrets" {
+				imagePullSecretRefs = append(imagePullSecretRefs, ref)
+				break
+			}
+		}
+	}
+
+	if len(imagePullSecretRefs) == 0 {
+		return nil, nil // No imagePullSecrets to handle
+	}
+
+	fmt.Printf("  - Found %d imagePullSecret(s)\n", len(imagePullSecretRefs))
+
+	// CDH only supports a single authenticated_registry_credentials_uri
+	// If multiple imagePullSecrets are present, use only the first one
+	if len(imagePullSecretRefs) > 1 {
+		fmt.Printf("  ⚠ Warning: Multiple imagePullSecrets detected, but CDH supports only one\n")
+		fmt.Printf("    Using only the first imagePullSecret: %s\n", imagePullSecretRefs[0].Name)
+		imagePullSecretRefs = imagePullSecretRefs[:1]
+	}
+
+	// Inspect K8s secrets to get keys
+	inspectedKeys, err := secrets.InspectSecrets(imagePullSecretRefs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect imagePullSecrets via kubectl: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
+	}
+
+	// Build ImagePullSecretInfo for initdata
+	var imagePullSecretsInfo []initdata.ImagePullSecretInfo
+	for _, ref := range imagePullSecretRefs {
+		secretKeys, ok := inspectedKeys[ref.Name]
+		if !ok {
+			continue
+		}
+
+		// For each key in the imagePullSecret, create an entry
+		for _, key := range secretKeys.Keys {
+			imagePullSecretsInfo = append(imagePullSecretsInfo, initdata.ImagePullSecretInfo{
+				Namespace:  secretKeys.Namespace,
+				SecretName: ref.Name,
+				Key:        key,
+			})
+		}
+	}
+
+	// Upload imagePullSecrets to Trustee KBS (if not skipApply)
+	if !skipApply {
+		trusteeNamespace, err := getTrusteeNamespace(cfg.TrusteeServer)
+		if err != nil {
+			fmt.Printf("  ⚠ Warning: Could not determine Trustee namespace from URL: %v\n", err)
+			fmt.Println("    Skipping automatic imagePullSecret upload to Trustee")
+		} else {
+			fmt.Println("  - Adding imagePullSecrets to Trustee KBS repository")
+			if err := addImagePullSecretsToTrustee(imagePullSecretRefs, trusteeNamespace); err != nil {
+				fmt.Printf("  ⚠ Warning: Failed to add imagePullSecrets to Trustee: %v\n", err)
+				fmt.Println("    You will need to add imagePullSecrets manually")
+			} else {
+				fmt.Printf("  ✓ Successfully added %d imagePullSecret(s) to Trustee\n", len(imagePullSecretRefs))
+			}
+		}
+	}
+
+	// Note: We keep imagePullSecrets in the manifest as CRI-O still needs them for image pulls.
+	// The authenticated_registry_credentials_uri in initdata is used by guest components.
+
+	return imagePullSecretsInfo, nil
+}
+
+// addImagePullSecretsToTrustee adds all imagePullSecrets to the Trustee KBS repository
+// This is a temporary solution until proper CLI tooling is available
+func addImagePullSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeNamespace string) error {
+	for _, ref := range secretRefs {
+		// Determine the namespace for the secret
+		secretNamespace := ref.Namespace
+		if secretNamespace == "" {
+			var err error
+			secretNamespace, err = getCurrentNamespace()
+			if err != nil {
+				return fmt.Errorf("failed to get current namespace for imagePullSecret %s: %w", ref.Name, err)
+			}
+		}
+
+		// Add the imagePullSecret to Trustee
+		if err := addImagePullSecretToTrustee(trusteeNamespace, ref.Name, secretNamespace); err != nil {
+			return fmt.Errorf("failed to add imagePullSecret %s: %w", ref.Name, err)
+		}
+	}
+
+	return nil
+}
+
+// addImagePullSecretToTrustee is a wrapper that calls the trustee package function
+// This is kept separate to maintain the isolation of the temporary functionality
+func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
+	return trustee.AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
 }

@@ -6,7 +6,7 @@ import (
 
 // SecretUsage tracks how a secret is used in the manifest
 type SecretUsage struct {
-	Type          string // "env", "volume", "envFrom"
+	Type          string // "env", "volume", "envFrom", "imagePullSecrets"
 	ContainerName string // Name of the container using the secret
 	EnvVarName    string // For env type: name of the environment variable
 	Key           string // For env type: specific key from secret (if known)
@@ -65,6 +65,9 @@ func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, erro
 			}
 		}
 	}
+
+	// 4. Detect imagePullSecrets
+	detectImagePullSecrets(spec, namespace, secretsMap)
 
 	// Convert map to slice
 	secrets := make([]SecretReference, 0, len(secretsMap))
@@ -244,6 +247,37 @@ func addVolumeMountPaths(container map[string]interface{}, containerName string,
 				}
 			}
 		}
+	}
+}
+
+// detectImagePullSecrets detects secrets referenced in imagePullSecrets
+func detectImagePullSecrets(spec map[string]interface{}, namespace string, secretsMap map[string]*SecretReference) {
+	imagePullSecrets, ok := spec["imagePullSecrets"].([]interface{})
+	if !ok {
+		return
+	}
+
+	for _, ips := range imagePullSecrets {
+		ipsMap, ok := ips.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		secretName, _ := ipsMap["name"].(string)
+		if secretName == "" {
+			continue
+		}
+
+		// Get or create secret reference
+		ref := getOrCreateSecretRef(secretsMap, secretName, namespace)
+
+		// imagePullSecrets need all keys from the secret (typically .dockerconfigjson)
+		ref.NeedsLookup = true
+
+		// Add usage
+		ref.Usages = append(ref.Usages, SecretUsage{
+			Type: "imagePullSecrets",
+		})
 	}
 }
 
