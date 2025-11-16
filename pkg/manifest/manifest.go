@@ -146,7 +146,17 @@ func (m *Manifest) GetRuntimeClass() string {
 }
 
 // SetAnnotation sets an annotation on the resource
+// For workload resources (Deployment, StatefulSet, etc.), sets annotation on pod template
+// For Pod resources, sets annotation on the pod metadata
 func (m *Manifest) SetAnnotation(key, value string) error {
+	kind := m.GetKind()
+
+	// For workload resources, set annotation on pod template
+	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+		return m.setPodTemplateAnnotation(key, value)
+	}
+
+	// For Pod and other resources, set on resource metadata
 	metadata, ok := m.data["metadata"].(map[string]interface{})
 	if !ok {
 		metadata = make(map[string]interface{})
@@ -163,14 +173,81 @@ func (m *Manifest) SetAnnotation(key, value string) error {
 	return nil
 }
 
+// setPodTemplateAnnotation sets an annotation on the pod template metadata
+func (m *Manifest) setPodTemplateAnnotation(key, value string) error {
+	spec, err := m.GetSpec()
+	if err != nil {
+		return err
+	}
+
+	template, ok := spec["template"].(map[string]interface{})
+	if !ok {
+		template = make(map[string]interface{})
+		spec["template"] = template
+	}
+
+	metadata, ok := template["metadata"].(map[string]interface{})
+	if !ok {
+		metadata = make(map[string]interface{})
+		template["metadata"] = metadata
+	}
+
+	annotations, ok := metadata["annotations"].(map[string]interface{})
+	if !ok {
+		annotations = make(map[string]interface{})
+		metadata["annotations"] = annotations
+	}
+
+	annotations[key] = value
+	return nil
+}
+
 // GetAnnotation retrieves an annotation value
+// For workload resources, gets annotation from pod template
+// For Pod resources, gets annotation from pod metadata
 func (m *Manifest) GetAnnotation(key string) string {
+	kind := m.GetKind()
+
+	// For workload resources, get annotation from pod template
+	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+		return m.getPodTemplateAnnotation(key)
+	}
+
+	// For Pod and other resources, get from resource metadata
 	if metadata, ok := m.data["metadata"].(map[string]interface{}); ok {
 		if annotations, ok := metadata["annotations"].(map[string]interface{}); ok {
 			if value, ok := annotations[key].(string); ok {
 				return value
 			}
 		}
+	}
+	return ""
+}
+
+// getPodTemplateAnnotation retrieves an annotation from the pod template metadata
+func (m *Manifest) getPodTemplateAnnotation(key string) string {
+	spec, err := m.GetSpec()
+	if err != nil {
+		return ""
+	}
+
+	template, ok := spec["template"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	metadata, ok := template["metadata"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	annotations, ok := metadata["annotations"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	if value, ok := annotations[key].(string); ok {
+		return value
 	}
 	return ""
 }

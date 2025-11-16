@@ -459,6 +459,47 @@ func TestManifest_Deployment_WithSecretsAndImagePullSecrets(t *testing.T) {
 	if m.GetRuntimeClass() != "kata-cc" {
 		t.Errorf("GetRuntimeClass() = %q, want %q", m.GetRuntimeClass(), "kata-cc")
 	}
+
+	// Verify SetAnnotation places annotation on pod template, not resource metadata
+	testAnnotationKey := "io.katacontainers.config.hypervisor.cc_init_data"
+	testAnnotationValue := "test-initdata-value"
+	err = m.SetAnnotation(testAnnotationKey, testAnnotationValue)
+	if err != nil {
+		t.Fatalf("SetAnnotation() failed: %v", err)
+	}
+
+	// Verify annotation is in spec.template.metadata.annotations
+	spec, _ := m.GetSpec()
+	template, ok := spec["template"].(map[string]interface{})
+	if !ok {
+		t.Fatal("template not found in spec")
+	}
+	templateMetadata, ok := template["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatal("metadata not found in template")
+	}
+	templateAnnotations, ok := templateMetadata["annotations"].(map[string]interface{})
+	if !ok {
+		t.Fatal("annotations not found in template metadata")
+	}
+	if templateAnnotations[testAnnotationKey] != testAnnotationValue {
+		t.Errorf("annotation in template = %q, want %q", templateAnnotations[testAnnotationKey], testAnnotationValue)
+	}
+
+	// Verify GetAnnotation retrieves from pod template
+	if m.GetAnnotation(testAnnotationKey) != testAnnotationValue {
+		t.Errorf("GetAnnotation() = %q, want %q", m.GetAnnotation(testAnnotationKey), testAnnotationValue)
+	}
+
+	// Verify annotation is NOT in resource-level metadata
+	resourceMetadata, ok := m.GetData()["metadata"].(map[string]interface{})
+	if ok {
+		if resourceAnnotations, ok := resourceMetadata["annotations"].(map[string]interface{}); ok {
+			if _, exists := resourceAnnotations[testAnnotationKey]; exists {
+				t.Error("annotation incorrectly placed in resource metadata instead of pod template")
+			}
+		}
+	}
 }
 
 func TestManifest_ReplicaSet_WithSecretsAndImagePullSecrets(t *testing.T) {
@@ -510,6 +551,32 @@ func TestManifest_ReplicaSet_WithSecretsAndImagePullSecrets(t *testing.T) {
 
 	if m.GetRuntimeClass() != "kata-qemu" {
 		t.Errorf("GetRuntimeClass() = %q, want %q", m.GetRuntimeClass(), "kata-qemu")
+	}
+
+	// Verify annotations go to pod template for ReplicaSet
+	testAnnotationKey := "io.katacontainers.config.hypervisor.cc_init_data"
+	testAnnotationValue := "test-replicaset-initdata"
+	err = m.SetAnnotation(testAnnotationKey, testAnnotationValue)
+	if err != nil {
+		t.Fatalf("SetAnnotation() failed: %v", err)
+	}
+
+	// Verify annotation is in spec.template.metadata.annotations
+	spec, _ := m.GetSpec()
+	template, ok := spec["template"].(map[string]interface{})
+	if !ok {
+		t.Fatal("template not found in spec")
+	}
+	templateMetadata, ok := template["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatal("metadata not found in template")
+	}
+	templateAnnotations, ok := templateMetadata["annotations"].(map[string]interface{})
+	if !ok {
+		t.Fatal("annotations not found in template metadata")
+	}
+	if templateAnnotations[testAnnotationKey] != testAnnotationValue {
+		t.Errorf("annotation in template = %q, want %q", templateAnnotations[testAnnotationKey], testAnnotationValue)
 	}
 }
 
@@ -563,6 +630,32 @@ func TestManifest_StatefulSet_WithSecretsAndImagePullSecrets(t *testing.T) {
 	if m.GetRuntimeClass() != "kata-clh" {
 		t.Errorf("GetRuntimeClass() = %q, want %q", m.GetRuntimeClass(), "kata-clh")
 	}
+
+	// Verify annotations go to pod template for StatefulSet
+	testAnnotationKey := "io.katacontainers.config.hypervisor.cc_init_data"
+	testAnnotationValue := "test-statefulset-initdata"
+	err = m.SetAnnotation(testAnnotationKey, testAnnotationValue)
+	if err != nil {
+		t.Fatalf("SetAnnotation() failed: %v", err)
+	}
+
+	// Verify annotation is in spec.template.metadata.annotations
+	spec, _ := m.GetSpec()
+	template, ok := spec["template"].(map[string]interface{})
+	if !ok {
+		t.Fatal("template not found in spec")
+	}
+	templateMetadata, ok := template["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatal("metadata not found in template")
+	}
+	templateAnnotations, ok := templateMetadata["annotations"].(map[string]interface{})
+	if !ok {
+		t.Fatal("annotations not found in template metadata")
+	}
+	if templateAnnotations[testAnnotationKey] != testAnnotationValue {
+		t.Errorf("annotation in template = %q, want %q", templateAnnotations[testAnnotationKey], testAnnotationValue)
+	}
 }
 
 func TestManifest_Job_WithSecretsAndImagePullSecrets(t *testing.T) {
@@ -614,5 +707,31 @@ func TestManifest_Job_WithSecretsAndImagePullSecrets(t *testing.T) {
 
 	if m.GetRuntimeClass() != "kata-remote" {
 		t.Errorf("GetRuntimeClass() = %q, want %q", m.GetRuntimeClass(), "kata-remote")
+	}
+
+	// Verify annotations go to pod template for Job
+	testAnnotationKey := "io.katacontainers.config.hypervisor.cc_init_data"
+	testAnnotationValue := "test-job-initdata"
+	err = m.SetAnnotation(testAnnotationKey, testAnnotationValue)
+	if err != nil {
+		t.Fatalf("SetAnnotation() failed: %v", err)
+	}
+
+	// Verify annotation is in spec.template.metadata.annotations
+	spec, _ := m.GetSpec()
+	template, ok := spec["template"].(map[string]interface{})
+	if !ok {
+		t.Fatal("template not found in spec")
+	}
+	templateMetadata, ok := template["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatal("metadata not found in template")
+	}
+	templateAnnotations, ok := templateMetadata["annotations"].(map[string]interface{})
+	if !ok {
+		t.Fatal("annotations not found in template metadata")
+	}
+	if templateAnnotations[testAnnotationKey] != testAnnotationValue {
+		t.Errorf("annotation in template = %q, want %q", templateAnnotations[testAnnotationKey], testAnnotationValue)
 	}
 }
