@@ -564,3 +564,55 @@ func TestManifest_StatefulSet_WithSecretsAndImagePullSecrets(t *testing.T) {
 		t.Errorf("GetRuntimeClass() = %q, want %q", m.GetRuntimeClass(), "kata-clh")
 	}
 }
+
+func TestManifest_Job_WithSecretsAndImagePullSecrets(t *testing.T) {
+	m, err := manifest.Load("testdata/manifests/job-with-secrets-and-imagepullsecrets.yaml")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Verify it's a Job
+	if m.GetKind() != "Job" {
+		t.Errorf("GetKind() = %q, want %q", m.GetKind(), "Job")
+	}
+
+	// Verify GetPodSpec works for Job
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		t.Fatalf("GetPodSpec() failed: %v", err)
+	}
+
+	// Verify containers exist
+	containers, ok := podSpec["containers"].([]interface{})
+	if !ok {
+		t.Fatal("containers not found in pod spec")
+	}
+	if len(containers) != 1 {
+		t.Errorf("Expected 1 container, got %d", len(containers))
+	}
+
+	// Verify imagePullSecrets
+	imagePullSecrets := m.GetImagePullSecrets()
+	if len(imagePullSecrets) != 1 {
+		t.Fatalf("Expected 1 imagePullSecret, got %d", len(imagePullSecrets))
+	}
+	if imagePullSecrets[0] != "processor-registry-creds" {
+		t.Errorf("imagePullSecret name = %q, want %q", imagePullSecrets[0], "processor-registry-creds")
+	}
+
+	// Verify secret references (aws-creds and api-tokens)
+	secrets := m.GetSecretRefs()
+	if len(secrets) != 2 {
+		t.Fatalf("Expected 2 secret references, got %d", len(secrets))
+	}
+
+	// Verify SetRuntimeClass works for Job
+	err = m.SetRuntimeClass("kata-remote")
+	if err != nil {
+		t.Fatalf("SetRuntimeClass() failed: %v", err)
+	}
+
+	if m.GetRuntimeClass() != "kata-remote" {
+		t.Errorf("GetRuntimeClass() = %q, want %q", m.GetRuntimeClass(), "kata-remote")
+	}
+}
