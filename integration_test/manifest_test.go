@@ -460,3 +460,55 @@ func TestManifest_Deployment_WithSecretsAndImagePullSecrets(t *testing.T) {
 		t.Errorf("GetRuntimeClass() = %q, want %q", m.GetRuntimeClass(), "kata-cc")
 	}
 }
+
+func TestManifest_ReplicaSet_WithSecretsAndImagePullSecrets(t *testing.T) {
+	m, err := manifest.Load("testdata/manifests/replicaset-with-secrets-and-imagepullsecrets.yaml")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Verify it's a ReplicaSet
+	if m.GetKind() != "ReplicaSet" {
+		t.Errorf("GetKind() = %q, want %q", m.GetKind(), "ReplicaSet")
+	}
+
+	// Verify GetPodSpec works for ReplicaSet
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		t.Fatalf("GetPodSpec() failed: %v", err)
+	}
+
+	// Verify containers exist
+	containers, ok := podSpec["containers"].([]interface{})
+	if !ok {
+		t.Fatal("containers not found in pod spec")
+	}
+	if len(containers) != 1 {
+		t.Errorf("Expected 1 container, got %d", len(containers))
+	}
+
+	// Verify imagePullSecrets
+	imagePullSecrets := m.GetImagePullSecrets()
+	if len(imagePullSecrets) != 1 {
+		t.Fatalf("Expected 1 imagePullSecret, got %d", len(imagePullSecrets))
+	}
+	if imagePullSecrets[0] != "registry-credentials" {
+		t.Errorf("imagePullSecret name = %q, want %q", imagePullSecrets[0], "registry-credentials")
+	}
+
+	// Verify secret references
+	secrets := m.GetSecretRefs()
+	if len(secrets) != 2 {
+		t.Fatalf("Expected 2 secret references, got %d", len(secrets))
+	}
+
+	// Verify SetRuntimeClass works for ReplicaSet
+	err = m.SetRuntimeClass("kata-qemu")
+	if err != nil {
+		t.Fatalf("SetRuntimeClass() failed: %v", err)
+	}
+
+	if m.GetRuntimeClass() != "kata-qemu" {
+		t.Errorf("GetRuntimeClass() = %q, want %q", m.GetRuntimeClass(), "kata-qemu")
+	}
+}
