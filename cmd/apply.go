@@ -448,22 +448,12 @@ func addK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 
 // handleImagePullSecrets processes imagePullSecrets from the manifest
 // It detects, uploads to KBS, and prepares them for initdata
+// Falls back to default service account if no imagePullSecrets in manifest
 func handleImagePullSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) ([]initdata.ImagePullSecretInfo, error) {
-	// Detect imagePullSecrets in the manifest
-	secretRefs, err := secrets.DetectSecrets(m.GetData())
+	// Detect imagePullSecrets in manifest, with fallback to default service account
+	imagePullSecretRefs, err := secrets.DetectImagePullSecretsWithServiceAccount(m.GetData())
 	if err != nil {
 		return nil, err
-	}
-
-	// Filter for only imagePullSecrets
-	var imagePullSecretRefs []secrets.SecretReference
-	for _, ref := range secretRefs {
-		for _, usage := range ref.Usages {
-			if usage.Type == "imagePullSecrets" {
-				imagePullSecretRefs = append(imagePullSecretRefs, ref)
-				break
-			}
-		}
 	}
 
 	if len(imagePullSecretRefs) == 0 {

@@ -271,3 +271,48 @@ func CreateSealedSecrets(sealedSecrets []*SealedSecretData) (map[string]string, 
 
 	return result, nil
 }
+
+// ServiceAccount represents the structure of a K8s service account from kubectl output
+type ServiceAccount struct {
+	Metadata struct {
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+	} `json:"metadata"`
+	ImagePullSecrets []struct {
+		Name string `json:"name"`
+	} `json:"imagePullSecrets"`
+}
+
+// GetServiceAccountImagePullSecrets queries a service account for imagePullSecrets
+// If namespace is empty, uses current context namespace
+// Returns the first imagePullSecret name or empty string if none found
+func GetServiceAccountImagePullSecrets(serviceAccountName, namespace string) (string, error) {
+	ctx := context.Background()
+
+	var cmd *exec.Cmd
+	if namespace != "" {
+		cmd = exec.CommandContext(ctx, "kubectl", "get", "sa", serviceAccountName, "-n", namespace, "-o", "json")
+	} else {
+		cmd = exec.CommandContext(ctx, "kubectl", "get", "sa", serviceAccountName, "-o", "json")
+	}
+
+	output, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", fmt.Errorf("kubectl get sa failed: %s", string(exitErr.Stderr))
+		}
+		return "", fmt.Errorf("kubectl get sa failed: %w", err)
+	}
+
+	var sa ServiceAccount
+	if err := json.Unmarshal(output, &sa); err != nil {
+		return "", fmt.Errorf("failed to parse kubectl output: %w", err)
+	}
+
+	if len(sa.ImagePullSecrets) == 0 {
+		return "", nil
+	}
+
+	return sa.ImagePullSecrets[0].Name, nil
+}

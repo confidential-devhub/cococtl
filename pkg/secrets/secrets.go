@@ -281,6 +281,43 @@ func detectImagePullSecrets(spec map[string]interface{}, namespace string, secre
 	}
 }
 
+// DetectImagePullSecretsWithServiceAccount detects imagePullSecrets from manifest
+// and falls back to default service account if none are found in the spec
+func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{}) ([]SecretReference, error) {
+	namespace := getManifestNamespace(manifestData)
+
+	spec, ok := manifestData["spec"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("spec field not found or invalid")
+	}
+
+	secretsMap := make(map[string]*SecretReference)
+
+	// First, check for imagePullSecrets in the manifest
+	detectImagePullSecrets(spec, namespace, secretsMap)
+
+	// If no imagePullSecrets found in manifest, check default service account
+	if len(secretsMap) == 0 {
+		secretName, err := GetServiceAccountImagePullSecrets("default", namespace)
+		if err == nil && secretName != "" {
+			// Found imagePullSecret in default service account
+			ref := getOrCreateSecretRef(secretsMap, secretName, namespace)
+			ref.NeedsLookup = true
+			ref.Usages = append(ref.Usages, SecretUsage{
+				Type: "imagePullSecrets",
+			})
+		}
+	}
+
+	// Convert map to slice
+	secrets := make([]SecretReference, 0, len(secretsMap))
+	for _, ref := range secretsMap {
+		secrets = append(secrets, *ref)
+	}
+
+	return secrets, nil
+}
+
 // getManifestNamespace extracts the namespace from manifest metadata
 // Returns empty string if not specified (let kubectl use current context namespace)
 func getManifestNamespace(manifestData map[string]interface{}) string {
