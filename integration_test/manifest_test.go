@@ -512,3 +512,55 @@ func TestManifest_ReplicaSet_WithSecretsAndImagePullSecrets(t *testing.T) {
 		t.Errorf("GetRuntimeClass() = %q, want %q", m.GetRuntimeClass(), "kata-qemu")
 	}
 }
+
+func TestManifest_StatefulSet_WithSecretsAndImagePullSecrets(t *testing.T) {
+	m, err := manifest.Load("testdata/manifests/statefulset-with-secrets-and-imagepullsecrets.yaml")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Verify it's a StatefulSet
+	if m.GetKind() != "StatefulSet" {
+		t.Errorf("GetKind() = %q, want %q", m.GetKind(), "StatefulSet")
+	}
+
+	// Verify GetPodSpec works for StatefulSet
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		t.Fatalf("GetPodSpec() failed: %v", err)
+	}
+
+	// Verify containers exist
+	containers, ok := podSpec["containers"].([]interface{})
+	if !ok {
+		t.Fatal("containers not found in pod spec")
+	}
+	if len(containers) != 1 {
+		t.Errorf("Expected 1 container, got %d", len(containers))
+	}
+
+	// Verify imagePullSecrets
+	imagePullSecrets := m.GetImagePullSecrets()
+	if len(imagePullSecrets) != 1 {
+		t.Fatalf("Expected 1 imagePullSecret, got %d", len(imagePullSecrets))
+	}
+	if imagePullSecrets[0] != "db-registry-creds" {
+		t.Errorf("imagePullSecret name = %q, want %q", imagePullSecrets[0], "db-registry-creds")
+	}
+
+	// Verify secret references (postgres-creds with 2 keys)
+	secrets := m.GetSecretRefs()
+	if len(secrets) != 1 {
+		t.Fatalf("Expected 1 secret reference, got %d", len(secrets))
+	}
+
+	// Verify SetRuntimeClass works for StatefulSet
+	err = m.SetRuntimeClass("kata-clh")
+	if err != nil {
+		t.Fatalf("SetRuntimeClass() failed: %v", err)
+	}
+
+	if m.GetRuntimeClass() != "kata-clh" {
+		t.Errorf("GetRuntimeClass() = %q, want %q", m.GetRuntimeClass(), "kata-clh")
+	}
+}
