@@ -134,10 +134,13 @@ func (m *Manifest) SetRuntimeClass(runtimeClass string) error {
 
 // GetRuntimeClass returns the current runtimeClassName
 func (m *Manifest) GetRuntimeClass() string {
-	if spec, ok := m.data["spec"].(map[string]interface{}); ok {
-		if rc, ok := spec["runtimeClassName"].(string); ok {
-			return rc
-		}
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		return ""
+	}
+
+	if rc, ok := podSpec["runtimeClassName"].(string); ok {
+		return rc
 	}
 	return ""
 }
@@ -215,13 +218,14 @@ func (m *Manifest) GetPodSpec() (map[string]interface{}, error) {
 func (m *Manifest) GetSecretRefs() []string {
 	secrets := make(map[string]bool)
 
-	spec, err := m.GetSpec()
+	// Use GetPodSpec to handle both Pod and Deployment/StatefulSet/etc
+	podSpec, err := m.GetPodSpec()
 	if err != nil {
 		return []string{}
 	}
 
 	// Check containers
-	if containers, ok := spec["containers"].([]interface{}); ok {
+	if containers, ok := podSpec["containers"].([]interface{}); ok {
 		for _, container := range containers {
 			if c, ok := container.(map[string]interface{}); ok {
 				// Check env variables
@@ -245,7 +249,7 @@ func (m *Manifest) GetSecretRefs() []string {
 	}
 
 	// Check volumes
-	if volumes, ok := spec["volumes"].([]interface{}); ok {
+	if volumes, ok := podSpec["volumes"].([]interface{}); ok {
 		for _, vol := range volumes {
 			if v, ok := vol.(map[string]interface{}); ok {
 				if secret, ok := v["secret"].(map[string]interface{}); ok {
@@ -268,13 +272,14 @@ func (m *Manifest) GetSecretRefs() []string {
 
 // ReplaceSecretName replaces all occurrences of oldName with newName in secret references
 func (m *Manifest) ReplaceSecretName(oldName, newName string) error {
-	spec, err := m.GetSpec()
+	// Use GetPodSpec to handle both Pod and Deployment/StatefulSet/etc
+	podSpec, err := m.GetPodSpec()
 	if err != nil {
 		return err
 	}
 
 	// Replace in containers
-	if containers, ok := spec["containers"].([]interface{}); ok {
+	if containers, ok := podSpec["containers"].([]interface{}); ok {
 		for _, container := range containers {
 			if c, ok := container.(map[string]interface{}); ok {
 				// Replace in env variables
@@ -309,7 +314,7 @@ func (m *Manifest) ReplaceSecretName(oldName, newName string) error {
 	}
 
 	// Replace in volumes
-	if volumes, ok := spec["volumes"].([]interface{}); ok {
+	if volumes, ok := podSpec["volumes"].([]interface{}); ok {
 		for _, vol := range volumes {
 			if v, ok := vol.(map[string]interface{}); ok {
 				if secret, ok := v["secret"].(map[string]interface{}); ok {
@@ -326,7 +331,7 @@ func (m *Manifest) ReplaceSecretName(oldName, newName string) error {
 
 // AddInitContainer adds an initContainer to the beginning of the initContainers list
 func (m *Manifest) AddInitContainer(name, image string, command []string) error {
-	spec, err := m.GetSpec()
+	podSpec, err := m.GetPodSpec()
 	if err != nil {
 		return err
 	}
@@ -343,7 +348,7 @@ func (m *Manifest) AddInitContainer(name, image string, command []string) error 
 
 	// Get existing initContainers or create new list
 	var initContainers []interface{}
-	if existing, ok := spec["initContainers"].([]interface{}); ok {
+	if existing, ok := podSpec["initContainers"].([]interface{}); ok {
 		// Prepend new initContainer to existing list
 		initContainers = append([]interface{}{initContainer}, existing...)
 	} else {
@@ -351,18 +356,18 @@ func (m *Manifest) AddInitContainer(name, image string, command []string) error 
 		initContainers = []interface{}{initContainer}
 	}
 
-	spec["initContainers"] = initContainers
+	podSpec["initContainers"] = initContainers
 	return nil
 }
 
 // GetInitContainers returns the list of initContainers
 func (m *Manifest) GetInitContainers() []interface{} {
-	spec, err := m.GetSpec()
+	podSpec, err := m.GetPodSpec()
 	if err != nil {
 		return []interface{}{}
 	}
 
-	if initContainers, ok := spec["initContainers"].([]interface{}); ok {
+	if initContainers, ok := podSpec["initContainers"].([]interface{}); ok {
 		return initContainers
 	}
 
@@ -371,7 +376,7 @@ func (m *Manifest) GetInitContainers() []interface{} {
 
 // AddVolume adds a volume to the spec
 func (m *Manifest) AddVolume(name, volumeType string, config map[string]interface{}) error {
-	spec, err := m.GetSpec()
+	podSpec, err := m.GetPodSpec()
 	if err != nil {
 		return err
 	}
@@ -386,7 +391,7 @@ func (m *Manifest) AddVolume(name, volumeType string, config map[string]interfac
 
 	// Get existing volumes or create new list
 	var volumes []interface{}
-	if existing, ok := spec["volumes"].([]interface{}); ok {
+	if existing, ok := podSpec["volumes"].([]interface{}); ok {
 		volumes = existing
 	} else {
 		volumes = []interface{}{}
@@ -394,19 +399,19 @@ func (m *Manifest) AddVolume(name, volumeType string, config map[string]interfac
 
 	// Append new volume
 	volumes = append(volumes, volume)
-	spec["volumes"] = volumes
+	podSpec["volumes"] = volumes
 
 	return nil
 }
 
 // AddVolumeMountToContainer adds a volumeMount to a specific container
 func (m *Manifest) AddVolumeMountToContainer(containerName, volumeName, mountPath string) error {
-	spec, err := m.GetSpec()
+	podSpec, err := m.GetPodSpec()
 	if err != nil {
 		return err
 	}
 
-	containers, ok := spec["containers"].([]interface{})
+	containers, ok := podSpec["containers"].([]interface{})
 	if !ok {
 		return fmt.Errorf("no containers found in spec")
 	}
@@ -452,12 +457,12 @@ func (m *Manifest) AddVolumeMountToContainer(containerName, volumeName, mountPat
 
 // ConvertEnvSecretToSealed replaces secretKeyRef with sealed secret value
 func (m *Manifest) ConvertEnvSecretToSealed(containerName, envVarName, sealedSecret string) error {
-	spec, err := m.GetSpec()
+	podSpec, err := m.GetPodSpec()
 	if err != nil {
 		return err
 	}
 
-	containers, ok := spec["containers"].([]interface{})
+	containers, ok := podSpec["containers"].([]interface{})
 	if !ok {
 		return fmt.Errorf("no containers found in spec")
 	}
@@ -510,7 +515,7 @@ func (m *Manifest) ConvertVolumeSecretToInitContainer(
 	mountPath string,
 	initContainerImage string,
 ) error {
-	spec, err := m.GetSpec()
+	podSpec, err := m.GetPodSpec()
 	if err != nil {
 		return err
 	}
@@ -563,24 +568,24 @@ func (m *Manifest) ConvertVolumeSecretToInitContainer(
 
 	// Add initContainer
 	var initContainers []interface{}
-	if existing, ok := spec["initContainers"].([]interface{}); ok {
+	if existing, ok := podSpec["initContainers"].([]interface{}); ok {
 		initContainers = append(existing, initContainer)
 	} else {
 		initContainers = []interface{}{initContainer}
 	}
-	spec["initContainers"] = initContainers
+	podSpec["initContainers"] = initContainers
 
 	return nil
 }
 
 // RemoveSecretVolume removes a secret-type volume from the spec
 func (m *Manifest) RemoveSecretVolume(volumeName string) error {
-	spec, err := m.GetSpec()
+	podSpec, err := m.GetPodSpec()
 	if err != nil {
 		return err
 	}
 
-	volumes, ok := spec["volumes"].([]interface{})
+	volumes, ok := podSpec["volumes"].([]interface{})
 	if !ok {
 		return nil // No volumes to remove
 	}
@@ -603,7 +608,7 @@ func (m *Manifest) RemoveSecretVolume(volumeName string) error {
 		newVolumes = append(newVolumes, vol)
 	}
 
-	spec["volumes"] = newVolumes
+	podSpec["volumes"] = newVolumes
 	return nil
 }
 
@@ -647,12 +652,12 @@ func (m *Manifest) RemoveImagePullSecrets() error {
 
 // ConvertEnvFromSecret converts envFrom secretRef to individual env vars with sealed secrets
 func (m *Manifest) ConvertEnvFromSecret(containerName, secretName string, sealedSecretsMap map[string]string) error {
-	spec, err := m.GetSpec()
+	podSpec, err := m.GetPodSpec()
 	if err != nil {
 		return err
 	}
 
-	containers, ok := spec["containers"].([]interface{})
+	containers, ok := podSpec["containers"].([]interface{})
 	if !ok {
 		return fmt.Errorf("no containers found in spec")
 	}

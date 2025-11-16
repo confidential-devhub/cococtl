@@ -408,3 +408,55 @@ func TestManifest_CompleteTransformation(t *testing.T) {
 		t.Error("InitContainer not preserved in saved manifest")
 	}
 }
+
+func TestManifest_Deployment_WithSecretsAndImagePullSecrets(t *testing.T) {
+	m, err := manifest.Load("testdata/manifests/deployment-with-secrets-and-imagepullsecrets.yaml")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Verify it's a Deployment
+	if m.GetKind() != "Deployment" {
+		t.Errorf("GetKind() = %q, want %q", m.GetKind(), "Deployment")
+	}
+
+	// Verify GetPodSpec works for Deployment
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		t.Fatalf("GetPodSpec() failed: %v", err)
+	}
+
+	// Verify containers exist
+	containers, ok := podSpec["containers"].([]interface{})
+	if !ok {
+		t.Fatal("containers not found in pod spec")
+	}
+	if len(containers) != 1 {
+		t.Errorf("Expected 1 container, got %d", len(containers))
+	}
+
+	// Verify imagePullSecrets
+	imagePullSecrets := m.GetImagePullSecrets()
+	if len(imagePullSecrets) != 1 {
+		t.Fatalf("Expected 1 imagePullSecret, got %d", len(imagePullSecrets))
+	}
+	if imagePullSecrets[0] != "regcred" {
+		t.Errorf("imagePullSecret name = %q, want %q", imagePullSecrets[0], "regcred")
+	}
+
+	// Verify secret references
+	secrets := m.GetSecretRefs()
+	if len(secrets) != 2 {
+		t.Fatalf("Expected 2 secret references, got %d", len(secrets))
+	}
+
+	// Verify SetRuntimeClass works for Deployment
+	err = m.SetRuntimeClass("kata-cc")
+	if err != nil {
+		t.Fatalf("SetRuntimeClass() failed: %v", err)
+	}
+
+	if m.GetRuntimeClass() != "kata-cc" {
+		t.Errorf("GetRuntimeClass() = %q, want %q", m.GetRuntimeClass(), "kata-cc")
+	}
+}
