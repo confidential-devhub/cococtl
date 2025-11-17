@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/config"
+	"github.com/confidential-devhub/cococtl/pkg/sidecar/certs"
 	"github.com/confidential-devhub/cococtl/pkg/trustee"
 	"github.com/spf13/cobra"
 )
@@ -19,6 +21,10 @@ var initCmd = &cobra.Command{
 This command will:
   - Optionally deploy Trustee KBS to your cluster
   - Create configuration file with Trustee URL and other settings
+  - Optionally set up sidecar certificates (with --enable-sidecar):
+    - Generate Client CA and upload to Trustee KBS
+    - Generate client certificate for developer access
+    - Save client certificate to ~/.kube/coco-sidecar/
   - Prompt for configuration values including:
     - Trustee server URL (or auto-deploy)
     - Default RuntimeClass (default: kata-cc)
@@ -41,6 +47,7 @@ func init() {
 	initCmd.Flags().String("trustee-namespace", "", "Namespace for Trustee deployment (default: current namespace)")
 	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
+	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates")
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
@@ -50,6 +57,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	trusteeNamespace, _ := cmd.Flags().GetString("trustee-namespace")
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
 	runtimeClass, _ := cmd.Flags().GetString("runtime-class")
+	enableSidecar, _ := cmd.Flags().GetBool("enable-sidecar")
 
 	// Get default config path if not specified
 	if outputPath == "" {
@@ -78,9 +86,27 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	cfg := config.DefaultConfig()
 
 	// Handle Trustee setup
-	trusteeDeployed, err := handleTrusteeSetup(cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
+	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
 	if err != nil {
 		return err
+	}
+
+	// Determine namespace for sidecar certificate upload
+	// Use the actual namespace where Trustee was deployed
+	sidecarNamespace := actualNamespace
+	if sidecarNamespace == "" {
+		// If Trustee wasn't deployed (user provided URL), use the flag value or default
+		sidecarNamespace = trusteeNamespace
+		if sidecarNamespace == "" {
+			sidecarNamespace = "default"
+		}
+	}
+
+	// Handle sidecar certificate setup if enabled
+	if enableSidecar {
+		if err := handleSidecarCertSetup(sidecarNamespace); err != nil {
+			return err
+		}
 	}
 
 	// Set runtime class from flag if provided
@@ -154,14 +180,14 @@ func promptString(prompt, defaultValue string, required bool) string {
 	return input
 }
 
-func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, namespace, url string) (bool, error) {
+func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, namespace, url string) (bool, string, error) {
 	// If URL provided via flag, use it and skip deployment
 	if url != "" {
 		cfg.TrusteeServer = url
 		if interactive {
 			fmt.Printf("Using provided Trustee URL: %s\n", url)
 		}
-		return false, nil
+		return false, "", nil
 	}
 
 	// Interactive mode
@@ -173,7 +199,7 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 		url := promptString("Trustee server URL (leave empty to deploy)", "", false)
 		if url != "" {
 			cfg.TrusteeServer = url
-			return false, nil
+			return false, "", nil
 		}
 
 		// If empty, auto-deploy
@@ -186,7 +212,7 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 		if skipDeploy {
 			fmt.Println("Skipping Trustee deployment")
 			fmt.Println("Warning: You must set trustee_server in the config file before use")
-			return false, nil
+			return false, "", nil
 		}
 
 		fmt.Println("Deploying Trustee KBS...")
@@ -197,20 +223,20 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 		var err error
 		namespace, err = getCurrentNamespace()
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
 	}
 
 	// Check if Trustee is already deployed
 	deployed, err := trustee.IsDeployed(namespace)
 	if err != nil {
-		return false, fmt.Errorf("failed to check Trustee deployment: %w", err)
+		return false, "", fmt.Errorf("failed to check Trustee deployment: %w", err)
 	}
 
 	if deployed {
 		fmt.Printf("Trustee already deployed in namespace '%s'\n", namespace)
 		cfg.TrusteeServer = trustee.GetServiceURL(namespace, "trustee-kbs")
-		return true, nil
+		return true, namespace, nil
 	}
 
 	// Deploy Trustee
@@ -229,12 +255,73 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 	}
 
 	if err := trustee.Deploy(trusteeCfg); err != nil {
-		return false, fmt.Errorf("failed to deploy Trustee: %w", err)
+		return false, "", fmt.Errorf("failed to deploy Trustee: %w", err)
 	}
 
 	cfg.TrusteeServer = trustee.GetServiceURL(namespace, "trustee-kbs")
 	fmt.Printf("Trustee deployed successfully\n")
 	fmt.Printf("Trustee URL: %s\n", cfg.TrusteeServer)
 
-	return true, nil
+	return true, namespace, nil
+}
+
+// handleSidecarCertSetup generates and uploads sidecar certificates.
+// It creates a Client CA, generates a client certificate for the developer,
+// uploads the Client CA to Trustee KBS, and saves both the CA and client certificate locally.
+// The CA is needed during 'apply' to sign per-app server certificates.
+// The trusteeNamespace parameter specifies where the Trustee KBS pod is deployed.
+func handleSidecarCertSetup(trusteeNamespace string) error {
+	fmt.Println("\nSetting up sidecar certificates...")
+
+	// Generate Client CA
+	fmt.Println("  - Generating Client CA...")
+	clientCA, err := certs.GenerateCA("CoCo Sidecar Client CA")
+	if err != nil {
+		return fmt.Errorf("failed to generate client CA: %w", err)
+	}
+
+	// Generate client certificate for developer
+	fmt.Println("  - Generating client certificate...")
+	clientCert, err := certs.GenerateClientCert(clientCA.CertPEM, clientCA.KeyPEM, "developer")
+	if err != nil {
+		return fmt.Errorf("failed to generate client certificate: %w", err)
+	}
+
+	// Upload Client CA to Trustee KBS
+	// Note: We always use "default" namespace in the KBS path for consistency,
+	// regardless of where Trustee is deployed. This ensures all apps reference
+	// the same client CA location.
+	const kbsResourceNamespace = "default"
+	fmt.Printf("  - Uploading Client CA to Trustee KBS (Trustee namespace: %s, resource path: default)...\n", trusteeNamespace)
+	clientCAPath := kbsResourceNamespace + "/sidecar-tls/client-ca"
+	if err := trustee.UploadResource(trusteeNamespace, clientCAPath, clientCA.CertPEM); err != nil {
+		return fmt.Errorf("failed to upload client CA to KBS: %w", err)
+	}
+
+	// Save certificates locally to ~/.kube/coco-sidecar/
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+	certDir := filepath.Join(homeDir, ".kube", "coco-sidecar")
+
+	fmt.Printf("  - Saving certificates to %s...\n", certDir)
+
+	// Save Client CA (needed to sign server certificates during apply)
+	if err := clientCA.SaveToFile(certDir, "ca"); err != nil {
+		return fmt.Errorf("failed to save client CA: %w", err)
+	}
+
+	// Save client certificate (for developer to access sidecars)
+	if err := clientCert.SaveToFile(certDir, "client"); err != nil {
+		return fmt.Errorf("failed to save client certificate: %w", err)
+	}
+
+	fmt.Println("\nSidecar certificates configured successfully!")
+	fmt.Printf("  - Client CA uploaded to: kbs:///%s\n", clientCAPath)
+	fmt.Printf("  - Client CA saved to: %s/ca-cert.pem (for signing server certs)\n", certDir)
+	fmt.Printf("  - Client certificate saved to: %s/client-cert.pem\n", certDir)
+	fmt.Printf("  - Client key saved to: %s/client-key.pem\n", certDir)
+
+	return nil
 }

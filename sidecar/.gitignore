@@ -1,0 +1,8 @@
+# Binary
+coco-secure-access
+
+# Test binaries
+*.test
+
+# Build artifacts
+*.out
