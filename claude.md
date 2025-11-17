@@ -1,353 +1,174 @@
-# kubectl-coco Development with Claude Code
+# CLAUDE.md
 
-This document describes the development process and architecture of kubectl-coco, a kubectl plugin for Confidential Containers (CoCo), built with assistance from Claude Code.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-kubectl-coco is a command-line tool that transforms regular Kubernetes manifests into CoCo-enabled manifests, handling:
-- RuntimeClass configuration
-- InitData generation (attestation agent, confidential data hub, policies)
-- Secret download via attestation
-- InitContainer injection
-- Manifest transformation and backup
+kubectl-coco is a kubectl plugin that transforms regular Kubernetes manifests into Confidential Containers (CoCo) enabled manifests. It automates RuntimeClass configuration, secret conversion to sealed format, imagePullSecrets handling, initdata generation, and Trustee KBS deployment/management.
 
-## Development Approach
+**Target users**: Developers testing CoCo applications (not for production deployments)
 
-### Incremental Commits Strategy
+## Common Commands
 
-The project was built using small, focused commits, each addressing a specific feature:
-
-1. **Initial commit**: Project setup with Go module and Cobra CLI framework
-2. **Add create-config**: Command and config package for TOML configuration
-3. **Add apply command**: Basic manifest transformation with YAML parsing
-4. **Implement initdata**: Generation with gzip compression and base64 encoding
-5. **Add sealed secret**: Conversion using external coco-tools binary (later rewritten)
-6. **Add README and Makefile**: Documentation and build automation
-7. **Add initContainer**: Injection support with customizable options
-8. **Rename --resource-uri**: To --secret with new format specification
-9. **Rewrite sealed package**: With base64url encoding (removed external binary dependency)
-10. **Add secret download**: InitContainer with volume management
-11. **Update README**: Document new --secret flag functionality
-
-This approach ensured:
-- Each commit is buildable and testable
-- Clear git history for code review
-- Easy rollback if needed
-- Logical feature separation
-
-## Architecture
-
-### Package Structure
-
-```
-cococtl/
-├── cmd/                    # CLI commands (Cobra-based)
-│   ├── root.go            # Root command and common utilities
-│   ├── createconfig.go    # Interactive config creation
-│   └── apply.go           # Manifest transformation and apply
-├── pkg/
-│   ├── config/            # TOML configuration management
-│   │   └── config.go      # Load/Save/Validate config
-│   ├── manifest/          # YAML manifest manipulation
-│   │   └── manifest.go    # Load/Save/Transform manifests
-│   ├── initdata/          # InitData generation
-│   │   └── initdata.go    # Generate aa.toml, cdh.toml, policy.rego
-│   └── sealed/            # Sealed secret generation
-│       └── sealed.go      # Base64url encoding for secrets
-├── examples/              # Example manifests and policies
-├── main.go               # Entry point
-├── Makefile             # Build automation
-└── README.md            # User documentation
-```
-
-### Key Design Decisions
-
-#### 1. Configuration Management
-- **Choice**: TOML format stored in `~/.kube/coco-config.toml`
-- **Rationale**: Human-readable, supports comments, matches CoCo ecosystem
-- **Implementation**: Uses `github.com/pelletier/go-toml/v2`
-
-#### 2. Manifest Manipulation
-- **Choice**: Generic `map[string]interface{}` approach
-- **Rationale**: Flexible, works with any Kubernetes resource type
-- **Implementation**: Uses `gopkg.in/yaml.v3` for parsing/serialization
-- **Trade-off**: Less type safety, but maximum flexibility
-
-#### 3. InitData Generation
-- **Choice**: In-process generation (no external tools)
-- **Rationale**: Faster, more portable, easier to maintain
-- **Implementation**: Direct gzip + base64 encoding
-- **Format**: Matches CoCo spec for aa.toml, cdh.toml, policy.rego
-
-#### 4. Sealed Secrets (Evolution)
-- **Initial**: Called external coco-tools via podman/docker
-- **Updated**: Direct base64url encoding approach
-- **Rationale**: Remove external dependencies, faster execution
-- **Format**: `sealed.fakejwsheader.{base64url_json}.fakesignature`
-
-#### 5. Secret Download
-- **Choice**: Generate initContainer with curl command
-- **Rationale**: Simple, works with CDH, no additional dependencies
-- **Implementation**:
-  - Convert `kbs://` to CDH endpoint URLs
-  - Create emptyDir volume (Memory medium)
-  - Mount in both initContainer and app containers
-
-## Implementation Patterns
-
-### 1. Manifest Transformation Pipeline
-
-```go
-func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string) error {
-    // 1. Set RuntimeClass
-    m.SetRuntimeClass(rc)
-
-    // 2. Add initContainer (if requested)
-    if addInitContainer {
-        handleInitContainer(m, cfg)
-    }
-
-    // 3. Handle secrets (if provided)
-    if secretSpec != "" {
-        handleSecret(m, secretSpec, cfg)
-    }
-
-    // 4. Generate initdata annotation
-    initdataValue := initdata.Generate(cfg)
-    m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", initdataValue)
-
-    return nil
-}
-```
-
-### 2. Backup Before Apply
-
-All transformations create a backup file with `-coco` suffix:
-```go
-backupPath := m.Backup() // app.yaml -> app-coco.yaml
-```
-
-### 3. Error Handling
-
-Consistent error wrapping for clear error messages:
-```go
-if err != nil {
-    return fmt.Errorf("failed to load manifest: %w", err)
-}
-```
-
-### 4. Flag Validation
-
-Validate flag combinations before processing:
-```go
-if (initContainerImg != "" || initContainerCmd != "") && !addInitContainer {
-    return fmt.Errorf("--init-container-img and --init-container-cmd require --init-container flag")
-}
-```
-
-## Key Features
-
-### 1. Config Creation (`init`)
-- Non-interactive mode by default for automation
-- Optional interactive mode (--interactive/-i) for prompted configuration
-- Validation of mandatory fields (trustee_server)
-- Default values for optional fields
-
-### 2. Manifest Apply (`apply`)
-- Loads and validates configuration
-- Transforms Kubernetes manifests
-- Creates backups before modification
-- Optional kubectl integration (--skip-apply)
-
-### 3. InitData Generation
-- Attestation Agent configuration (aa.toml)
-- Confidential Data Hub configuration (cdh.toml)
-- Agent policy (policy.rego) - default restrictive
-- Gzip compression + base64 encoding
-- Proper TOML nesting and structure
-
-### 4. InitContainer Injection
-- Default attestation check container
-- Custom image support (--init-container-img)
-- Custom command support (--init-container-cmd)
-- Prepends to existing initContainers
-
-### 5. Secret Download
-- Parse `kbs://uri::path` format
-- Generate initContainer with curl command
-- Create emptyDir volume (Memory medium)
-- Mount volume in all containers
-
-### 6. Automatic Secret Addition to Trustee (Temporary)
-- Automatically adds K8s secrets to Trustee KBS repository during conversion
-- Integrated into the `apply` command secret conversion flow
-- Isolated implementation for easy removal when proper tooling is available
-- **How it works:**
-  - Detects Trustee namespace from the Trustee server URL in config
-  - After converting K8s secrets to sealed secrets, automatically copies them to Trustee
-  - Uses `kubectl exec` to access the Trustee pod and write secret files
-  - Creates directory structure: `/opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}`
-- **Implementation details:**
-  - Function `AddK8sSecretToTrustee` in `pkg/trustee/trustee.go` (trustee.go:459)
-  - Wrapper functions in `cmd/apply.go` (apply.go:351-415):
-    - `getTrusteeNamespace`: Extracts namespace from Trustee URL
-    - `addSecretsToTrustee`: Iterates over all secrets and adds them
-    - `addK8sSecretToTrustee`: Isolated wrapper for easy removal
-- **Error handling:**
-  - Gracefully handles failures with warnings
-  - Continues with manifest transformation even if secret upload fails
-  - Provides fallback instructions for manual secret configuration
-- **Example:**
-  - K8s secret `reg-cred` in namespace `coco` with key `root=password`
-  - Stored at: `/opt/confidential-containers/kbs/repository/coco/reg-cred/root`
-  - File content: `password` (decoded from base64)
-
-### 7. Default Attestation Status Secret
-- Automatically creates a default attestation status secret during Trustee deployment
-- Required for the default init container attestation check command
-- **Implementation details:**
-  - Constants defined in `pkg/trustee/trustee.go` (trustee.go:19-22):
-    - `defaultAttestationStatusPath`: `/opt/confidential-containers/kbs/repository/default/attestation-status/status`
-    - `defaultAttestationStatusContent`: `success`
-  - Function `createDefaultAttestationStatus` in `pkg/trustee/trustee.go` (trustee.go:554-595)
-  - Called automatically during `Deploy` (trustee.go:90-93)
-- **Purpose:**
-  - Provides a resource for the default init container command to verify attestation
-  - Default init container command: `curl http://localhost:8006/cdh/resource/default/attestation-status/status`
-  - Returns "success" when attestation is verified
-- **Integration:**
-  - Created automatically after KBS deployment completes
-  - No K8s secret required - directly written to KBS repository
-  - Uses `kubectl exec` to create directory and write file
-
-## Testing Strategy
-
-### Manual Testing Approach
-Each commit was tested manually:
-1. Build: `go build -o kubectl-coco .`
-2. Test flags: `./kubectl-coco <command> --help`
-3. Test transformation: `./kubectl-coco apply -f examples/pod.yaml --skip-apply`
-4. Verify output: Check generated `*-coco.yaml` files
-5. Validate YAML: Ensure proper structure and formatting
-
-### Test Cases Covered
-- Config creation (non-interactive by default, optional interactive mode)
-- Basic manifest transformation
-- InitContainer injection (default and custom)
-- Secret download with volume mounting
-- Flag validation
-- Error handling
-
-## Build and Distribution
-
-### Makefile Targets
-```makefile
-make build      # Build the binary
-make install    # Install to /usr/local/bin
-make clean      # Remove build artifacts
-make test       # Run tests
-make help       # Show available targets
-```
-
-### Installation
+### Build and Test
 ```bash
-# From source
+# Build binary
 make build
+
+# Run integration tests (all tests)
+make test
+
+# Run specific test
+make test TEST=TestConfigLoad
+
+# Run specific test pattern
+make test TEST=TestSecret
+
+# Format code
+make fmt
+
+# Run go vet
+make vet
+
+# Run linter (requires golangci-lint)
+make lint
+
+# Install locally
 sudo make install
 
-# Manual
-go build -o kubectl-coco .
-sudo mv kubectl-coco /usr/local/bin/
+# Clean build artifacts
+make clean
 ```
 
-## Dependencies
+### Development Workflow
+```bash
+# Build and test locally
+./kubectl-coco init --help
+./kubectl-coco apply --help
 
-### Direct Dependencies
-- `github.com/spf13/cobra` - CLI framework
-- `gopkg.in/yaml.v3` - YAML parsing/serialization
-- `github.com/pelletier/go-toml/v2` - TOML configuration
+# Test transformation without applying
+./kubectl-coco apply -f examples/pod.yaml --skip-apply
 
-### Standard Library Usage
-- `encoding/base64` - Base64url encoding for sealed secrets
-- `encoding/json` - JSON marshaling for sealed secrets
-- `compress/gzip` - InitData compression
-- `os/exec` - kubectl integration
-- `strings`, `fmt`, `os` - Standard utilities
+# Verify output
+cat examples/pod-coco.yaml
+```
 
-## Future Enhancements
+### Release
+```bash
+# Build for specific platform
+make release GOOS=linux GOARCH=amd64
 
-Potential improvements identified during development:
+# Build for all platforms
+make release-all
+```
 
-1. **Kubernetes API Integration**
-   - Currently uses `kubectl apply` as subprocess
-   - Could use client-go for direct API calls
-   - Would enable better error handling and validation
+## Architecture Overview
 
-2. **Multi-Manifest Support**
-   - Currently processes one manifest at a time
-   - Could support multiple files or directories
-   - Useful for complex applications
+### Core Transformation Pipeline
 
-3. **Deployment Support**
-   - Currently Pod-focused
-   - Could add Deployment, StatefulSet, DaemonSet support
-   - Would need to handle pod template specs
+The `apply` command performs transformations in this order:
+1. **Detect secrets** (pkg/secrets) - Scan manifest for secret references (env, envFrom, volumes, imagePullSecrets)
+2. **Convert to sealed secrets** (pkg/sealed) - Create sealed format with KBS URIs
+3. **Upload to Trustee KBS** (pkg/trustee) - Automatically populate KBS repository via kubectl exec
+4. **Set RuntimeClass** (pkg/manifest) - Add `kata-cc` runtime to spec
+5. **Generate initdata** (pkg/initdata) - Create aa.toml, cdh.toml, policy.rego annotation
+6. **Add custom annotations** (pkg/manifest) - Apply config-defined annotations
+7. **Inject initContainer** (pkg/manifest) - Optional attestation verification container
+8. **Save and apply** - Backup to *-coco.yaml, optionally apply via kubectl
 
-4. **Sealed Secret Auto-Creation**
-   - Currently requires manual secret creation
-   - Could auto-generate and apply K8s secrets
-   - Would simplify user workflow
+### Key Packages
 
-5. **Policy Templates**
-   - Provide pre-built policy templates
-   - Allow easy policy selection
-   - Support policy composition
+**pkg/manifest**: Generic manifest manipulation using `map[string]interface{}` for flexibility across all K8s resource types (Pod, Deployment, StatefulSet, ReplicaSet, Job, DaemonSet). Critical insight: Annotations must be placed on pod templates for workload resources, not top-level metadata.
 
-6. **Testing Framework**
-   - Add unit tests for packages
-   - Integration tests with test manifests
-   - CI/CD pipeline integration
+**pkg/secrets**: Secret detection and conversion. Scans containers for `env[].valueFrom.secretKeyRef`, `envFrom[].secretRef`, and `volumes[].secret`. Also detects imagePullSecrets from manifest or default service account.
 
-## Lessons Learned
+**pkg/sealed**: Creates sealed secret format: `sealed.fakejwsheader.{base64url_json}.fakesignature` where JSON contains KBS URI like `kbs:///namespace/secret-name/key`.
 
-### What Worked Well
-1. **Small commits**: Made debugging and review easier
-2. **Package separation**: Clear boundaries between concerns
-3. **Flag-based approach**: Flexible user experience
-4. **Examples directory**: Helpful for testing and documentation
+**pkg/initdata**: Generates gzip-compressed, base64-encoded initdata annotation containing three TOML files (aa.toml for attestation agent, cdh.toml for confidential data hub, policy.rego for kata agent policy). Handles optional imagePullSecrets URIs in CDH configuration.
 
-### Challenges Overcome
-1. **YAML Manipulation**: Generic maps require careful type assertions
-2. **Spec Evolution**: Adapted to changing requirements (--resource-uri → --secret)
-3. **External Dependencies**: Moved from coco-tools to native implementation
-4. **Volume Management**: Correctly handling volumeMounts across containers
+**pkg/trustee**: Deploys all-in-one Trustee KBS using kubectl. Generates Ed25519 keypair for auth. Automatically creates default attestation status secret at `/opt/confidential-containers/kbs/repository/default/attestation-status/status` for init container verification.
 
-## Contributing Guidelines
+**pkg/config**: Manages `~/.kube/coco-config.toml` with TOML format. Validates mandatory fields (trustee_server, runtime_class).
 
-For future contributors:
+### Critical Implementation Details
 
-1. **Follow the commit pattern**: Small, focused commits
-2. **Update README**: Document new features immediately
-3. **Test thoroughly**: Manual testing before commit
-4. **Maintain examples**: Add example files for new features
-5. **Update this file**: Document architectural decisions
+**Annotation Placement**: The `io.katacontainers.config.hypervisor.cc_init_data` annotation MUST be placed at:
+- Pod: `metadata.annotations`
+- Deployment/StatefulSet/etc: `spec.template.metadata.annotations`
 
-## References
+This is handled by `GetPodAnnotationsPath()` in pkg/manifest/manifest.go.
 
-- [Confidential Containers Documentation](https://confidentialcontainers.org/)
-- [InitData Feature](https://confidentialcontainers.org/docs/features/initdata/)
-- [Sealed Secrets](https://confidentialcontainers.org/docs/features/sealed-secrets/)
-- [Get Resource Feature](https://confidentialcontainers.org/docs/features/get-resource/)
-- [Cobra CLI Framework](https://cobra.dev/)
+**Secret Upload Flow**: When converting secrets, the tool uses `kubectl exec` to write decoded secret values directly into the Trustee KBS pod at `/opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}`. This is a temporary solution for development/testing.
 
-## Project Statistics
+**ImagePullSecrets Handling**: imagePullSecrets remain in the manifest (needed by CRI-O for image pulling) AND are uploaded to KBS (for runtime attestation verification). Only the first imagePullSecret is used in CDH configuration. The `.dockerconfigjson` key has its leading dot stripped when creating the KBS URI.
 
-- **Total Commits**: 11
-- **Total Files**: 8 Go files, 1 Makefile, 2 Markdown files
-- **Lines of Code**: ~1500 (excluding examples and dependencies)
-- **Development Time**: Single session
-- **Go Version**: 1.21+
+**Workload Resource Support**: All transformations work via helper functions that detect resource kind and manipulate either `spec` (Pod) or `spec.template.spec` (workload resources). See `GetPodSpec()`, `GetContainers()`, etc. in pkg/manifest/manifest.go.
 
----
+## Configuration File Structure
 
-*This project was developed with the assistance of Claude Code, demonstrating incremental development with clear git history and comprehensive documentation.*
+Location: `~/.kube/coco-config.toml`
+
+**Mandatory fields**:
+- `trustee_server`: Trustee KBS URL (e.g., `https://trustee-kbs.default.svc.cluster.local:8080`)
+- `runtime_class`: CoCo runtime (e.g., `kata-cc`)
+
+**Optional fields**:
+- `trustee_ca_cert`: Path to CA certificate for Trustee
+- `kata_agent_policy`: Path to custom policy.rego file
+- `init_container_image`: Default init container image
+- `init_container_cmd`: Default init container command
+- `container_policy_uri`: KBS URI for image security policy
+- `registry_cred_uri`: KBS URI for registry credentials
+- `registry_config_uri`: KBS URI for registry configuration
+
+**Custom annotations section**: `[annotations]` - Any non-empty values are applied to pod templates
+
+## Testing Approach
+
+Tests are in `integration_test/` and use the Go testing package. They cover:
+- Config loading/validation (config_test.go)
+- Sealed secret generation (sealed_test.go)
+- Secret detection/conversion (secrets_test.go)
+- InitData generation (initdata_test.go)
+- Manifest transformation (manifest_test.go)
+- End-to-end workflows (workflow_test.go)
+- Trustee deployment (trustee_test.go)
+
+Run tests with `make test TEST=<pattern>` to filter by test name.
+
+## Important Dependencies
+
+- `github.com/spf13/cobra`: CLI framework - all commands in cmd/
+- `gopkg.in/yaml.v3`: YAML parsing for K8s manifests
+- `github.com/pelletier/go-toml/v2`: TOML config parsing
+- Standard library: `encoding/base64` (sealed secrets), `compress/gzip` (initdata), `os/exec` (kubectl commands)
+
+## Common Gotchas
+
+1. **YAML type assertions**: Manifest data is `map[string]interface{}` - always check type assertions and handle missing fields gracefully
+2. **Namespace resolution**: Manifests may not specify namespace - default to "default" or current kubectl context namespace
+3. **Secret key variations**: imagePullSecrets use `.dockerconfigjson` but KBS URIs strip the leading dot
+4. **Resource type detection**: Use `GetKind()` to branch logic between Pod and workload resources
+5. **Path validation**: Manifest loading includes directory traversal protection (see pkg/manifest/manifest.go:20-46)
+6. **InitContainer prepending**: When adding init containers, prepend (don't append) so attestation runs first
+
+## Code Patterns to Follow
+
+**Error handling**: Always wrap errors with context using `fmt.Errorf("descriptive message: %w", err)`
+
+**Manifest transformation**: Use helper functions like `GetPodSpec()`, `GetContainers()`, `GetPodAnnotationsPath()` to handle both Pod and workload resources
+
+**Flag validation**: Validate flag combinations in RunE function before processing (see cmd/apply.go:71-120)
+
+**Backup creation**: Always create `*-coco.yaml` backup before modifying manifests
+
+**kubectl integration**: Use `exec.Command("kubectl", ...)` for K8s operations with proper error handling
+
+## Development Philosophy
+
+This project follows an incremental development approach with small, focused commits. When adding features:
+- Each commit should be buildable and testable
+- Update README.md and TRANSFORMATIONS.md with new functionality
+- Add example manifests if introducing new transformation types
+- Test manually with `--skip-apply` before committing
+- Document architectural decisions
