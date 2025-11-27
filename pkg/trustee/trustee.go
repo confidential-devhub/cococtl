@@ -386,65 +386,6 @@ spec:
 	return applyManifest(manifest)
 }
 
-func populateSecrets(namespace string, secrets []SecretResource) error {
-	if len(secrets) == 0 {
-		return nil
-	}
-
-	cmd := exec.Command("kubectl", "get", "pod", "-n", namespace,
-		"-l", "app=kbs", "-o", "jsonpath={.items[0].metadata.name}")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to get KBS pod: %w\n%s", err, output)
-	}
-	podName := strings.TrimSpace(string(output))
-
-	if podName == "" {
-		return fmt.Errorf("no KBS pod found in namespace %s", namespace)
-	}
-
-	// #nosec G204 - namespace is from function parameter, podName is from kubectl get output
-	cmd = exec.Command("kubectl", "wait", "--for=condition=ready", "--timeout=120s",
-		"-n", namespace, fmt.Sprintf("pod/%s", podName))
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("pod not ready: %w\n%s", err, output)
-	}
-
-	tmpDir, err := os.MkdirTemp("", "kbs-secrets-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer func() {
-		if err := os.RemoveAll(tmpDir); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to remove temp directory %s: %v\n", tmpDir, err)
-		}
-	}()
-
-	for _, secret := range secrets {
-		resourcePath := strings.TrimPrefix(secret.URI, "kbs://")
-		resourcePath = strings.TrimPrefix(resourcePath, "/")
-
-		fullPath := filepath.Join(tmpDir, resourcePath)
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0750); err != nil {
-			return fmt.Errorf("failed to create directory: %w", err)
-		}
-
-		if err := os.WriteFile(fullPath, secret.Data, 0600); err != nil {
-			return fmt.Errorf("failed to write secret: %w", err)
-		}
-	}
-
-	// #nosec G204 - namespace is from function parameter, tmpDir is from os.MkdirTemp, podName is from kubectl get
-	cmd = exec.Command("kubectl", "cp", "-n", namespace,
-		tmpDir+"/.", podName+":/opt/confidential-containers/kbs/repository/")
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to copy secrets to KBS: %w\n%s", err, output)
-	}
-
-	return nil
-}
-
 // ParseSecretSpec parses a secret specification and reads the file
 func ParseSecretSpec(spec string) (*SecretResource, error) {
 	parts := strings.SplitN(spec, "::", 2)
