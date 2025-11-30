@@ -132,7 +132,7 @@ func GenerateServerCert(caCert, caKey []byte, commonName string, sans SANs) (*Ce
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(certValidityYears, 0, 0),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDataEncipherment,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		DNSNames:              sans.DNSNames,
