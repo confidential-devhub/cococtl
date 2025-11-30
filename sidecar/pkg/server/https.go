@@ -182,41 +182,169 @@ func loggingMiddleware(next http.Handler) http.Handler {
 }
 
 func generateDashboard(status *status.Status, clientCN string) string {
-	attestationStatus := "Unavailable"
+	attestationBadge := `<span class="badge badge-unavailable">Unavailable</span>`
 	if status.Attested {
-		attestationStatus = "Attested"
+		attestationBadge = `<span class="badge badge-success">✓ Attested</span>`
 	}
 
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>CoCo Pod Dashboard</title>
+    <title>Confidential Containers - Pod Dashboard</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
-        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
-        h1 { color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
-        table { border-collapse: collapse; width: 100%%; margin: 15px 0; }
-        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
-        th { background-color: #007bff; color: white; }
-        tr:nth-child(even) { background-color: #f2f2f2; }
-        .client-info { background: #e7f3ff; padding: 10px; border-radius: 5px; margin: 15px 0; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%%, #c3cfe2 100%%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 92, 148, 0.1);
+        }
+        .logo {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 15px;
+        }
+        .header h1 {
+            color: #005c94;
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        .header .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 92, 148, 0.1);
+        }
+        .client-info {
+            background: linear-gradient(135deg, #005c94 0%%, #0077ba 100%%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .client-info .icon {
+            font-size: 24px;
+            margin-right: 10px;
+        }
+        .client-info .text {
+            flex: 1;
+        }
+        .client-info strong {
+            font-weight: 600;
+        }
+        h2 {
+            color: #005c94;
+            font-size: 20px;
+            font-weight: 600;
+            margin: 25px 0 15px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #ff4d4d;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%%;
+            margin: 15px 0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th, td {
+            padding: 14px 18px;
+            text-align: left;
+        }
+        th {
+            background: linear-gradient(135deg, #005c94 0%%, #0077ba 100%%);
+            color: white;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 0.5px;
+        }
+        tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+        tr:hover {
+            background-color: #e8f4f8;
+        }
+        td {
+            border-bottom: 1px solid #e0e0e0;
+            color: #333;
+        }
+        .badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .badge-success {
+            background-color: #28a745;
+            color: white;
+        }
+        .badge-unavailable {
+            background-color: #ffc107;
+            color: #333;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 25px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            color: #666;
+            font-size: 13px;
+        }
+        .footer a {
+            color: #005c94;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .footer a:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
+    <div class="header">
+        <img class="logo" src="https://raw.githubusercontent.com/cncf/artwork/main/projects/confidential-containers/icon/color/confidential-containers-icon.svg" alt="Confidential Containers">
+        <h1>Confidential Containers</h1>
+        <div class="subtitle">Secure Access Dashboard</div>
+    </div>
     <div class="container">
-        <h1>🔒 CoCo Pod Dashboard</h1>
         <div class="client-info">
-            <strong>Connected as:</strong> %s (via mTLS)
+            <div class="text">
+                <span class="icon">🔐</span>
+                <strong>Authenticated via mTLS:</strong> %s
+            </div>
         </div>
         <h2>Pod Information</h2>
         <table>
             <tr><th>Property</th><th>Value</th></tr>
-            <tr><td>Pod Name</td><td>%s</td></tr>
-            <tr><td>Pod Namespace</td><td>%s</td></tr>
-            <tr><td>Attestation Status</td><td>%s</td></tr>
+            <tr><td><strong>Pod Name</strong></td><td>%s</td></tr>
+            <tr><td><strong>Namespace</strong></td><td>%s</td></tr>
+            <tr><td><strong>Attestation Status</strong></td><td>%s</td></tr>
         </table>
+        <div class="footer">
+            Powered by <a href="https://confidentialcontainers.org" target="_blank">Confidential Containers</a> - A CNCF Sandbox Project
+        </div>
     </div>
 </body>
-</html>`, clientCN, status.PodName, status.Namespace, attestationStatus)
+</html>`, clientCN, status.PodName, status.Namespace, attestationBadge)
 }
