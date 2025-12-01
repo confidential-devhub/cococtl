@@ -59,7 +59,7 @@ func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (s
 			return "", fmt.Errorf("failed to load policy file: %w", err)
 		}
 	} else {
-		// Use default restrictive policy (exec and log disabled)
+		// Use default restrictive policy (exec disabled, logs enabled)
 		policy = getDefaultPolicy()
 	}
 
@@ -244,7 +244,7 @@ default MemHotplugByProbeRequest := true
 default OnlineCPUMemRequest := true
 default PauseContainerRequest := true
 default PullImageRequest := true
-default ReadStreamRequest := false
+default ReadStreamRequest := true
 default RemoveContainerRequest := true
 default RemoveStaleVirtiofsShareMountsRequest := true
 default ReseedRandomDevRequest := true

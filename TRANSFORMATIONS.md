@@ -240,8 +240,9 @@ registry_config_uri = "kbs:///default/registry-configuration/test"
 
 Default policy disables:
 - `ExecProcessRequest`: No exec into pods
-- `ReadStreamRequest`: No log streaming
 - `SetPolicyRequest`: Policy changes blocked
+
+Logs are enabled by default (`ReadStreamRequest := true`).
 
 Custom policy can be specified in config.
 

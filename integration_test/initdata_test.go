@@ -236,12 +236,12 @@ func TestInitData_Generate_DefaultPolicy(t *testing.T) {
 	dataSection := data["data"].(map[string]interface{})
 	policy := dataSection["policy.rego"].(string)
 
-	// Default policy has exec disabled
+	// Default policy has exec disabled but logs enabled
 	if !strings.Contains(policy, "ExecProcessRequest := false") {
 		t.Error("Default policy not found (expected ExecProcessRequest := false)")
 	}
-	if !strings.Contains(policy, "ReadStreamRequest := false") {
-		t.Error("Default policy should have ReadStreamRequest := false")
+	if !strings.Contains(policy, "ReadStreamRequest := true") {
+		t.Error("Default policy should have ReadStreamRequest := true")
 	}
 }
 
