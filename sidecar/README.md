@@ -69,29 +69,18 @@ The sidecar is automatically injected by kubectl-coco when using the `--sidecar`
 kubectl coco apply -f app.yaml --sidecar
 ```
 
+A Kubernetes Service (ClusterIP type) is automatically created with the name `<app-name>-sidecar` to expose the sidecar's HTTPS port.
+
 ### Accessing the Sidecar
 
 **Important:** kubectl port-forward does NOT work with mTLS connections.
 Use NodePort or Ingress.
 
-**Option 1: NodePort Service**
+**Option 1: NodePort (convert the auto-created Service)**
 
 ```bash
-# Create NodePort service
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Service
-metadata:
-  name: myapp-sidecar
-spec:
-  type: NodePort
-  selector:
-    app: myapp
-  ports:
-  - name: https
-    port: 8443
-    targetPort: 8443
-EOF
+# Convert the auto-created ClusterIP Service to NodePort
+kubectl patch svc myapp-sidecar -p '{"spec":{"type":"NodePort"}}'
 
 # Get service endpoints
 NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
@@ -100,7 +89,24 @@ HTTPS_PORT=$(kubectl get svc myapp-sidecar -o jsonpath='{.spec.ports[?(@.name=="
 # Access HTTPS Dashboard
 curl -k --cert ~/.kube/coco-sidecar/client-cert.pem \
      --key ~/.kube/coco-sidecar/client-key.pem \
-     https://$NODE_IP:$HTTPS_PORT/
+     https://$NODE_IP:$HTTPS_PORT/dashboard
+```
+
+**Option 2: Route/Ingress**
+
+* When creating ingress, ensure you use TLS passthrough.
+* Example creating a passthrough route (available only in OpenShift)
+
+```bash
+# Create OpenShift route 
+oc create route passthrough --service=myapp-sidecar
+# Get the route
+ROUTE_IP=$(oc get route myapp-sidecar -o jsonpath={.spec.host})
+
+# Access HTTPS Dashboard
+curl -k --cert ~/.kube/coco-sidecar/client-cert.pem \
+     --key ~/.kube/coco-sidecar/client-key.pem \
+     https://$ROUTE_IP/dashboard
 ```
 
 **Port Forwarding:**
@@ -112,11 +118,6 @@ With port forwarding configured, the application is served at root:
 curl -k --cert ~/.kube/coco-sidecar/client-cert.pem \
      --key ~/.kube/coco-sidecar/client-key.pem \
      https://$NODE_IP:$HTTPS_PORT/
-
-# Access the dashboard at /dashboard
-curl -k --cert ~/.kube/coco-sidecar/client-cert.pem \
-     --key ~/.kube/coco-sidecar/client-key.pem \
-     https://$NODE_IP:$HTTPS_PORT/dashboard
 ```
 
 ## Certificate Setup
@@ -186,19 +187,21 @@ openssl pkcs12 -export \
 
 **macOS:**
 1. Import client certificate to Keychain:
+
    ```bash
    open ~/.kube/coco-sidecar/client.p12
    # Enter password: coco123
    ```
 
 2. Get the NodePort service endpoint:
+  
    ```bash
    NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
    HTTPS_PORT=$(kubectl get svc myapp-sidecar -o jsonpath='{.spec.ports[?(@.name=="https")].nodePort}')
    echo "Access at: https://$NODE_IP:$HTTPS_PORT/"
    ```
 
-3. Open browser to `https://$NODE_IP:$HTTPS_PORT/`
+3. Access the sidecar dashboard at `https://$NODE_IP:$HTTPS_PORT/dashboard` or the forwarded port at `https://$NODE_IP:$HTTPS_PORT/`
 
 4. Select client certificate when prompted: "CoCo Sidecar Client - developer"
 
@@ -210,9 +213,7 @@ openssl pkcs12 -export \
 
 2. Select `~/.kube/coco-sidecar/client.p12` and enter password: `coco123`
 
-3. Access the sidecar dashboard at `https://$NODE_IP:$HTTPS_PORT/dashboard`
-
-4. Access the forwarded port at `https://$NODE_IP:$HTTPS_PORT/`
+3. Access the sidecar dashboard at `https://$NODE_IP:$HTTPS_PORT/dashboard` or the forwarded port at `https://$NODE_IP:$HTTPS_PORT/`
 
 ### Verifying Certificates
 
