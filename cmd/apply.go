@@ -8,10 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/confidential-devhub/cococtl/pkg/cluster"
 	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/confidential-devhub/cococtl/pkg/initdata"
 	"github.com/confidential-devhub/cococtl/pkg/manifest"
 	"github.com/confidential-devhub/cococtl/pkg/secrets"
+	"github.com/confidential-devhub/cococtl/pkg/sidecar"
+	"github.com/confidential-devhub/cococtl/pkg/sidecar/certs"
 	"github.com/confidential-devhub/cococtl/pkg/trustee"
 	"github.com/spf13/cobra"
 )
@@ -41,14 +44,19 @@ Example:
 }
 
 var (
-	manifestFile     string
-	runtimeClass     string
-	addInitContainer bool
-	initContainerImg string
-	initContainerCmd string
-	skipApply        bool
-	configPath       string
-	convertSecrets   bool
+	manifestFile           string
+	runtimeClass           string
+	addInitContainer       bool
+	initContainerImg       string
+	initContainerCmd       string
+	skipApply              bool
+	configPath             string
+	convertSecrets         bool
+	enableSidecar          bool
+	sidecarImage           string
+	sidecarSANIPs          string
+	sidecarSANDNS          string
+	sidecarSkipAutoSANs    bool
 )
 
 func init() {
@@ -62,6 +70,11 @@ func init() {
 	applyCmd.Flags().BoolVar(&skipApply, "skip-apply", false, "Skip kubectl apply, only transform the manifest")
 	applyCmd.Flags().StringVar(&configPath, "config", "", "Path to CoCo config file (default: ~/.kube/coco-config.toml)")
 	applyCmd.Flags().BoolVar(&convertSecrets, "convert-secrets", true, "Automatically convert K8s secrets to sealed secrets")
+	applyCmd.Flags().BoolVar(&enableSidecar, "sidecar", false, "Enable secure access sidecar container")
+	applyCmd.Flags().StringVar(&sidecarImage, "sidecar-image", "", "Custom sidecar image (requires --sidecar)")
+	applyCmd.Flags().StringVar(&sidecarSANIPs, "sidecar-san-ips", "", "Comma-separated list of IP addresses for sidecar server certificate SANs")
+	applyCmd.Flags().StringVar(&sidecarSANDNS, "sidecar-san-dns", "", "Comma-separated list of DNS names for sidecar server certificate SANs")
+	applyCmd.Flags().BoolVar(&sidecarSkipAutoSANs, "sidecar-skip-auto-sans", false, "Skip auto-detection of SANs (node IPs and service DNS)")
 
 	if err := applyCmd.MarkFlagRequired("filename"); err != nil {
 		panic(fmt.Sprintf("failed to mark filename flag as required: %v", err))
@@ -173,7 +186,44 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 		}
 	}
 
-	// 5. Generate and add initdata annotation
+	// 5. Inject sidecar if enabled
+	if enableSidecar || cfg.Sidecar.Enabled {
+		// CLI flag overrides config
+		if enableSidecar {
+			cfg.Sidecar.Enabled = true
+		}
+
+		// CLI flag can override image
+		if sidecarImage != "" {
+			cfg.Sidecar.Image = sidecarImage
+		}
+
+		// Extract app name and namespace for per-app certificate URIs
+		appName := m.GetName()
+		if appName == "" {
+			return fmt.Errorf("manifest must have metadata.name for sidecar injection")
+		}
+		namespace := m.GetNamespace()
+		if namespace == "" {
+			namespace = "default"
+		}
+
+		// Get Trustee namespace from config (where KBS is deployed)
+		trusteeNamespace := cfg.GetTrusteeNamespace()
+
+		// Generate and upload server certificate
+		fmt.Println("  - Setting up sidecar server certificate")
+		if err := handleSidecarServerCert(appName, namespace, trusteeNamespace); err != nil {
+			return fmt.Errorf("failed to setup sidecar server certificate: %w", err)
+		}
+
+		fmt.Println("  - Injecting secure access sidecar container")
+		if err := sidecar.Inject(m, cfg, appName, namespace); err != nil {
+			return fmt.Errorf("failed to inject sidecar: %w", err)
+		}
+	}
+
+	// 6. Generate and add initdata annotation
 	fmt.Println("  - Generating initdata annotation")
 	initdataValue, err := initdata.Generate(cfg, imagePullSecretsInfo)
 	if err != nil {
@@ -184,7 +234,7 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 		return fmt.Errorf("failed to set initdata annotation: %w", err)
 	}
 
-	// 6. Add custom annotations from config
+	// 7. Add custom annotations from config
 	if len(cfg.Annotations) > 0 {
 		fmt.Println("  - Adding custom annotations from config")
 		for key, value := range cfg.Annotations {
@@ -548,4 +598,103 @@ func addImagePullSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeN
 // This is kept separate to maintain the isolation of the temporary functionality
 func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
 	return trustee.AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
+}
+
+// handleSidecarServerCert generates and uploads a server certificate for the sidecar.
+// It loads the Client CA, auto-detects or uses provided SANs, generates the server cert,
+// and uploads it to Trustee KBS at per-app paths.
+// Parameters:
+//   - appName: name of the application (from manifest metadata.name)
+//   - namespace: namespace for certificate KBS path (from manifest metadata.namespace)
+//   - trusteeNamespace: namespace where Trustee KBS is deployed
+func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error {
+	// Load Client CA from ~/.kube/coco-sidecar/
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+	certDir := filepath.Join(homeDir, ".kube", "coco-sidecar")
+	caCertPath := filepath.Join(certDir, "ca-cert.pem")
+	caKeyPath := filepath.Join(certDir, "ca-key.pem")
+
+	// #nosec G304 -- Reading from known, trusted location in user's home directory
+	caCert, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return fmt.Errorf("failed to read client CA cert (run 'kubectl coco init --enable-sidecar' first): %w", err)
+	}
+	// #nosec G304 -- Reading from known, trusted location in user's home directory
+	caKey, err := os.ReadFile(caKeyPath)
+	if err != nil {
+		return fmt.Errorf("failed to read client CA key: %w", err)
+	}
+
+	// Build SANs for server certificate
+	sans := certs.SANs{
+		DNSNames:    []string{},
+		IPAddresses: []string{},
+	}
+
+	// Add user-provided SANs
+	if sidecarSANIPs != "" {
+		ipList := strings.Split(sidecarSANIPs, ",")
+		for _, ip := range ipList {
+			sans.IPAddresses = append(sans.IPAddresses, strings.TrimSpace(ip))
+		}
+	}
+	if sidecarSANDNS != "" {
+		dnsList := strings.Split(sidecarSANDNS, ",")
+		for _, dns := range dnsList {
+			sans.DNSNames = append(sans.DNSNames, strings.TrimSpace(dns))
+		}
+	}
+
+	// Auto-detect SANs unless skipped
+	if !sidecarSkipAutoSANs {
+		// Auto-detect node IPs
+		nodeIPs, err := cluster.GetNodeIPs()
+		if err != nil {
+			fmt.Printf("Warning: failed to auto-detect node IPs: %v\n", err)
+		} else {
+			sans.IPAddresses = append(sans.IPAddresses, nodeIPs...)
+		}
+
+		// Add service DNS names (format: <name>.<namespace>.svc.cluster.local)
+		serviceDNS := fmt.Sprintf("%s.%s.svc.cluster.local", appName, namespace)
+		sans.DNSNames = append(sans.DNSNames, serviceDNS)
+	}
+
+	if len(sans.DNSNames) == 0 && len(sans.IPAddresses) == 0 {
+		return fmt.Errorf("no SANs configured for server certificate (use --sidecar-san-ips or --sidecar-san-dns, or enable auto-detection)")
+	}
+
+	fmt.Printf("  - Generating server certificate for %s with SANs:\n", appName)
+	if len(sans.IPAddresses) > 0 {
+		fmt.Printf("    IPs: %v\n", sans.IPAddresses)
+	}
+	if len(sans.DNSNames) > 0 {
+		fmt.Printf("    DNS: %v\n", sans.DNSNames)
+	}
+
+	// Generate server certificate
+	serverCert, err := certs.GenerateServerCert(caCert, caKey, appName, sans)
+	if err != nil {
+		return fmt.Errorf("failed to generate server certificate: %w", err)
+	}
+
+	// Upload to Trustee KBS (in the namespace where Trustee is deployed)
+	fmt.Printf("  - Uploading server certificate to Trustee KBS (namespace: %s)...\n", trusteeNamespace)
+	serverCertPath := namespace + "/sidecar-tls-" + appName + "/server-cert"
+	serverKeyPath := namespace + "/sidecar-tls-" + appName + "/server-key"
+
+	resources := map[string][]byte{
+		serverCertPath: serverCert.CertPEM,
+		serverKeyPath:  serverCert.KeyPEM,
+	}
+
+	if err := trustee.UploadResources(trusteeNamespace, resources); err != nil {
+		return fmt.Errorf("failed to upload server certificate to KBS: %w", err)
+	}
+
+	fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
+	return nil
 }

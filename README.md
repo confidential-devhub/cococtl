@@ -20,6 +20,7 @@ Read more about CoCo at [confidentialcontainers.org](https://confidentialcontain
 - ✅ **Trustee deployment**: Deploy a Trustee instance in the cluster for testing
 - ✅ **Automatic Secret Conversion**: Detects and converts K8s secrets to sealed format including updating Trustee KBS with the secrets
 - ✅ **ImagePullSecrets Support**: Handles private registry credentials with Trustee KBS integration
+- ✅ **Secure Access Sidecar**: Optional mTLS-secured sidecar for status reporting and secure port forwarding (see [sidecar/README.md](sidecar/README.md))
 - ✅ **Multi-Resource Support**: Works with Pod, Deployment, StatefulSet, ReplicaSet, Job, DaemonSet
 - ✅ **InitData Generation**: Creates properly formatted and encoded configurations
 - ✅ **Backup Management**: Saves transformed manifests with `-coco` suffix
@@ -191,6 +192,9 @@ kubectl coco apply -f app.yaml --runtime-class kata-remote
 # Add attestation initContainer
 kubectl coco apply -f app.yaml --init-container
 
+# Enable secure access sidecar
+kubectl coco apply -f app.yaml --sidecar
+
 # Disable automatic secret conversion
 kubectl coco apply -f app.yaml --convert-secrets=false
 
@@ -199,6 +203,30 @@ kubectl coco apply -f app.yaml --config /path/to/config.toml
 ```
 
 See [TRANSFORMATIONS.md](TRANSFORMATIONS.md) for detailed description on the transformations.
+
+### Secure Access Sidecar
+
+The secure access sidecar provides mTLS-secured HTTPS access to your CoCo pods.
+
+**One-time setup:**
+
+```bash
+kubectl coco init --enable-sidecar
+```
+
+**Deploy with sidecar:**
+
+```bash
+# Basic usage
+kubectl coco apply -f app.yaml --sidecar
+
+# Custom SANs for LoadBalancer or Ingress
+kubectl coco apply -f app.yaml --sidecar \
+  --sidecar-san-ips=203.0.113.10 \
+  --sidecar-san-dns=myapp.example.com
+```
+
+See [sidecar/README.md](sidecar/README.md) for detailed configuration and usage.
 
 ## Configuration File
 
@@ -224,7 +252,20 @@ registry_config_uri = 'kbs:///default/registry-configuration/test'
 [annotations]
 "io.katacontainers.config.runtime.create_container_timeout" = "120"
 "io.katacontainers.config.hypervisor.machine_type" = "q35"
+
+# Secure access sidecar (optional)
+[sidecar]
+enabled = true
+image = "ghcr.io/confidential-devhub/coco-sidecar:latest"  # Optional: custom sidecar image
+https_port = 8443                                          # Optional: HTTPS port (default: 8443)
+forward_port = 8888                                        # Optional: application port to forward
+cpu_limit = "100m"                                         # Optional: CPU limit
+memory_limit = "128Mi"                                     # Optional: memory limit
+cpu_request = "50m"                                        # Optional: CPU request
+memory_request = "64Mi"                                    # Optional: memory request
 ```
+
+**Note:** TLS certificates are auto-generated per-app during `kubectl coco apply --sidecar`.
 
 ## Development
 

@@ -17,7 +17,32 @@ const (
 	DefaultInitContainerCmd   = "curl http://localhost:8006/cdh/resource/default/attestation-status/status"
 	DefaultKBSImage           = "ghcr.io/confidential-containers/key-broker-service:built-in-as-v0.15.0"
 	DefaultPCCSURL            = "https://api.trustedservices.intel.com/sgx/certification/v4/"
+	// Sidecar defaults
+	DefaultSidecarImage       = "quay.io/confidential-devhub/coco-secure-access:latest"
+	DefaultSidecarHTTPSPort   = 8443
+	DefaultSidecarTLSCertURI  = "kbs:///default/sidecar-tls/server-cert"
+	DefaultSidecarTLSKeyURI   = "kbs:///default/sidecar-tls/server-key"
+	DefaultSidecarClientCAURI = "kbs:///default/sidecar-tls/client-ca"
+	DefaultSidecarCPULimit    = "100m"
+	DefaultSidecarMemLimit    = "128Mi"
+	DefaultSidecarCPURequest  = "50m"
+	DefaultSidecarMemRequest  = "64Mi"
 )
+
+// SidecarConfig represents the configuration for the secure access sidecar.
+type SidecarConfig struct {
+	Enabled       bool   `toml:"enabled" comment:"Enable secure access sidecar injection (default: false)"`
+	Image         string `toml:"image" comment:"Sidecar container image (default: ghcr.io/confidential-containers/coco-secure-access:v0.1.0)"`
+	HTTPSPort     int    `toml:"https_port" comment:"HTTPS server port (default: 8443)"`
+	TLSCertURI    string `toml:"tls_cert_uri" comment:"Server TLS certificate KBS URI (required if sidecar enabled)"`
+	TLSKeyURI     string `toml:"tls_key_uri" comment:"Server TLS key KBS URI (required if sidecar enabled)"`
+	ClientCAURI   string `toml:"client_ca_uri" comment:"Client CA certificate KBS URI for mTLS (required if sidecar enabled)"`
+	ForwardPort   int    `toml:"forward_port" comment:"Port to forward from primary container (optional)"`
+	CPULimit      string `toml:"cpu_limit" comment:"CPU limit (default: 100m)"`
+	MemoryLimit   string `toml:"memory_limit" comment:"Memory limit (default: 128Mi)"`
+	CPURequest    string `toml:"cpu_request" comment:"CPU request (default: 50m)"`
+	MemoryRequest string `toml:"memory_request" comment:"Memory request (default: 64Mi)"`
+}
 
 // CocoConfig represents the configuration for CoCo deployments.
 type CocoConfig struct {
@@ -33,6 +58,42 @@ type CocoConfig struct {
 	RegistryCredURI    string            `toml:"registry_cred_uri" comment:"Container registry credentials URI (optional)"`
 	RegistryConfigURI  string            `toml:"registry_config_uri" comment:"Container registry config URI (optional)"`
 	Annotations        map[string]string `toml:"annotations" comment:"Custom annotations to add to pods (optional)"`
+	Sidecar            SidecarConfig     `toml:"sidecar" comment:"Secure access sidecar configuration (optional)"`
+}
+
+// GetTrusteeNamespace extracts the namespace from the Trustee server URL.
+// It parses URLs like "http://trustee-kbs.coco-test.svc.cluster.local:8080"
+// and returns "coco-test". Returns "default" if parsing fails.
+func (c *CocoConfig) GetTrusteeNamespace() string {
+	url := c.TrusteeServer
+
+	// Remove protocol if present
+	url = strings.TrimPrefix(url, "http://")
+	url = strings.TrimPrefix(url, "https://")
+
+	// Remove port if present
+	if idx := strings.Index(url, ":"); idx != -1 {
+		url = url[:idx]
+	}
+
+	// Check for in-cluster service URL format: <service>.<namespace>.svc.cluster.local
+	if strings.HasSuffix(url, ".svc.cluster.local") {
+		parts := strings.Split(url, ".")
+		if len(parts) >= 2 {
+			return parts[1] // Return namespace
+		}
+	}
+
+	// Check for simplified service URL format: <service>.<namespace>.svc
+	if strings.HasSuffix(url, ".svc") {
+		parts := strings.Split(url, ".")
+		if len(parts) >= 2 {
+			return parts[1] // Return namespace
+		}
+	}
+
+	// Default to "default" namespace if we can't parse
+	return "default"
 }
 
 // DefaultConfig returns a default CoCo configuration.
@@ -53,6 +114,18 @@ func DefaultConfig() *CocoConfig {
 			"io.katacontainers.config.runtime.create_container_timeout": "",
 			"io.katacontainers.config.hypervisor.machine_type":          "",
 			"io.katacontainers.config.hypervisor.image":                 "",
+		},
+		Sidecar: SidecarConfig{
+			Enabled:       false,
+			Image:         DefaultSidecarImage,
+			HTTPSPort:     DefaultSidecarHTTPSPort,
+			TLSCertURI:    DefaultSidecarTLSCertURI,
+			TLSKeyURI:     DefaultSidecarTLSKeyURI,
+			ClientCAURI:   DefaultSidecarClientCAURI,
+			CPULimit:      DefaultSidecarCPULimit,
+			MemoryLimit:   DefaultSidecarMemLimit,
+			CPURequest:    DefaultSidecarCPURequest,
+			MemoryRequest: DefaultSidecarMemRequest,
 		},
 	}
 }
@@ -104,7 +177,42 @@ func Load(path string) (*CocoConfig, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	// Apply defaults for sidecar if not set
+	applyDefaults(&cfg)
+
 	return &cfg, nil
+}
+
+// applyDefaults applies default values to config fields if they are not set.
+func applyDefaults(cfg *CocoConfig) {
+	// Apply sidecar defaults
+	if cfg.Sidecar.Image == "" {
+		cfg.Sidecar.Image = DefaultSidecarImage
+	}
+	if cfg.Sidecar.HTTPSPort == 0 {
+		cfg.Sidecar.HTTPSPort = DefaultSidecarHTTPSPort
+	}
+	if cfg.Sidecar.TLSCertURI == "" {
+		cfg.Sidecar.TLSCertURI = DefaultSidecarTLSCertURI
+	}
+	if cfg.Sidecar.TLSKeyURI == "" {
+		cfg.Sidecar.TLSKeyURI = DefaultSidecarTLSKeyURI
+	}
+	if cfg.Sidecar.ClientCAURI == "" {
+		cfg.Sidecar.ClientCAURI = DefaultSidecarClientCAURI
+	}
+	if cfg.Sidecar.CPULimit == "" {
+		cfg.Sidecar.CPULimit = DefaultSidecarCPULimit
+	}
+	if cfg.Sidecar.MemoryLimit == "" {
+		cfg.Sidecar.MemoryLimit = DefaultSidecarMemLimit
+	}
+	if cfg.Sidecar.CPURequest == "" {
+		cfg.Sidecar.CPURequest = DefaultSidecarCPURequest
+	}
+	if cfg.Sidecar.MemoryRequest == "" {
+		cfg.Sidecar.MemoryRequest = DefaultSidecarMemRequest
+	}
 }
 
 // Save writes the configuration to the specified path.

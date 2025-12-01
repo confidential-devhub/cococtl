@@ -727,6 +727,26 @@ func (m *Manifest) RemoveImagePullSecrets() error {
 	return nil
 }
 
+// AddSidecarContainer adds a sidecar container to the pod spec
+func (m *Manifest) AddSidecarContainer(container map[string]interface{}) error {
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		return err
+	}
+
+	// Get existing containers
+	containers, ok := podSpec["containers"].([]interface{})
+	if !ok {
+		containers = []interface{}{}
+	}
+
+	// Append sidecar container
+	containers = append(containers, container)
+	podSpec["containers"] = containers
+
+	return nil
+}
+
 // ConvertEnvFromSecret converts envFrom secretRef to individual env vars with sealed secrets
 func (m *Manifest) ConvertEnvFromSecret(containerName, secretName string, sealedSecretsMap map[string]string) error {
 	podSpec, err := m.GetPodSpec()
