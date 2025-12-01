@@ -617,10 +617,12 @@ func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error 
 	caCertPath := filepath.Join(certDir, "ca-cert.pem")
 	caKeyPath := filepath.Join(certDir, "ca-key.pem")
 
+	// #nosec G304 -- Reading from known, trusted location in user's home directory
 	caCert, err := os.ReadFile(caCertPath)
 	if err != nil {
 		return fmt.Errorf("failed to read client CA cert (run 'kubectl coco init --enable-sidecar' first): %w", err)
 	}
+	// #nosec G304 -- Reading from known, trusted location in user's home directory
 	caKey, err := os.ReadFile(caKeyPath)
 	if err != nil {
 		return fmt.Errorf("failed to read client CA key: %w", err)

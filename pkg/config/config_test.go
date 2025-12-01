@@ -6,9 +6,9 @@ import (
 
 func TestApplyDefaults(t *testing.T) {
 	tests := []struct {
-		name   string
-		cfg    *CocoConfig
-		check  func(*testing.T, *CocoConfig)
+		name  string
+		cfg   *CocoConfig
+		check func(*testing.T, *CocoConfig)
 	}{
 		{
 			name: "empty sidecar config gets defaults",
@@ -18,6 +18,7 @@ func TestApplyDefaults(t *testing.T) {
 				},
 			},
 			check: func(t *testing.T, cfg *CocoConfig) {
+				t.Helper()
 				if cfg.Sidecar.Image != DefaultSidecarImage {
 					t.Errorf("Expected default image %s, got %s", DefaultSidecarImage, cfg.Sidecar.Image)
 				}
@@ -62,6 +63,7 @@ func TestApplyDefaults(t *testing.T) {
 				},
 			},
 			check: func(t *testing.T, cfg *CocoConfig) {
+				t.Helper()
 				if cfg.Sidecar.Image != "custom:v1" {
 					t.Errorf("Custom image was changed, got %s", cfg.Sidecar.Image)
 				}
@@ -96,6 +98,7 @@ func TestApplyDefaults(t *testing.T) {
 				},
 			},
 			check: func(t *testing.T, cfg *CocoConfig) {
+				t.Helper()
 				if cfg.Sidecar.Image != "custom:v1" {
 					t.Errorf("Custom image was changed, got %s", cfg.Sidecar.Image)
 				}
