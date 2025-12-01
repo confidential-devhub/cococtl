@@ -291,6 +291,45 @@ func (m *Manifest) GetPodSpec() (map[string]interface{}, error) {
 	return spec, nil
 }
 
+// GetPodLabels returns labels from the pod template (for Deployments/etc) or pod metadata (for Pods)
+func (m *Manifest) GetPodLabels() (map[string]interface{}, error) {
+	kind := m.GetKind()
+
+	// For workload resources, get labels from pod template
+	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+		spec, err := m.GetSpec()
+		if err != nil {
+			return nil, err
+		}
+
+		template, ok := spec["template"].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("template field not found in %s spec", kind)
+		}
+
+		metadata, ok := template["metadata"].(map[string]interface{})
+		if !ok {
+			return make(map[string]interface{}), nil
+		}
+
+		labels, ok := metadata["labels"].(map[string]interface{})
+		if !ok {
+			return make(map[string]interface{}), nil
+		}
+
+		return labels, nil
+	}
+
+	// For Pod, get labels from resource metadata
+	if metadata, ok := m.data["metadata"].(map[string]interface{}); ok {
+		if labels, ok := metadata["labels"].(map[string]interface{}); ok {
+			return labels, nil
+		}
+	}
+
+	return make(map[string]interface{}), nil
+}
+
 // GetSecretRefs returns all secret references in the manifest
 func (m *Manifest) GetSecretRefs() []string {
 	secrets := make(map[string]bool)

@@ -226,6 +226,8 @@ kubectl coco apply -f app.yaml --sidecar \
   --sidecar-san-dns=myapp.example.com
 ```
 
+**Note:** When `--sidecar` is enabled, a Kubernetes Service (ClusterIP type) is automatically created with the name `<app-name>-sidecar` to expose the sidecar's HTTPS port. You can convert it to NodePort or use it with an Ingress for external access.
+
 See [sidecar/README.md](sidecar/README.md) for detailed configuration and usage.
 
 ## Configuration File

@@ -17,6 +17,7 @@ import (
 	"github.com/confidential-devhub/cococtl/pkg/sidecar/certs"
 	"github.com/confidential-devhub/cococtl/pkg/trustee"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -44,19 +45,19 @@ Example:
 }
 
 var (
-	manifestFile           string
-	runtimeClass           string
-	addInitContainer       bool
-	initContainerImg       string
-	initContainerCmd       string
-	skipApply              bool
-	configPath             string
-	convertSecrets         bool
-	enableSidecar          bool
-	sidecarImage           string
-	sidecarSANIPs          string
-	sidecarSANDNS          string
-	sidecarSkipAutoSANs    bool
+	manifestFile        string
+	runtimeClass        string
+	addInitContainer    bool
+	initContainerImg    string
+	initContainerCmd    string
+	skipApply           bool
+	configPath          string
+	convertSecrets      bool
+	enableSidecar       bool
+	sidecarImage        string
+	sidecarSANIPs       string
+	sidecarSANDNS       string
+	sidecarSkipAutoSANs bool
 )
 
 func init() {
@@ -133,12 +134,57 @@ func runApply(_ *cobra.Command, _ []string) error {
 	}
 	fmt.Printf("Backup saved to: %s\n", backupPath)
 
-	// Apply manifest if not skipped
+	// Generate and save Service manifest for sidecar if enabled
+	var servicePath string
+	if enableSidecar || cfg.Sidecar.Enabled {
+		appName := m.GetName()
+		namespace := m.GetNamespace()
+		if namespace == "" {
+			var err error
+			namespace, err = getCurrentNamespace()
+			if err != nil {
+				return fmt.Errorf("failed to get current namespace: %w", err)
+			}
+		}
+
+		fmt.Println("Generating Service manifest for sidecar...")
+		serviceManifest, err := sidecar.GenerateService(m, cfg, appName, namespace)
+		if err != nil {
+			return fmt.Errorf("failed to generate sidecar Service: %w", err)
+		}
+
+		if len(serviceManifest) > 0 {
+			// Save Service manifest with -sidecar-service suffix
+			servicePath = strings.TrimSuffix(backupPath, ".yaml")
+			servicePath = strings.TrimSuffix(servicePath, "-coco") + "-sidecar-service.yaml"
+
+			serviceData, err := yaml.Marshal(serviceManifest)
+			if err != nil {
+				return fmt.Errorf("failed to marshal Service manifest: %w", err)
+			}
+
+			if err := os.WriteFile(servicePath, serviceData, 0600); err != nil {
+				return fmt.Errorf("failed to write Service manifest: %w", err)
+			}
+			fmt.Printf("Sidecar Service manifest saved to: %s\n", servicePath)
+		}
+	}
+
+	// Apply manifests if not skipped
 	if !skipApply {
 		fmt.Println("Applying manifest with kubectl...")
 		if err := applyWithKubectl(backupPath); err != nil {
 			return fmt.Errorf("failed to apply manifest: %w", err)
 		}
+
+		// Apply Service manifest if generated
+		if servicePath != "" {
+			fmt.Println("Applying sidecar Service manifest with kubectl...")
+			if err := applyWithKubectl(servicePath); err != nil {
+				return fmt.Errorf("failed to apply sidecar Service: %w", err)
+			}
+		}
+
 		fmt.Println("Successfully applied!")
 	} else {
 		fmt.Println("Skipping kubectl apply (use --skip-apply=false to apply)")
@@ -205,7 +251,12 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 		}
 		namespace := m.GetNamespace()
 		if namespace == "" {
-			namespace = "default"
+			// Use current kubectl namespace instead of hardcoding "default"
+			var err error
+			namespace, err = getCurrentNamespace()
+			if err != nil {
+				return fmt.Errorf("failed to get current namespace: %w", err)
+			}
 		}
 
 		// Get Trustee namespace from config (where KBS is deployed)
