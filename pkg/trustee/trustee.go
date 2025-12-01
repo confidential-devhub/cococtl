@@ -108,11 +108,34 @@ func GetServiceURL(namespace, serviceName string) string {
 }
 
 func ensureNamespace(namespace string) error {
-	cmd := exec.Command("kubectl", "create", "namespace", namespace)
+	// Check if namespace exists by trying to access it (namespace-level permission)
+	// This is more reliable than 'kubectl get namespace' which requires cluster-level permissions
+	cmd := exec.Command("kubectl", "get", "serviceaccounts", "-n", namespace, "--limit=1")
 	output, err := cmd.CombinedOutput()
-	if err != nil && !strings.Contains(string(output), "AlreadyExists") {
-		return fmt.Errorf("failed to create namespace: %w\n%s", err, output)
+	if err == nil {
+		// Successfully accessed resources in namespace, so it exists
+		return nil
 	}
+
+	// Check if the error indicates namespace doesn't exist
+	outputStr := string(output)
+	namespaceNotFound := strings.Contains(outputStr, "NotFound") ||
+		strings.Contains(outputStr, "not found") ||
+		strings.Contains(outputStr, fmt.Sprintf("namespace \"%s\" not found", namespace))
+
+	if namespaceNotFound {
+		// Namespace doesn't exist, try to create it
+		cmd = exec.Command("kubectl", "create", "namespace", namespace)
+		output, err = cmd.CombinedOutput()
+		if err != nil && !strings.Contains(string(output), "AlreadyExists") {
+			return fmt.Errorf("failed to create namespace: %w\n%s", err, output)
+		}
+		return nil
+	}
+
+	// For any other error (e.g., Forbidden when user lacks namespace creation permissions
+	// but namespace exists), assume namespace exists and proceed.
+	// Subsequent operations will fail appropriately if the namespace truly doesn't exist.
 	return nil
 }
 
