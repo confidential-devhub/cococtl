@@ -58,6 +58,7 @@ var (
 	sidecarSANIPs       string
 	sidecarSANDNS       string
 	sidecarSkipAutoSANs bool
+	sidecarPortForward  int
 )
 
 func init() {
@@ -76,6 +77,7 @@ func init() {
 	applyCmd.Flags().StringVar(&sidecarSANIPs, "sidecar-san-ips", "", "Comma-separated list of IP addresses for sidecar server certificate SANs")
 	applyCmd.Flags().StringVar(&sidecarSANDNS, "sidecar-san-dns", "", "Comma-separated list of DNS names for sidecar server certificate SANs")
 	applyCmd.Flags().BoolVar(&sidecarSkipAutoSANs, "sidecar-skip-auto-sans", false, "Skip auto-detection of SANs (node IPs and service DNS)")
+	applyCmd.Flags().IntVar(&sidecarPortForward, "sidecar-port-forward", 0, "Port to forward from primary container (requires --sidecar)")
 
 	if err := applyCmd.MarkFlagRequired("filename"); err != nil {
 		panic(fmt.Sprintf("failed to mark filename flag as required: %v", err))
@@ -120,6 +122,11 @@ func runApply(_ *cobra.Command, _ []string) error {
 	// Validate initContainer flags
 	if (initContainerImg != "" || initContainerCmd != "") && !addInitContainer {
 		return fmt.Errorf("--init-container-img and --init-container-cmd require --init-container flag")
+	}
+
+	// Validate sidecar flags
+	if sidecarPortForward > 0 && !enableSidecar && !cfg.Sidecar.Enabled {
+		return fmt.Errorf("--sidecar-port-forward requires --sidecar flag or sidecar enabled in config")
 	}
 
 	// Transform manifest
@@ -242,6 +249,11 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 		// CLI flag can override image
 		if sidecarImage != "" {
 			cfg.Sidecar.Image = sidecarImage
+		}
+
+		// CLI flag can override port forward
+		if sidecarPortForward > 0 {
+			cfg.Sidecar.ForwardPort = sidecarPortForward
 		}
 
 		// Extract app name and namespace for per-app certificate URIs

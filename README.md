@@ -220,6 +220,9 @@ kubectl coco init --enable-sidecar
 # Basic usage
 kubectl coco apply -f app.yaml --sidecar
 
+# Enable port forwarding from primary container
+kubectl coco apply -f app.yaml --sidecar --sidecar-port-forward 8888
+
 # Custom SANs for LoadBalancer or Ingress
 kubectl coco apply -f app.yaml --sidecar \
   --sidecar-san-ips=203.0.113.10 \
