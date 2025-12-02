@@ -1,6 +1,7 @@
 package trustee
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
 	"os/exec"
@@ -77,7 +78,6 @@ func WaitForKBSReady(namespace string) error {
 	return nil
 }
 
-// populateSecrets is now internal but still used by the original Deploy function.
 // It uploads multiple secrets to KBS via kubectl cp.
 func populateSecrets(namespace string, secrets []SecretResource) error {
 	if len(secrets) == 0 {
@@ -93,13 +93,16 @@ func populateSecrets(namespace string, secrets []SecretResource) error {
 		return err
 	}
 
-	tmpDir, err := os.MkdirTemp("", "kbs-secrets-*")
+	// Use empty prefix for unpredictable temp directory name (more secure)
+	tmpDir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
+
+	// Ensure secure cleanup even on panic or error
 	defer func() {
-		if err := os.RemoveAll(tmpDir); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to remove temp directory %s: %v\n", tmpDir, err)
+		if err := secureDeleteDir(tmpDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to securely delete temp directory %s: %v\n", tmpDir, err)
 		}
 	}()
 
@@ -108,11 +111,12 @@ func populateSecrets(namespace string, secrets []SecretResource) error {
 		resourcePath = strings.TrimPrefix(resourcePath, "/")
 
 		fullPath := filepath.Join(tmpDir, resourcePath)
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0750); err != nil {
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0700); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
 
-		if err := os.WriteFile(fullPath, secret.Data, 0600); err != nil {
+		// Write with strict permissions
+		if err := writeSecretFile(fullPath, secret.Data); err != nil {
 			return fmt.Errorf("failed to write secret: %w", err)
 		}
 	}
@@ -123,6 +127,145 @@ func populateSecrets(namespace string, secrets []SecretResource) error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to copy secrets to KBS: %w\n%s", err, output)
+	}
+
+	return nil
+}
+
+// writeSecretFile writes secret data with strict permissions, bypassing umask.
+func writeSecretFile(path string, data []byte) error {
+	// #nosec G304 -- Path is constructed from KBS resource URI and tmpDir (both controlled)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close file %s: %v\n", path, closeErr)
+		}
+	}()
+
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+
+	// Explicitly set permissions to ensure 0600 regardless of umask
+	return f.Chmod(0600)
+}
+
+// secureDeleteDir securely deletes a directory by overwriting all files before removal.
+// This prevents forensic recovery of sensitive cryptographic material.
+func secureDeleteDir(dir string) error {
+	// Walk directory and overwrite all regular files
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Only overwrite regular files, not directories or symlinks
+		if info.Mode().IsRegular() {
+			if err := secureDeleteFile(path, info.Size()); err != nil {
+				// Log but continue - best effort deletion
+				fmt.Fprintf(os.Stderr, "Warning: failed to securely delete %s: %v\n", path, err)
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		// Continue with removal even if overwrite failed
+		fmt.Fprintf(os.Stderr, "Warning: errors during secure deletion: %v\n", err)
+	}
+
+	// Remove the directory after overwriting files
+	return os.RemoveAll(dir)
+}
+
+// secureDeleteFile overwrites a file with random data before deletion.
+// Performs 3-pass overwrite: random, zeros, random
+func secureDeleteFile(path string, size int64) error {
+	if size == 0 {
+		return nil // Empty file, nothing to overwrite
+	}
+
+	// #nosec G304 -- Path comes from filepath.Walk in secureDeleteDir, validated as regular file
+	f, err := os.OpenFile(path, os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close file %s: %v\n", path, closeErr)
+		}
+	}()
+
+	// Allocate buffer for overwriting (max 1MB chunks for large files)
+	bufSize := int64(1024 * 1024)
+	if size < bufSize {
+		bufSize = size
+	}
+	buf := make([]byte, bufSize)
+
+	// Pass 1: Random data
+	for written := int64(0); written < size; {
+		toWrite := bufSize
+		if size-written < bufSize {
+			toWrite = size - written
+		}
+		// Fill buffer with cryptographically secure random data
+		if _, err := rand.Read(buf[:toWrite]); err != nil {
+			return fmt.Errorf("pass 1 random generation failed: %w", err)
+		}
+		if _, err := f.Write(buf[:toWrite]); err != nil {
+			return fmt.Errorf("pass 1 write failed: %w", err)
+		}
+		written += toWrite
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("pass 1 sync failed: %w", err)
+	}
+
+	// Pass 2: Zeros
+	if _, err := f.Seek(0, 0); err != nil {
+		return fmt.Errorf("seek before pass 2 failed: %w", err)
+	}
+	for i := range buf {
+		buf[i] = 0
+	}
+	for written := int64(0); written < size; {
+		toWrite := bufSize
+		if size-written < bufSize {
+			toWrite = size - written
+		}
+		if _, err := f.Write(buf[:toWrite]); err != nil {
+			return fmt.Errorf("pass 2 write failed: %w", err)
+		}
+		written += toWrite
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("pass 2 sync failed: %w", err)
+	}
+
+	// Pass 3: Random data again
+	if _, err := f.Seek(0, 0); err != nil {
+		return fmt.Errorf("seek before pass 3 failed: %w", err)
+	}
+	for written := int64(0); written < size; {
+		toWrite := bufSize
+		if size-written < bufSize {
+			toWrite = size - written
+		}
+		// Fill buffer with cryptographically secure random data
+		if _, err := rand.Read(buf[:toWrite]); err != nil {
+			return fmt.Errorf("pass 3 random generation failed: %w", err)
+		}
+		if _, err := f.Write(buf[:toWrite]); err != nil {
+			return fmt.Errorf("pass 3 write failed: %w", err)
+		}
+		written += toWrite
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("pass 3 sync failed: %w", err)
 	}
 
 	return nil
