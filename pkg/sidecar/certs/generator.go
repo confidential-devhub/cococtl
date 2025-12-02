@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	rsaKeySize    = 4096
-	caValidityYears    = 10
-	certValidityYears  = 1
+	rsaKeySize        = 4096
+	caValidityYears   = 2
+	certValidityYears = 1
 )
 
 // CertificateSet holds a certificate and its private key in PEM format.
@@ -221,6 +221,8 @@ func GenerateClientCert(caCert, caKey []byte, commonName string) (*CertificateSe
 }
 
 // SaveToFile saves a certificate set to files in the specified directory.
+// Files are created with strict permissions (0600) to protect cryptographic material.
+// Note: Uses os.OpenFile with explicit mode to bypass umask.
 func (cs *CertificateSet) SaveToFile(dir, baseName string) error {
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
@@ -229,12 +231,42 @@ func (cs *CertificateSet) SaveToFile(dir, baseName string) error {
 	certPath := filepath.Join(dir, baseName+"-cert.pem")
 	keyPath := filepath.Join(dir, baseName+"-key.pem")
 
-	if err := os.WriteFile(certPath, cs.CertPEM, 0600); err != nil {
+	// Use OpenFile with O_CREATE to ensure exact permissions regardless of umask
+	if err := writeFileSecure(certPath, cs.CertPEM); err != nil {
 		return fmt.Errorf("failed to write certificate to %s: %w", certPath, err)
 	}
 
-	if err := os.WriteFile(keyPath, cs.KeyPEM, 0600); err != nil {
+	if err := writeFileSecure(keyPath, cs.KeyPEM); err != nil {
 		return fmt.Errorf("failed to write private key to %s: %w", keyPath, err)
+	}
+
+	return nil
+}
+
+// writeFileSecure writes data to file with strict 0600 permissions.
+// Uses os.OpenFile to bypass umask and ensure exact permissions.
+func writeFileSecure(path string, data []byte) error {
+	// O_WRONLY|O_CREATE|O_TRUNC: write-only, create if not exists, truncate if exists
+	// 0600: read/write for owner only, regardless of umask
+	// #nosec G304 -- Path is constructed from trusted baseName parameter in SaveToFile
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			// Log close error but don't override primary error
+			fmt.Fprintf(os.Stderr, "Warning: failed to close file %s: %v\n", path, closeErr)
+		}
+	}()
+
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+
+	// Explicitly chmod to ensure permissions are set correctly
+	if err := f.Chmod(0600); err != nil {
+		return err
 	}
 
 	return nil

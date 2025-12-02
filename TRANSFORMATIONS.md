@@ -75,7 +75,7 @@ For each secret found:
    - Sealed: `db-creds-sealed`
 4. **Update manifest**: Replace all references to use sealed secret name
 5. **Upload to KBS** (automatic): Adds actual secret values to Trustee KBS repository
-6. **Generate config**: Creates `*-trustee-secrets.json` for reference
+6. **Generate config**: Creates `*-trustee-secrets.yaml` for reference
 
 #### Sealed Secret Format
 

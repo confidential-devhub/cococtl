@@ -29,8 +29,24 @@ The sidecar addresses the CoCo trust model where the **control plane is untruste
 - Reverse proxy for a single application port
 - HTTPS-secured access to application service like Jupyter etc.
 - Application served at root `/` for seamless integration
-- No application configuration needed (no base_url required)
 - Configurable via `FORWARD_PORT` environment variable
+- Sets standard reverse proxy headers: `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-For`
+
+## Application Configuration
+
+The sidecar acts as a standard reverse proxy and **most applications work without any configuration changes**, including:
+
+- ✅ **Jupyter Notebook / JupyterLab** - Works out of the box
+- ✅ **Static content** (nginx, Apache)
+- ✅ **Most web frameworks** - No changes needed
+
+The sidecar preserves the original `Host` header and sets standard `X-Forwarded-*` headers, so applications see matching Origin/Host and work correctly.
+
+In some cases, applications may need explicit configuration:
+
+- **Custom CORS policies** - If app has strict origin allowlists
+- **Client IP logging** - If app needs to read `X-Forwarded-For` for real client IP
+- **URL generation** - If app generates absolute URLs and needs `X-Forwarded-Proto`
 
 ## Building
 

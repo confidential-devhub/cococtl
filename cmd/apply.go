@@ -433,21 +433,26 @@ func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool)
 		return err
 	}
 
-	// 6. Add secrets to Trustee KBS repository (temporary solution)
+	// 6. Add secrets to Trustee KBS repository (only if not skipping apply)
+	// FIXME: Use proper Trustee apis/CLI to add the secrets
 	autoUploadSuccess := false
-	trusteeNamespace, err := getTrusteeNamespace(cfg.TrusteeServer)
-	if err != nil {
-		fmt.Printf("  ⚠ Warning: Could not determine Trustee namespace from URL: %v\n", err)
-		fmt.Println("    Skipping automatic secret upload to Trustee")
-	} else {
-		fmt.Println("  - Adding secrets to Trustee KBS repository")
-		if err := addSecretsToTrustee(secretRefs, trusteeNamespace); err != nil {
-			fmt.Printf("  ⚠ Warning: Failed to add secrets to Trustee: %v\n", err)
-			fmt.Println("    You will need to add secrets manually")
+	if !skipApply {
+		trusteeNamespace, err := getTrusteeNamespace(cfg.TrusteeServer)
+		if err != nil {
+			fmt.Printf("  ⚠ Warning: Could not determine Trustee namespace from URL: %v\n", err)
+			fmt.Println("    Skipping automatic secret upload to Trustee")
 		} else {
-			fmt.Printf("  ✓ Successfully added %d secret(s) to Trustee\n", len(secretRefs))
-			autoUploadSuccess = true
+			fmt.Println("  - Adding secrets to Trustee KBS repository")
+			if err := addSecretsToTrustee(secretRefs, trusteeNamespace); err != nil {
+				fmt.Printf("  ⚠ Warning: Failed to add secrets to Trustee: %v\n", err)
+				fmt.Println("    You will need to add secrets manually")
+			} else {
+				fmt.Printf("  ✓ Successfully added %d secret(s) to Trustee\n", len(secretRefs))
+				autoUploadSuccess = true
+			}
 		}
+	} else {
+		fmt.Println("  - Skipping Trustee upload (--skip-apply mode)")
 	}
 
 	// 7. Generate Trustee configuration
@@ -456,7 +461,7 @@ func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool)
 		ext = ".yaml"
 	}
 	baseName := strings.TrimSuffix(manifestFile, ext)
-	trusteeConfigPath := baseName + "-trustee-secrets.json"
+	trusteeConfigPath := baseName + "-trustee-secrets.yaml"
 
 	if err := secrets.GenerateTrusteeConfig(sealedSecrets, trusteeConfigPath); err != nil {
 		return fmt.Errorf("failed to generate Trustee config: %w", err)

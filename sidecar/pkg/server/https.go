@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -154,10 +155,33 @@ func (s *HTTPSServer) createReverseProxy(targetPort int) http.Handler {
 	// Create reverse proxy that forwards all requests directly to the backend
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
+			// Save original values before modification
+			originalHost := req.Host
+			originalScheme := "https" // We're receiving HTTPS
+
+			// Update URL for backend
 			req.URL.Scheme = target.Scheme
 			req.URL.Host = target.Host
-			req.Host = target.Host
-			log.Printf("Proxying request to port %d: %s %s", targetPort, req.Method, req.URL.Path)
+
+			// IMPORTANT: Do NOT override req.Host - preserve original for CORS
+			// This allows applications like Jupyter to validate the Origin header correctly
+
+			// Set standard reverse proxy headers
+			if req.Header.Get("X-Forwarded-Host") == "" {
+				req.Header.Set("X-Forwarded-Host", originalHost)
+			}
+			if req.Header.Get("X-Forwarded-Proto") == "" {
+				req.Header.Set("X-Forwarded-Proto", originalScheme)
+			}
+			if req.Header.Get("X-Forwarded-For") == "" {
+				// Get client IP from remote address
+				if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
+					req.Header.Set("X-Forwarded-For", clientIP)
+					req.Header.Set("X-Real-IP", clientIP)
+				}
+			}
+
+			log.Printf("Proxying request to port %d: %s %s (Host: %s)", targetPort, req.Method, req.URL.Path, originalHost)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("ERROR: Reverse proxy error for port %d, path %s: %v", targetPort, r.URL.Path, err)

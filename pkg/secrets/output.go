@@ -6,18 +6,20 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TrusteeSecretEntry represents one secret in Trustee config
 type TrusteeSecretEntry struct {
-	ResourceURI  string                 `json:"resourceUri"`
-	SealedSecret string                 `json:"sealedSecret"`
-	JSON         map[string]interface{} `json:"json"` // The unsealed JSON spec
+	ResourceURI  string                 `yaml:"resourceUri"`
+	SealedSecret string                 `yaml:"sealedSecret"`
+	JSON         map[string]interface{} `yaml:"json"` // The unsealed JSON spec
 }
 
 // TrusteeConfig is the output configuration file
 type TrusteeConfig struct {
-	Secrets []TrusteeSecretEntry `json:"secrets"`
+	Secrets []TrusteeSecretEntry `yaml:"secrets"`
 }
 
 // GenerateTrusteeConfig creates the Trustee configuration file
@@ -41,8 +43,8 @@ func GenerateTrusteeConfig(sealedSecrets []*SealedSecretData, outputPath string)
 		config.Secrets = append(config.Secrets, entry)
 	}
 
-	// Marshal to JSON with indentation
-	data, err := json.MarshalIndent(config, "", "  ")
+	// Marshal to YAML
+	data, err := yaml.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Trustee config: %w", err)
 	}
