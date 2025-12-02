@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: notebook
+  labels:
+    app: notebook
+  annotations:
+    io.katacontainers.config.hypervisor.default_vcpus: "2"
+    io.katacontainers.config.hypervisor.default_memory: "8192"
+spec:
+  containers:
+    - name: notebook
+      image: quay.io/jupyter/base-notebook:notebook-7.5.0
+      securityContext:
+        privileged: false
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: workdir
+          mountPath: /home/jovyan
+  volumes:
+    - name: workdir
+      emptyDir:
+        medium: Memory
+

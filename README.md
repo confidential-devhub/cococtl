@@ -67,6 +67,8 @@ That's it! Your application is now CoCo-enabled with:
 - Secrets automatically uploaded to Trustee KBS
 - Proper runtime and initdata configured
 
+**Note:** There are some sample manifests under `examples` folder which you can try.
+
 ## What Gets Transformed
 
 `kubectl-coco` performs these transformations:
