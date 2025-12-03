@@ -6,12 +6,12 @@ import (
 
 // SecretUsage tracks how a secret is used in the manifest
 type SecretUsage struct {
-	Type          string // "env", "volume", "envFrom", "imagePullSecrets"
-	ContainerName string // Name of the container using the secret
-	EnvVarName    string // For env type: name of the environment variable
-	Key           string // For env type: specific key from secret (if known)
-	VolumeName    string // For volume type: name of the volume
-	MountPath     string // For volume type: mount path in container
+	Type          string   // "env", "volume", "envFrom", "imagePullSecrets"
+	ContainerName string   // Name of the container using the secret
+	EnvVarName    string   // For env type: name of the environment variable
+	Key           string   // For env type: specific key from secret (if known)
+	VolumeName    string   // For volume type: name of the volume
+	MountPath     string   // For volume type: mount path in container
 	Items         []string // For volume type: specific keys to mount (if specified)
 }
 

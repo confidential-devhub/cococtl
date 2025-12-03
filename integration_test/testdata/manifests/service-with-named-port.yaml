@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-named-port
+  labels:
+    app: named-port-test
+spec:
+  containers:
+  - name: app
+    image: app:latest
+    ports:
+    - name: http
+      containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: named-port-service
+spec:
+  selector:
+    app: named-port-test
+  ports:
+  - port: 80
+    targetPort: http
+    protocol: TCP

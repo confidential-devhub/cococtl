@@ -277,9 +277,9 @@ func TestCertificateChain(t *testing.T) {
 
 	// Verify all certificates are valid PEM
 	certs := []struct {
-		name     string
-		certPEM  []byte
-		keyPEM   []byte
+		name    string
+		certPEM []byte
+		keyPEM  []byte
 	}{
 		{"CA", ca.CertPEM, ca.KeyPEM},
 		{"Server", serverCert.CertPEM, serverCert.KeyPEM},

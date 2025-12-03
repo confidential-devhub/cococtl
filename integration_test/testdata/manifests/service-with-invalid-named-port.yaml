@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-invalid-named-port
+  labels:
+    app: invalid-named-port-test
+spec:
+  containers:
+  - name: app
+    image: app:latest
+    ports:
+    - name: http
+      containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: invalid-named-port-service
+spec:
+  selector:
+    app: invalid-named-port-test
+  ports:
+  - port: 80
+    targetPort: https  # This named port doesn't exist in pod
+    protocol: TCP

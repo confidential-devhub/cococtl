@@ -134,7 +134,6 @@ func TestSidecarInject_Deployment(t *testing.T) {
 	}
 }
 
-
 func TestSidecarInject_WithForwardPort(t *testing.T) {
 	m, err := manifest.Load("testdata/manifests/simple-pod.yaml")
 	if err != nil {
@@ -143,9 +142,9 @@ func TestSidecarInject_WithForwardPort(t *testing.T) {
 
 	cfg := &config.CocoConfig{
 		Sidecar: config.SidecarConfig{
-			Enabled:      true,
-			Image:        "test-sidecar:latest",
-			HTTPSPort:    8443,
+			Enabled:     true,
+			Image:       "test-sidecar:latest",
+			HTTPSPort:   8443,
 			ForwardPort: 8888,
 		},
 	}

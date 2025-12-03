@@ -45,7 +45,8 @@ func validateConfig(cfg *config.CocoConfig) error {
 
 // GenerateCertURIs generates per-app certificate URIs for the sidecar.
 // Format: kbs:///<namespace>/sidecar-tls-<appName>/server-{cert|key}
-//         kbs:///default/sidecar-tls/client-ca (global, always in default namespace)
+//
+//	kbs:///default/sidecar-tls/client-ca (global, always in default namespace)
 func GenerateCertURIs(appName, namespace string) (serverCertURI, serverKeyURI, clientCAURI string) {
 	certPrefix := fmt.Sprintf("kbs:///%s/sidecar-tls-%s", namespace, appName)
 	serverCertURI = certPrefix + "/server-cert"

@@ -16,6 +16,12 @@ type Manifest struct {
 	path string
 }
 
+// ManifestSet represents a collection of Kubernetes manifests from a multi-document YAML file.
+type ManifestSet struct {
+	manifests []*Manifest
+	path      string
+}
+
 // Load reads and parses a Kubernetes manifest from a file.
 func Load(path string) (*Manifest, error) {
 	// Validate and sanitize the path to prevent directory traversal
@@ -60,6 +66,239 @@ func Load(path string) (*Manifest, error) {
 		data: manifestData,
 		path: cleanPath,
 	}, nil
+}
+
+// LoadMultiDocument reads and parses a multi-document Kubernetes manifest file.
+// It handles YAML files with multiple documents separated by '---'.
+// Returns a ManifestSet containing all documents. If only one document is found,
+// it still returns a ManifestSet with a single Manifest for consistency.
+func LoadMultiDocument(path string) (*ManifestSet, error) {
+	// Validate and sanitize the path to prevent directory traversal
+	// Source - https://stackoverflow.com/a/57534618
+	// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
+	// Retrieved 2025-11-14, License - CC BY-SA 4.0
+	cleanPath := filepath.Clean(path)
+
+	// For absolute paths, validate they don't escape the filesystem root
+	// For relative paths, ensure they're relative to current directory
+	if filepath.IsAbs(cleanPath) {
+		// Absolute paths are allowed for manifest files
+		// but ensure path doesn't contain traversal attempts
+		if strings.Contains(path, "..") {
+			return nil, fmt.Errorf("invalid manifest path: contains directory traversal")
+		}
+	} else {
+		// For relative paths, ensure they resolve within current directory
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current directory: %w", err)
+		}
+		absPath := filepath.Join(cwd, cleanPath)
+		if !strings.HasPrefix(absPath, cwd) {
+			return nil, fmt.Errorf("invalid manifest path: escapes current directory")
+		}
+		cleanPath = absPath
+	}
+
+	// #nosec G304 - Path is validated above
+	data, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read manifest file: %w", err)
+	}
+
+	// Split by YAML document separator
+	documents := strings.Split(string(data), "\n---")
+	if len(documents) == 0 {
+		return nil, fmt.Errorf("no documents found in manifest file")
+	}
+
+	manifests := make([]*Manifest, 0, len(documents))
+	for i, doc := range documents {
+		// Skip empty documents
+		trimmed := strings.TrimSpace(doc)
+		if trimmed == "" || trimmed == "---" {
+			continue
+		}
+
+		var manifestData map[string]interface{}
+		if err := yaml.Unmarshal([]byte(doc), &manifestData); err != nil {
+			return nil, fmt.Errorf("failed to parse YAML document %d: %w", i+1, err)
+		}
+
+		// Skip empty manifests (e.g., only comments)
+		if len(manifestData) == 0 {
+			continue
+		}
+
+		manifests = append(manifests, &Manifest{
+			data: manifestData,
+			path: cleanPath,
+		})
+	}
+
+	if len(manifests) == 0 {
+		return nil, fmt.Errorf("no valid documents found in manifest file")
+	}
+
+	return &ManifestSet{
+		manifests: manifests,
+		path:      cleanPath,
+	}, nil
+}
+
+// GetManifests returns all manifests in the set.
+func (ms *ManifestSet) GetManifests() []*Manifest {
+	return ms.manifests
+}
+
+// GetPrimaryManifest returns the first workload manifest (Pod, Deployment, etc.).
+// Returns nil if no workload manifest is found.
+func (ms *ManifestSet) GetPrimaryManifest() *Manifest {
+	workloadKinds := map[string]bool{
+		"Pod": true, "Deployment": true, "StatefulSet": true,
+		"DaemonSet": true, "ReplicaSet": true, "Job": true,
+	}
+
+	for _, m := range ms.manifests {
+		if workloadKinds[m.GetKind()] {
+			return m
+		}
+	}
+	return nil
+}
+
+// GetServiceManifest returns the first Service manifest.
+// Returns nil if no Service is found.
+func (ms *ManifestSet) GetServiceManifest() *Manifest {
+	for _, m := range ms.manifests {
+		if m.GetKind() == "Service" {
+			return m
+		}
+	}
+	return nil
+}
+
+// GetServiceTargetPort extracts the targetPort from a Service manifest.
+// It looks for the first port in spec.ports[].
+// If targetPort is a named port, it resolves it by looking at the primary workload's container ports.
+// Returns 0 if no port is found.
+// Returns error if the manifest is not a Service or has invalid structure.
+func (ms *ManifestSet) GetServiceTargetPort() (int, error) {
+	svc := ms.GetServiceManifest()
+	if svc == nil {
+		return 0, nil // No service found, not an error
+	}
+
+	primary := ms.GetPrimaryManifest()
+	return extractTargetPort(svc, primary)
+}
+
+// extractTargetPort extracts targetPort from a Service manifest.
+// If targetPort is a named port and workload is provided, it resolves the name
+// by looking at the workload's container ports.
+func extractTargetPort(svc *Manifest, workload *Manifest) (int, error) {
+	if svc.GetKind() != "Service" {
+		return 0, fmt.Errorf("manifest is not a Service, got %s", svc.GetKind())
+	}
+
+	spec, err := svc.GetSpec()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get Service spec: %w", err)
+	}
+
+	ports, ok := spec["ports"].([]interface{})
+	if !ok || len(ports) == 0 {
+		return 0, fmt.Errorf("no ports found in Service spec")
+	}
+
+	// Get the first port
+	firstPort, ok := ports[0].(map[string]interface{})
+	if !ok {
+		return 0, fmt.Errorf("invalid port structure in Service spec")
+	}
+
+	// targetPort can be a number or a string (named port)
+	targetPort, ok := firstPort["targetPort"]
+	if !ok {
+		// If targetPort is not specified, it defaults to the value of port
+		if port, ok := firstPort["port"].(int); ok {
+			return port, nil
+		}
+		if port, ok := firstPort["port"].(float64); ok {
+			return int(port), nil
+		}
+		return 0, fmt.Errorf("no targetPort found in Service port spec")
+	}
+
+	// Handle both int and float64 (YAML unmarshals numbers as float64)
+	switch v := targetPort.(type) {
+	case int:
+		return v, nil
+	case float64:
+		return int(v), nil
+	case string:
+		// Named port - try to resolve it from the workload manifest
+		if workload == nil {
+			return 0, fmt.Errorf("targetPort is a named port (%s), but no workload manifest available for resolution", v)
+		}
+		resolvedPort, err := resolveNamedPort(workload, v)
+		if err != nil {
+			return 0, fmt.Errorf("failed to resolve named port %s: %w", v, err)
+		}
+		return resolvedPort, nil
+	default:
+		return 0, fmt.Errorf("targetPort has unexpected type: %T", v)
+	}
+}
+
+// resolveNamedPort resolves a named port by looking at the workload's container ports.
+// It searches all containers in the pod spec for a port with the given name.
+func resolveNamedPort(m *Manifest, portName string) (int, error) {
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get pod spec: %w", err)
+	}
+
+	containers, ok := podSpec["containers"].([]interface{})
+	if !ok || len(containers) == 0 {
+		return 0, fmt.Errorf("no containers found in pod spec")
+	}
+
+	// Search all containers for the named port
+	for _, container := range containers {
+		c, ok := container.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		ports, ok := c["ports"].([]interface{})
+		if !ok {
+			continue
+		}
+
+		for _, port := range ports {
+			p, ok := port.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			// Check if this port has the name we're looking for
+			name, hasName := p["name"].(string)
+			if !hasName || name != portName {
+				continue
+			}
+
+			// Found the named port, extract containerPort
+			if containerPort, ok := p["containerPort"].(int); ok {
+				return containerPort, nil
+			}
+			if containerPort, ok := p["containerPort"].(float64); ok {
+				return int(containerPort), nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("named port %s not found in any container", portName)
 }
 
 // Save writes the manifest to a file.
