@@ -23,6 +23,17 @@ const (
 	defaultAttestationStatusContent = "success"
 )
 
+// DockerConfig represents the new .dockerconfigjson format
+type DockerConfig struct {
+	Auths map[string]DockerAuthEntry `json:"auths"`
+}
+
+// DockerAuthEntry represents an auth entry in the Docker config
+type DockerAuthEntry struct {
+	Auth  string `json:"auth,omitempty"`
+	Email string `json:"email,omitempty"`
+}
+
 // Config holds Trustee deployment configuration
 type Config struct {
 	Namespace   string
@@ -470,6 +481,30 @@ func ParseSecretSpec(spec string) (*SecretResource, error) {
 	}, nil
 }
 
+// ConvertDockercfgToDockerConfigJSON converts the old .dockercfg format to .dockerconfigjson format
+// The .dockercfg format is: { "registry": { "auth": "...", "email": "..." } }
+// The .dockerconfigjson format is: { "auths": { "registry": { "auth": "...", "email": "..." } } }
+func ConvertDockercfgToDockerConfigJSON(dockercfgData []byte) ([]byte, error) {
+	// Parse the old format
+	var oldFormat map[string]DockerAuthEntry
+	if err := json.Unmarshal(dockercfgData, &oldFormat); err != nil {
+		return nil, fmt.Errorf("failed to parse .dockercfg data: %w", err)
+	}
+
+	// Convert to new format by wrapping in "auths"
+	newFormat := DockerConfig{
+		Auths: oldFormat,
+	}
+
+	// Marshal back to JSON
+	newData, err := json.Marshal(newFormat)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal .dockerconfigjson data: %w", err)
+	}
+
+	return newData, nil
+}
+
 // AddK8sSecretToTrustee adds a Kubernetes secret to the Trustee KBS repository
 // This is a temporary solution until proper CLI tooling is available
 //
@@ -478,6 +513,9 @@ func ParseSecretSpec(spec string) (*SecretResource, error) {
 //
 // Note: Leading dots in key names are automatically stripped as KBS doesn't support them in URIs.
 // For example, ".dockerconfigjson" is stored as "dockerconfigjson".
+//
+// For imagePullSecrets, if the secret is in .dockercfg format, it is automatically converted
+// to .dockerconfigjson format before uploading to Trustee, as Trustee only handles dockerconfigjson.
 //
 // For example, a secret named "reg-cred" with key "root" and value "password"
 // in namespace "coco" will be stored at:
@@ -545,6 +583,18 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 		decodedValue, err := base64.StdEncoding.DecodeString(encodedValue)
 		if err != nil {
 			return fmt.Errorf("failed to decode secret value for key %s: %w", key, err)
+		}
+
+		// Check if this is a .dockercfg secret and convert to .dockerconfigjson format
+		// Trustee only handles dockerconfigjson format
+		if key == ".dockercfg" {
+			convertedValue, err := ConvertDockercfgToDockerConfigJSON(decodedValue)
+			if err != nil {
+				return fmt.Errorf("failed to convert .dockercfg to .dockerconfigjson: %w", err)
+			}
+			decodedValue = convertedValue
+			// Change the key to dockerconfigjson
+			key = ".dockerconfigjson"
 		}
 
 		// Strip leading "." from key name as KBS doesn't support it in URIs
