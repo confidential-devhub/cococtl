@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-no-targetport
+  labels:
+    app: no-targetport-test
+spec:
+  containers:
+  - name: app
+    image: app:latest
+    ports:
+    - containerPort: 9000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: no-targetport-service
+spec:
+  selector:
+    app: no-targetport-test
+  ports:
+  - port: 9000
+    protocol: TCP

@@ -110,11 +110,17 @@ func runApply(_ *cobra.Command, _ []string) error {
 		rc = cfg.RuntimeClass
 	}
 
-	// Load manifest
+	// Load manifest (supports multi-document YAML)
 	fmt.Printf("Loading manifest: %s\n", manifestFile)
-	m, err := manifest.Load(manifestFile)
+	manifestSet, err := manifest.LoadMultiDocument(manifestFile)
 	if err != nil {
 		return fmt.Errorf("failed to load manifest: %w", err)
+	}
+
+	// Get the primary workload manifest
+	m := manifestSet.GetPrimaryManifest()
+	if m == nil {
+		return fmt.Errorf("no workload manifest (Pod, Deployment, etc.) found in file")
 	}
 
 	fmt.Printf("Transforming %s '%s' for CoCo...\n", m.GetKind(), m.GetName())
@@ -124,9 +130,31 @@ func runApply(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("--init-container-img and --init-container-cmd require --init-container flag")
 	}
 
+	// Auto-detect sidecar port from Service if present and not manually specified
+	if (enableSidecar || cfg.Sidecar.Enabled) && sidecarPortForward == 0 {
+		detectedPort, err := manifestSet.GetServiceTargetPort()
+		if err != nil {
+			// Log warning but don't fail - user might provide port via config
+			fmt.Printf("  ⚠ Warning: Could not auto-detect Service port: %v\n", err)
+			fmt.Println("    You can manually specify --sidecar-port-forward")
+		} else if detectedPort > 0 {
+			// Validate port doesn't conflict with sidecar HTTPS port (8443)
+			if detectedPort == 8443 {
+				return fmt.Errorf("detected Service targetPort %d conflicts with sidecar HTTPS port 8443; please use a different port or specify --sidecar-port-forward manually", detectedPort)
+			}
+			sidecarPortForward = detectedPort
+			fmt.Printf("  ✓ Auto-detected Service targetPort: %d (will be forwarded via sidecar)\n", sidecarPortForward)
+		}
+	}
+
 	// Validate sidecar flags
 	if sidecarPortForward > 0 && !enableSidecar && !cfg.Sidecar.Enabled {
 		return fmt.Errorf("--sidecar-port-forward requires --sidecar flag or sidecar enabled in config")
+	}
+
+	// Additional validation: ensure forward port doesn't conflict with sidecar HTTPS port
+	if sidecarPortForward == 8443 && (enableSidecar || cfg.Sidecar.Enabled) {
+		return fmt.Errorf("sidecar port forward cannot be 8443 (conflicts with sidecar HTTPS port)")
 	}
 
 	// Transform manifest
@@ -604,6 +632,13 @@ func handleImagePullSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipAp
 
 		// For each key in the imagePullSecret, create an entry
 		for _, key := range secretKeys.Keys {
+			// Handle .dockercfg format conversion
+			// Trustee only handles dockerconfigjson, so if the secret is in .dockercfg format,
+			// it will be converted to .dockerconfigjson during upload
+			if key == ".dockercfg" {
+				key = ".dockerconfigjson"
+			}
+
 			// Strip leading "." from key name for KBS storage
 			// e.g., ".dockerconfigjson" becomes "dockerconfigjson"
 			kbsKey := strings.TrimPrefix(key, ".")
