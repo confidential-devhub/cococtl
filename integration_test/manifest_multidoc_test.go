@@ -7,7 +7,7 @@ import (
 	"github.com/confidential-devhub/cococtl/pkg/manifest"
 )
 
-func TestManifestSet_LoadMultiDocument_PodWithService(t *testing.T) {
+func TestSet_LoadMultiDocument_PodWithService(t *testing.T) {
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/pod-with-service.yaml")
 	if err != nil {
 		t.Fatalf("LoadMultiDocument() failed: %v", err)
@@ -43,7 +43,7 @@ func TestManifestSet_LoadMultiDocument_PodWithService(t *testing.T) {
 	}
 }
 
-func TestManifestSet_LoadMultiDocument_DeploymentWithService(t *testing.T) {
+func TestSet_LoadMultiDocument_DeploymentWithService(t *testing.T) {
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service.yaml")
 	if err != nil {
 		t.Fatalf("LoadMultiDocument() failed: %v", err)
@@ -67,7 +67,7 @@ func TestManifestSet_LoadMultiDocument_DeploymentWithService(t *testing.T) {
 	}
 }
 
-func TestManifestSet_LoadMultiDocument_SingleDocument(t *testing.T) {
+func TestSet_LoadMultiDocument_SingleDocument(t *testing.T) {
 	// Load a single-document YAML
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/simple-pod.yaml")
 	if err != nil {
@@ -88,7 +88,7 @@ func TestManifestSet_LoadMultiDocument_SingleDocument(t *testing.T) {
 	}
 }
 
-func TestManifestSet_GetServiceTargetPort_NumericPort(t *testing.T) {
+func TestSet_GetServiceTargetPort_NumericPort(t *testing.T) {
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/pod-with-service.yaml")
 	if err != nil {
 		t.Fatalf("LoadMultiDocument() failed: %v", err)
@@ -105,7 +105,7 @@ func TestManifestSet_GetServiceTargetPort_NumericPort(t *testing.T) {
 	}
 }
 
-func TestManifestSet_GetServiceTargetPort_DeploymentWithService(t *testing.T) {
+func TestSet_GetServiceTargetPort_DeploymentWithService(t *testing.T) {
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service.yaml")
 	if err != nil {
 		t.Fatalf("LoadMultiDocument() failed: %v", err)
@@ -122,7 +122,7 @@ func TestManifestSet_GetServiceTargetPort_DeploymentWithService(t *testing.T) {
 	}
 }
 
-func TestManifestSet_GetServiceTargetPort_NamedPort(t *testing.T) {
+func TestSet_GetServiceTargetPort_NamedPort(t *testing.T) {
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/service-with-named-port.yaml")
 	if err != nil {
 		t.Fatalf("LoadMultiDocument() failed: %v", err)
@@ -140,7 +140,7 @@ func TestManifestSet_GetServiceTargetPort_NamedPort(t *testing.T) {
 	}
 }
 
-func TestManifestSet_GetServiceTargetPort_NoTargetPort(t *testing.T) {
+func TestSet_GetServiceTargetPort_NoTargetPort(t *testing.T) {
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/service-no-targetport.yaml")
 	if err != nil {
 		t.Fatalf("LoadMultiDocument() failed: %v", err)
@@ -158,7 +158,7 @@ func TestManifestSet_GetServiceTargetPort_NoTargetPort(t *testing.T) {
 	}
 }
 
-func TestManifestSet_GetServiceTargetPort_NoService(t *testing.T) {
+func TestSet_GetServiceTargetPort_NoService(t *testing.T) {
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/simple-pod.yaml")
 	if err != nil {
 		t.Fatalf("LoadMultiDocument() failed: %v", err)
@@ -175,7 +175,7 @@ func TestManifestSet_GetServiceTargetPort_NoService(t *testing.T) {
 	}
 }
 
-func TestManifestSet_GetServiceTargetPort_ConflictPort(t *testing.T) {
+func TestSet_GetServiceTargetPort_ConflictPort(t *testing.T) {
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/service-with-conflict-port.yaml")
 	if err != nil {
 		t.Fatalf("LoadMultiDocument() failed: %v", err)
@@ -194,7 +194,7 @@ func TestManifestSet_GetServiceTargetPort_ConflictPort(t *testing.T) {
 	}
 }
 
-func TestManifestSet_GetPrimaryManifest_NoWorkload(t *testing.T) {
+func TestSet_GetPrimaryManifest_NoWorkload(t *testing.T) {
 	// Create a temporary file with only a Service (no workload)
 	tmpDir := t.TempDir()
 	tmpFile := tmpDir + "/service-only.yaml"
@@ -224,14 +224,14 @@ spec:
 	}
 }
 
-func TestManifestSet_LoadMultiDocument_InvalidPath(t *testing.T) {
+func TestSet_LoadMultiDocument_InvalidPath(t *testing.T) {
 	_, err := manifest.LoadMultiDocument("nonexistent-file.yaml")
 	if err == nil {
 		t.Error("Expected error for nonexistent file, got nil")
 	}
 }
 
-func TestManifestSet_LoadMultiDocument_EmptyFile(t *testing.T) {
+func TestSet_LoadMultiDocument_EmptyFile(t *testing.T) {
 	// Create a temporary empty file
 	tmpDir := t.TempDir()
 	emptyFile := tmpDir + "/empty.yaml"
@@ -246,7 +246,7 @@ func TestManifestSet_LoadMultiDocument_EmptyFile(t *testing.T) {
 	}
 }
 
-func TestManifestSet_GetServiceTargetPort_NamedPortInDeployment(t *testing.T) {
+func TestSet_GetServiceTargetPort_NamedPortInDeployment(t *testing.T) {
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-named-port.yaml")
 	if err != nil {
 		t.Fatalf("LoadMultiDocument() failed: %v", err)
@@ -264,7 +264,7 @@ func TestManifestSet_GetServiceTargetPort_NamedPortInDeployment(t *testing.T) {
 	}
 }
 
-func TestManifestSet_GetServiceTargetPort_InvalidNamedPort(t *testing.T) {
+func TestSet_GetServiceTargetPort_InvalidNamedPort(t *testing.T) {
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/service-with-invalid-named-port.yaml")
 	if err != nil {
 		t.Fatalf("LoadMultiDocument() failed: %v", err)
@@ -280,7 +280,7 @@ func TestManifestSet_GetServiceTargetPort_InvalidNamedPort(t *testing.T) {
 	}
 }
 
-func TestManifestSet_vLLM_ServiceBeforeDeployment(t *testing.T) {
+func TestSet_vLLM_ServiceBeforeDeployment(t *testing.T) {
 	// Test with vLLM manifest where Service is defined BEFORE Deployment
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service-vllm.yaml")
 	if err != nil {
@@ -317,7 +317,7 @@ func TestManifestSet_vLLM_ServiceBeforeDeployment(t *testing.T) {
 	}
 }
 
-func TestManifestSet_vLLM_NamedPortResolution(t *testing.T) {
+func TestSet_vLLM_NamedPortResolution(t *testing.T) {
 	// Test named port resolution with vLLM manifest
 	// Service has targetPort: http
 	// Deployment has container with port name: http, containerPort: 8000
@@ -337,7 +337,7 @@ func TestManifestSet_vLLM_NamedPortResolution(t *testing.T) {
 	}
 }
 
-func TestManifestSet_vLLM_HeadlessService(t *testing.T) {
+func TestSet_vLLM_HeadlessService(t *testing.T) {
 	// Test that headless service (clusterIP: None) still works for port detection
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service-vllm.yaml")
 	if err != nil {
@@ -373,7 +373,7 @@ func TestManifestSet_vLLM_HeadlessService(t *testing.T) {
 	}
 }
 
-func TestManifestSet_vLLM_ComplexDeployment(t *testing.T) {
+func TestSet_vLLM_ComplexDeployment(t *testing.T) {
 	// Test with a complex deployment that has probes, volumes, resource limits
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service-vllm.yaml")
 	if err != nil {
@@ -428,7 +428,7 @@ func TestManifestSet_vLLM_ComplexDeployment(t *testing.T) {
 	}
 }
 
-func TestManifestSet_vLLM_ExistingRuntimeClass(t *testing.T) {
+func TestSet_vLLM_ExistingRuntimeClass(t *testing.T) {
 	// Test that existing runtimeClassName is preserved
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service-vllm.yaml")
 	if err != nil {
@@ -447,7 +447,7 @@ func TestManifestSet_vLLM_ExistingRuntimeClass(t *testing.T) {
 	}
 }
 
-func TestManifestSet_vLLM_ExistingAnnotations(t *testing.T) {
+func TestSet_vLLM_ExistingAnnotations(t *testing.T) {
 	// Test that existing annotations are preserved
 	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service-vllm.yaml")
 	if err != nil {

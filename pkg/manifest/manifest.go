@@ -16,8 +16,8 @@ type Manifest struct {
 	path string
 }
 
-// ManifestSet represents a collection of Kubernetes manifests from a multi-document YAML file.
-type ManifestSet struct {
+// Set represents a collection of Kubernetes manifests from a multi-document YAML file.
+type Set struct {
 	manifests []*Manifest
 	path      string
 }
@@ -70,9 +70,9 @@ func Load(path string) (*Manifest, error) {
 
 // LoadMultiDocument reads and parses a multi-document Kubernetes manifest file.
 // It handles YAML files with multiple documents separated by '---'.
-// Returns a ManifestSet containing all documents. If only one document is found,
-// it still returns a ManifestSet with a single Manifest for consistency.
-func LoadMultiDocument(path string) (*ManifestSet, error) {
+// Returns a Set containing all documents. If only one document is found,
+// it still returns a Set with a single Manifest for consistency.
+func LoadMultiDocument(path string) (*Set, error) {
 	// Validate and sanitize the path to prevent directory traversal
 	// Source - https://stackoverflow.com/a/57534618
 	// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
@@ -140,20 +140,20 @@ func LoadMultiDocument(path string) (*ManifestSet, error) {
 		return nil, fmt.Errorf("no valid documents found in manifest file")
 	}
 
-	return &ManifestSet{
+	return &Set{
 		manifests: manifests,
 		path:      cleanPath,
 	}, nil
 }
 
 // GetManifests returns all manifests in the set.
-func (ms *ManifestSet) GetManifests() []*Manifest {
+func (ms *Set) GetManifests() []*Manifest {
 	return ms.manifests
 }
 
 // GetPrimaryManifest returns the first workload manifest (Pod, Deployment, etc.).
 // Returns nil if no workload manifest is found.
-func (ms *ManifestSet) GetPrimaryManifest() *Manifest {
+func (ms *Set) GetPrimaryManifest() *Manifest {
 	workloadKinds := map[string]bool{
 		"Pod": true, "Deployment": true, "StatefulSet": true,
 		"DaemonSet": true, "ReplicaSet": true, "Job": true,
@@ -169,7 +169,7 @@ func (ms *ManifestSet) GetPrimaryManifest() *Manifest {
 
 // GetServiceManifest returns the first Service manifest.
 // Returns nil if no Service is found.
-func (ms *ManifestSet) GetServiceManifest() *Manifest {
+func (ms *Set) GetServiceManifest() *Manifest {
 	for _, m := range ms.manifests {
 		if m.GetKind() == "Service" {
 			return m
@@ -183,7 +183,7 @@ func (ms *ManifestSet) GetServiceManifest() *Manifest {
 // If targetPort is a named port, it resolves it by looking at the primary workload's container ports.
 // Returns 0 if no port is found.
 // Returns error if the manifest is not a Service or has invalid structure.
-func (ms *ManifestSet) GetServiceTargetPort() (int, error) {
+func (ms *Set) GetServiceTargetPort() (int, error) {
 	svc := ms.GetServiceManifest()
 	if svc == nil {
 		return 0, nil // No service found, not an error
