@@ -280,6 +280,192 @@ func TestManifestSet_GetServiceTargetPort_InvalidNamedPort(t *testing.T) {
 	}
 }
 
+func TestManifestSet_vLLM_ServiceBeforeDeployment(t *testing.T) {
+	// Test with vLLM manifest where Service is defined BEFORE Deployment
+	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service-vllm.yaml")
+	if err != nil {
+		t.Fatalf("LoadMultiDocument() failed: %v", err)
+	}
+
+	manifests := manifestSet.GetManifests()
+	if len(manifests) != 2 {
+		t.Fatalf("Expected 2 manifests, got %d", len(manifests))
+	}
+
+	// Verify primary manifest is Deployment (not Service, even though Service comes first)
+	primary := manifestSet.GetPrimaryManifest()
+	if primary == nil {
+		t.Fatal("GetPrimaryManifest() returned nil")
+	}
+	if primary.GetKind() != "Deployment" {
+		t.Errorf("Primary manifest kind = %q, want %q", primary.GetKind(), "Deployment")
+	}
+	if primary.GetName() != "vllm" {
+		t.Errorf("Primary manifest name = %q, want %q", primary.GetName(), "vllm")
+	}
+
+	// Verify service manifest exists
+	service := manifestSet.GetServiceManifest()
+	if service == nil {
+		t.Fatal("GetServiceManifest() returned nil")
+	}
+	if service.GetKind() != "Service" {
+		t.Errorf("Service manifest kind = %q, want %q", service.GetKind(), "Service")
+	}
+	if service.GetName() != "vllm" {
+		t.Errorf("Service manifest name = %q, want %q", service.GetName(), "vllm")
+	}
+}
+
+func TestManifestSet_vLLM_NamedPortResolution(t *testing.T) {
+	// Test named port resolution with vLLM manifest
+	// Service has targetPort: http
+	// Deployment has container with port name: http, containerPort: 8000
+	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service-vllm.yaml")
+	if err != nil {
+		t.Fatalf("LoadMultiDocument() failed: %v", err)
+	}
+
+	port, err := manifestSet.GetServiceTargetPort()
+	if err != nil {
+		t.Fatalf("GetServiceTargetPort() failed: %v", err)
+	}
+
+	expectedPort := 8000
+	if port != expectedPort {
+		t.Errorf("GetServiceTargetPort() = %d, want %d (resolved from named port 'http')", port, expectedPort)
+	}
+}
+
+func TestManifestSet_vLLM_HeadlessService(t *testing.T) {
+	// Test that headless service (clusterIP: None) still works for port detection
+	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service-vllm.yaml")
+	if err != nil {
+		t.Fatalf("LoadMultiDocument() failed: %v", err)
+	}
+
+	service := manifestSet.GetServiceManifest()
+	if service == nil {
+		t.Fatal("GetServiceManifest() returned nil")
+	}
+
+	// Verify it's a headless service
+	spec, err := service.GetSpec()
+	if err != nil {
+		t.Fatalf("Failed to get service spec: %v", err)
+	}
+
+	clusterIP, ok := spec["clusterIP"].(string)
+	if !ok {
+		t.Fatal("clusterIP not found in service spec")
+	}
+	if clusterIP != "None" {
+		t.Errorf("Expected headless service (clusterIP: None), got clusterIP: %s", clusterIP)
+	}
+
+	// Port detection should still work for headless services
+	port, err := manifestSet.GetServiceTargetPort()
+	if err != nil {
+		t.Fatalf("GetServiceTargetPort() failed for headless service: %v", err)
+	}
+	if port != 8000 {
+		t.Errorf("GetServiceTargetPort() = %d, want 8000", port)
+	}
+}
+
+func TestManifestSet_vLLM_ComplexDeployment(t *testing.T) {
+	// Test with a complex deployment that has probes, volumes, resource limits
+	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service-vllm.yaml")
+	if err != nil {
+		t.Fatalf("LoadMultiDocument() failed: %v", err)
+	}
+
+	primary := manifestSet.GetPrimaryManifest()
+	if primary == nil {
+		t.Fatal("GetPrimaryManifest() returned nil")
+	}
+
+	// Verify the deployment has the expected structure
+	podSpec, err := primary.GetPodSpec()
+	if err != nil {
+		t.Fatalf("GetPodSpec() failed: %v", err)
+	}
+
+	// Check containers exist
+	containers, ok := podSpec["containers"].([]interface{})
+	if !ok || len(containers) == 0 {
+		t.Fatal("No containers found in pod spec")
+	}
+
+	// Verify first container has the named port
+	firstContainer, ok := containers[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("Invalid container structure")
+	}
+
+	ports, ok := firstContainer["ports"].([]interface{})
+	if !ok || len(ports) == 0 {
+		t.Fatal("No ports found in container")
+	}
+
+	firstPort, ok := ports[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("Invalid port structure")
+	}
+
+	portName, ok := firstPort["name"].(string)
+	if !ok || portName != "http" {
+		t.Errorf("Expected port name 'http', got %q", portName)
+	}
+
+	// Verify port detection works despite the complexity
+	port, err := manifestSet.GetServiceTargetPort()
+	if err != nil {
+		t.Fatalf("GetServiceTargetPort() failed: %v", err)
+	}
+	if port != 8000 {
+		t.Errorf("GetServiceTargetPort() = %d, want 8000", port)
+	}
+}
+
+func TestManifestSet_vLLM_ExistingRuntimeClass(t *testing.T) {
+	// Test that existing runtimeClassName is preserved
+	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service-vllm.yaml")
+	if err != nil {
+		t.Fatalf("LoadMultiDocument() failed: %v", err)
+	}
+
+	primary := manifestSet.GetPrimaryManifest()
+	if primary == nil {
+		t.Fatal("GetPrimaryManifest() returned nil")
+	}
+
+	// Check existing runtimeClassName
+	runtimeClass := primary.GetRuntimeClass()
+	if runtimeClass != "kata-remote" {
+		t.Errorf("GetRuntimeClass() = %q, want %q", runtimeClass, "kata-remote")
+	}
+}
+
+func TestManifestSet_vLLM_ExistingAnnotations(t *testing.T) {
+	// Test that existing annotations are preserved
+	manifestSet, err := manifest.LoadMultiDocument("testdata/manifests/deployment-with-service-vllm.yaml")
+	if err != nil {
+		t.Fatalf("LoadMultiDocument() failed: %v", err)
+	}
+
+	primary := manifestSet.GetPrimaryManifest()
+	if primary == nil {
+		t.Fatal("GetPrimaryManifest() returned nil")
+	}
+
+	// Check existing annotation
+	timeoutAnnotation := primary.GetAnnotation("io.katacontainers.config.runtime.create_container_timeout")
+	if timeoutAnnotation != "900" {
+		t.Errorf("Expected timeout annotation '900', got %q", timeoutAnnotation)
+	}
+}
+
 // Helper function to write files in tests
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0600)
