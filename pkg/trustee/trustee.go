@@ -496,6 +496,7 @@ func GetKBSKeyName(secretKey string) string {
 	// Trustee only handles dockerconfigjson format, so .dockercfg secrets
 	// are converted to .dockerconfigjson during upload
 	if secretKey == ".dockercfg" {
+		// #nosec G101 - This is a key name constant, not a hardcoded credential
 		secretKey = ".dockerconfigjson"
 	}
 

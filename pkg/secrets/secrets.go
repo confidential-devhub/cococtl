@@ -1,7 +1,7 @@
 package secrets
 
 import (
-	"fmt"
+	"github.com/confidential-devhub/cococtl/pkg/manifest"
 )
 
 // SecretUsage tracks how a secret is used in the manifest
@@ -26,20 +26,23 @@ type SecretReference struct {
 
 // DetectSecrets scans a manifest for all secret references
 func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, error) {
-	// Extract namespace from manifest
-	namespace := getManifestNamespace(manifestData)
+	// Create manifest wrapper to reuse existing manifest methods
+	m := manifest.GetFromData(manifestData)
 
-	// Get spec section
-	spec, ok := manifestData["spec"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("spec field not found or invalid")
+	// Extract namespace using manifest method
+	namespace := m.GetNamespace()
+
+	// Get pod spec using manifest method (works for both Pod and Deployment!)
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		return nil, err
 	}
 
 	// Map to collect all secrets: secretName -> SecretReference
 	secretsMap := make(map[string]*SecretReference)
 
 	// 1. Detect secrets from containers
-	if containers, ok := spec["containers"].([]interface{}); ok {
+	if containers, ok := podSpec["containers"].([]interface{}); ok {
 		for _, container := range containers {
 			if c, ok := container.(map[string]interface{}); ok {
 				containerName := getContainerName(c)
@@ -54,10 +57,10 @@ func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, erro
 	}
 
 	// 2. Detect secrets from volumes
-	detectVolumeSecrets(spec, namespace, secretsMap)
+	detectVolumeSecrets(podSpec, namespace, secretsMap)
 
 	// 3. Find mount paths for volume secrets
-	if containers, ok := spec["containers"].([]interface{}); ok {
+	if containers, ok := podSpec["containers"].([]interface{}); ok {
 		for _, container := range containers {
 			if c, ok := container.(map[string]interface{}); ok {
 				containerName := getContainerName(c)
@@ -67,7 +70,7 @@ func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, erro
 	}
 
 	// 4. Detect imagePullSecrets
-	detectImagePullSecrets(spec, namespace, secretsMap)
+	detectImagePullSecrets(podSpec, namespace, secretsMap)
 
 	// Convert map to slice
 	secrets := make([]SecretReference, 0, len(secretsMap))
@@ -284,17 +287,21 @@ func detectImagePullSecrets(spec map[string]interface{}, namespace string, secre
 // DetectImagePullSecretsWithServiceAccount detects imagePullSecrets from manifest
 // and falls back to default service account if none are found in the spec
 func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{}) ([]SecretReference, error) {
-	namespace := getManifestNamespace(manifestData)
+	// Create manifest wrapper to reuse existing manifest methods
+	m := manifest.GetFromData(manifestData)
 
-	spec, ok := manifestData["spec"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("spec field not found or invalid")
+	namespace := m.GetNamespace()
+
+	// Get pod spec using manifest method (works for both Pod and Deployment!)
+	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		return nil, err
 	}
 
 	secretsMap := make(map[string]*SecretReference)
 
 	// First, check for imagePullSecrets in the manifest
-	detectImagePullSecrets(spec, namespace, secretsMap)
+	detectImagePullSecrets(podSpec, namespace, secretsMap)
 
 	// If no imagePullSecrets found in manifest, check default service account
 	if len(secretsMap) == 0 {
@@ -316,17 +323,6 @@ func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{
 	}
 
 	return secrets, nil
-}
-
-// getManifestNamespace extracts the namespace from manifest metadata
-// Returns empty string if not specified (let kubectl use current context namespace)
-func getManifestNamespace(manifestData map[string]interface{}) string {
-	if metadata, ok := manifestData["metadata"].(map[string]interface{}); ok {
-		if namespace, ok := metadata["namespace"].(string); ok && namespace != "" {
-			return namespace
-		}
-	}
-	return ""
 }
 
 // getContainerName extracts the container name

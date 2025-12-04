@@ -302,6 +302,16 @@ func TestSecrets_DetectSecrets_IntegrationManifests(t *testing.T) {
 			manifestPath:  "testdata/manifests/simple-pod.yaml",
 			expectedCount: 0,
 		},
+		{
+			name:          "deployment with secrets",
+			manifestPath:  "testdata/manifests/deployment-with-secrets.yaml",
+			expectedCount: 3, // db-credentials, api-secrets, tls-cert
+		},
+		{
+			name:          "deployment with secrets and imagePullSecrets",
+			manifestPath:  "testdata/manifests/deployment-with-secrets-and-imagepullsecrets.yaml",
+			expectedCount: 3, // db-creds, api-creds, regcred
+		},
 	}
 
 	for _, tt := range tests {
