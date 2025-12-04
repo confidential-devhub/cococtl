@@ -22,14 +22,14 @@ type Transformation struct {
 
 // Analysis represents the complete analysis of a manifest.
 type Analysis struct {
-	ManifestPath   string
-	ResourceKind   string
-	ResourceName   string
-	HasService     bool
-	ServicePort    int
+	ManifestPath    string
+	ResourceKind    string
+	ResourceName    string
+	HasService      bool
+	ServicePort     int
 	Transformations []Transformation
-	SecretCount    int
-	SidecarEnabled bool
+	SecretCount     int
+	SidecarEnabled  bool
 }
 
 // Analyze performs a complete analysis of what transformations would be applied.
@@ -110,13 +110,13 @@ func analyzeRuntimeClass(m *manifest.Manifest, cfg *config.CocoConfig) Transform
 		Type:        "runtime",
 		Name:        "RuntimeClass Configuration",
 		Description: description,
-		Reason:      "Sets Kata Containers runtime to provide TEE (Trusted Execution Environment) isolation using confidential VMs",
+		Reason:      "Sets Kata Containers runtime class to provide TEE (Trusted Execution Environment) isolation using confidential VMs",
 		Before:      before,
 		After:       after,
 		Details: []string{
-			"Runtime must be installed in cluster (kata-cc or kata-remote)",
-			"Provides hardware-based confidential computing isolation",
-			"Runs workload in encrypted memory (AMD SEV, Intel TDX, etc.)",
+			"RuntimeClass must be already configured in the cluster",
+			"Provides hardware-based isolation",
+			"Runs workload in encrypted memory",
 		},
 	}
 }
@@ -174,7 +174,7 @@ func analyzeSecrets(m *manifest.Manifest) ([]Transformation, int) {
 				Type:        "secret",
 				Name:        fmt.Sprintf("Secret Conversion: %s", ref.Name),
 				Description: fmt.Sprintf("Convert %s secret to sealed format", usage.Type),
-				Reason:      "Secrets must be sealed and retrieved from Trustee KBS for confidential access",
+				Reason:      "Secrets must be sealed and retrieved from Trustee KBS to maintain confidentiality",
 				Before:      before,
 				After:       after,
 				Details: []string{
@@ -216,7 +216,7 @@ func analyzeSidecar(cfg *config.CocoConfig, servicePort, manualPort int) *Transf
 			"Exposes HTTPS on port 8443 (external access)",
 			"Forwards to app on port " + fmt.Sprintf("%d", port) + " (internal)",
 			"Requires client certificate for mTLS authentication",
-			"Server certificate retrieved from KBS",
+			"Server certificate retrieved from Trustee KBS",
 		},
 	}
 }
@@ -226,7 +226,7 @@ func analyzeInitData(cfg *config.CocoConfig, secretCount int) Transformation {
 		"aa.toml: Attestation Agent configuration",
 		fmt.Sprintf("  - Trustee KBS URL: %s", cfg.TrusteeServer),
 		"cdh.toml: Confidential Data Hub configuration",
-		"  - Enables secret retrieval from KBS",
+		"  - Enables secret retrieval from Trustee KBS",
 	}
 
 	if secretCount > 0 {
@@ -244,7 +244,7 @@ func analyzeInitData(cfg *config.CocoConfig, secretCount int) Transformation {
 		Description: "Generate and add initdata configuration annotation",
 		Reason:      "Configures guest components for attestation and secure communication",
 		Before:      "metadata:\n  annotations: {}",
-		After:       "metadata:\n  annotations:\n    io.katacontainers.config.hypervisor.cc_init_data: |\n      H4sIAAAAAAAA/6yU...  ← BASE64-GZIP",
+		After:       "metadata:\n  annotations:\n    io.katacontainers.config.hypervisor.cc_init_data: |\n      H4sIAAAAAAAA/6yU...  ← GZIP-BASE64",
 		Details:     details,
 	}
 }
