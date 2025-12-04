@@ -204,6 +204,43 @@ kubectl coco apply -f app.yaml --config /path/to/config.toml
 
 See [TRANSFORMATIONS.md](TRANSFORMATIONS.md) for detailed description on the transformations.
 
+### Learn CoCo Transformations
+
+The `explain` command helps you understand what transformations are applied to your manifests:
+
+```bash
+# Analyze your manifest
+kubectl coco explain -f your-app.yaml
+
+# View built-in examples
+kubectl coco explain --list-examples
+
+# Learn with interactive examples
+kubectl coco explain --example simple-pod
+kubectl coco explain --example deployment-secrets
+kubectl coco explain --example sidecar-service
+```
+
+**Output formats:**
+```bash
+# Human-readable (default)
+kubectl coco explain -f app.yaml
+
+# Side-by-side diff view
+kubectl coco explain -f app.yaml --format diff
+
+# Markdown for documentation
+kubectl coco explain -f app.yaml --format markdown -o transformations.md
+```
+
+The explain command provides:
+- **Educational analysis** of each transformation
+- **Before/after comparisons** for secrets, runtime, and initdata
+- **Learning points** explaining why each change is needed
+- **Interactive examples** to explore CoCo concepts
+
+Perfect for learning how CoCo works without making any changes to your cluster.
+
 ### Secure Access Sidecar
 
 The secure access sidecar provides mTLS-secured HTTPS access to your CoCo pods.
