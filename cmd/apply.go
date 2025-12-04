@@ -632,16 +632,10 @@ func handleImagePullSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipAp
 
 		// For each key in the imagePullSecret, create an entry
 		for _, key := range secretKeys.Keys {
-			// Handle .dockercfg format conversion
-			// Trustee only handles dockerconfigjson, so if the secret is in .dockercfg format,
-			// it will be converted to .dockerconfigjson during upload
-			if key == ".dockercfg" {
-				key = ".dockerconfigjson"
-			}
-
-			// Strip leading "." from key name for KBS storage
-			// e.g., ".dockerconfigjson" becomes "dockerconfigjson"
-			kbsKey := strings.TrimPrefix(key, ".")
+			// Use GetKBSKeyName to ensure consistent key name handling
+			// This handles both .dockercfg -> .dockerconfigjson conversion
+			// and stripping leading dots for KBS URI compatibility
+			kbsKey := trustee.GetKBSKeyName(key)
 
 			imagePullSecretsInfo = append(imagePullSecretsInfo, initdata.ImagePullSecretInfo{
 				Namespace:  secretKeys.Namespace,
