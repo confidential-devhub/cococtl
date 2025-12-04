@@ -1,0 +1,41 @@
+# Example CoCo Configuration File
+# This is a sample configuration used for educational examples
+
+# Required: Trustee KBS server URL
+trustee_server = "http://trustee-kbs.default.svc.cluster.local:8080"
+
+# Required: CoCo runtime class name
+runtime_class = "kata-cc"
+
+# Optional: Path to Trustee CA certificate (for HTTPS)
+# trustee_ca_cert = "/path/to/ca-cert.pem"
+
+# Optional: Custom Kata Agent policy file
+# kata_agent_policy = "/path/to/policy.rego"
+
+# Optional: Init container configuration for attestation verification
+# init_container_image = "ghcr.io/confidential-containers/attestation-verifier:latest"
+# init_container_cmd = "/bin/verify-attestation"
+
+# Optional: Container policy and registry credentials URIs
+# container_policy_uri = "kbs:///default/security/container-policy"
+# registry_cred_uri = "kbs:///default/credentials/registry-auth"
+# registry_config_uri = "kbs:///default/config/registry-config"
+
+# Optional: Sidecar configuration for mTLS termination
+[sidecar]
+enabled = false
+https_port = 8443
+image = "ghcr.io/confidential-containers/sidecar:latest"
+
+# Optional: Custom Kata/CoCo annotations
+# These are applied to the pod template annotations
+[annotations]
+# Example: Set VM machine type
+# "io.katacontainers.config.hypervisor.machine_type" = "q35"
+
+# Example: Set container creation timeout (in seconds)
+"io.katacontainers.config.runtime.create_container_timeout" = "300"
+
+# Example: Set custom kernel parameters
+# "io.katacontainers.config.hypervisor.kernel_params" = "console=ttyS0"
