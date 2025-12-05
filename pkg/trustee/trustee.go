@@ -481,6 +481,30 @@ func ParseSecretSpec(spec string) (*SecretResource, error) {
 	}, nil
 }
 
+// GetKBSKeyName returns the KBS key name for a given secret key.
+// This centralizes the logic for determining what key name will be used in KBS,
+// handling both format conversions (.dockercfg -> .dockerconfigjson) and
+// key name normalization (stripping leading dots).
+//
+// This function should be used consistently when:
+// - Building KBS URIs for initdata
+// - Uploading secrets to KBS
+//
+// Returns the final key name that will be used in the KBS repository.
+func GetKBSKeyName(secretKey string) string {
+	// Handle .dockercfg -> .dockerconfigjson conversion
+	// Trustee only handles dockerconfigjson format, so .dockercfg secrets
+	// are converted to .dockerconfigjson during upload
+	if secretKey == ".dockercfg" {
+		// #nosec G101 - This is a key name constant, not a hardcoded credential
+		secretKey = ".dockerconfigjson"
+	}
+
+	// Strip leading "." from key name as KBS doesn't support it in URIs
+	// e.g., ".dockerconfigjson" becomes "dockerconfigjson"
+	return strings.TrimPrefix(secretKey, ".")
+}
+
 // ConvertDockercfgToDockerConfigJSON converts the old .dockercfg format to .dockerconfigjson format
 // The .dockercfg format is: { "registry": { "auth": "...", "email": "..." } }
 // The .dockerconfigjson format is: { "auths": { "registry": { "auth": "...", "email": "..." } } }
@@ -511,15 +535,15 @@ func ConvertDockercfgToDockerConfigJSON(dockercfgData []byte) ([]byte, error) {
 // The secret data is stored in the KBS repository with the following structure:
 // /opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}
 //
-// Note: Leading dots in key names are automatically stripped as KBS doesn't support them in URIs.
-// For example, ".dockerconfigjson" is stored as "dockerconfigjson".
+// Key name transformations (via GetKBSKeyName):
+//   - .dockercfg secrets are converted to .dockerconfigjson format (data conversion)
+//     and stored with key name "dockerconfigjson" (leading dot stripped)
+//   - .dockerconfigjson secrets are stored with key name "dockerconfigjson" (leading dot stripped)
+//   - Other keys with leading dots have the dot stripped for KBS URI compatibility
 //
-// For imagePullSecrets, if the secret is in .dockercfg format, it is automatically converted
-// to .dockerconfigjson format before uploading to Trustee, as Trustee only handles dockerconfigjson.
-//
-// For example, a secret named "reg-cred" with key "root" and value "password"
-// in namespace "coco" will be stored at:
-// /opt/confidential-containers/kbs/repository/coco/reg-cred/root
+// For example, a secret named "reg-cred" with key ".dockercfg" in namespace "coco"
+// will have its data converted to .dockerconfigjson format and be stored at:
+// /opt/confidential-containers/kbs/repository/coco/reg-cred/dockerconfigjson
 func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
 	// Get the KBS pod name
 	cmd := exec.Command("kubectl", "get", "pod", "-n", trusteeNamespace,
@@ -593,18 +617,17 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 				return fmt.Errorf("failed to convert .dockercfg to .dockerconfigjson: %w", err)
 			}
 			decodedValue = convertedValue
-			// Change the key to dockerconfigjson
-			key = ".dockerconfigjson"
 		}
 
-		// Strip leading "." from key name as KBS doesn't support it in URIs
-		// e.g., ".dockerconfigjson" becomes "dockerconfigjson"
-		cleanKey := strings.TrimPrefix(key, ".")
+		// Get the KBS key name using the centralized logic
+		// This handles both format conversion (.dockercfg -> .dockerconfigjson)
+		// and key name normalization (stripping leading dots)
+		kbsKey := GetKBSKeyName(key)
 
 		// Write the decoded value to a file
-		filePath := filepath.Join(secretDir, cleanKey)
+		filePath := filepath.Join(secretDir, kbsKey)
 		if err := os.WriteFile(filePath, decodedValue, 0600); err != nil {
-			return fmt.Errorf("failed to write secret file for key %s: %w", cleanKey, err)
+			return fmt.Errorf("failed to write secret file for key %s: %w", kbsKey, err)
 		}
 	}
 
@@ -629,14 +652,14 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 // The secret data is stored in the KBS repository with the following structure:
 // /opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}
 //
-// Note: Leading dots in key names (e.g., .dockerconfigjson) are automatically stripped
-// by AddK8sSecretToTrustee as KBS doesn't support them in URIs.
+// Key name transformations are handled by AddK8sSecretToTrustee via GetKBSKeyName.
+// See AddK8sSecretToTrustee documentation for details on format conversions and key naming.
 //
 // This function is isolated for easy removal when proper tooling is available
 func AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
 	// Reuse the existing AddK8sSecretToTrustee function
 	// ImagePullSecrets are just regular K8s secrets, so the logic is the same
-	// Leading dots in key names are automatically stripped in AddK8sSecretToTrustee
+	// All key name transformations are handled consistently via GetKBSKeyName
 	return AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
 }
 

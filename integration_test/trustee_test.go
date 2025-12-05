@@ -117,3 +117,51 @@ func TestConvertDockercfgToDockerConfigJSON_EmptyData(t *testing.T) {
 		t.Errorf("Expected empty auths map, got %d entries", len(authsMap))
 	}
 }
+
+func TestGetKBSKeyName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     ".dockercfg converts to dockerconfigjson",
+			input:    ".dockercfg",
+			expected: "dockerconfigjson",
+		},
+		{
+			name:     ".dockerconfigjson strips leading dot",
+			input:    ".dockerconfigjson",
+			expected: "dockerconfigjson",
+		},
+		{
+			name:     "Regular key with leading dot",
+			input:    ".secret-key",
+			expected: "secret-key",
+		},
+		{
+			name:     "Regular key without leading dot",
+			input:    "secret-key",
+			expected: "secret-key",
+		},
+		{
+			name:     "Empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "Key with multiple dots",
+			input:    ".config.json",
+			expected: "config.json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := trustee.GetKBSKeyName(tt.input)
+			if result != tt.expected {
+				t.Errorf("GetKBSKeyName(%q) = %q, expected %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}

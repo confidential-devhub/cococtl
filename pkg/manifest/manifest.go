@@ -146,6 +146,15 @@ func LoadMultiDocument(path string) (*Set, error) {
 	}, nil
 }
 
+// GetFromData creates a Manifest from raw manifest data.
+// This is useful for packages that need to use Manifest methods on raw data without loading from a file.
+func GetFromData(data map[string]interface{}) *Manifest {
+	return &Manifest{
+		data: data,
+		path: "", // No path when created from raw data
+	}
+}
+
 // GetManifests returns all manifests in the set.
 func (ms *Set) GetManifests() []*Manifest {
 	return ms.manifests
@@ -569,7 +578,9 @@ func (m *Manifest) GetPodLabels() (map[string]interface{}, error) {
 	return make(map[string]interface{}), nil
 }
 
-// GetSecretRefs returns all secret references in the manifest
+// GetSecretRefs returns all secret references in the manifest (names only).
+// This is a simplified helper for displaying secret names.
+// For full secret metadata (usage types, keys, namespace), use secrets.DetectSecrets() instead.
 func (m *Manifest) GetSecretRefs() []string {
 	secrets := make(map[string]bool)
 

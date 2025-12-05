@@ -2,6 +2,8 @@ package secrets
 
 import (
 	"testing"
+
+	"github.com/confidential-devhub/cococtl/pkg/manifest"
 )
 
 func TestDetectSecrets_EnvSecrets(t *testing.T) {
@@ -418,9 +420,11 @@ func TestGetManifestNamespace(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := getManifestNamespace(tt.manifest)
+			// Use manifest package method instead of removed helper
+			m := manifest.GetFromData(tt.manifest)
+			got := m.GetNamespace()
 			if got != tt.want {
-				t.Errorf("getManifestNamespace() = %q, want %q", got, tt.want)
+				t.Errorf("GetNamespace() = %q, want %q", got, tt.want)
 			}
 		})
 	}
