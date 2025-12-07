@@ -151,6 +151,82 @@ make build
 sudo make install
 ```
 
+## Shell Completion
+
+kubectl-coco supports command autocompletion for bash and zsh shells.
+
+### Bash
+
+**Prerequisites:**
+
+Install bash-completion.
+
+For MacOS:
+
+```bash
+brew install bash-completion@2
+
+# Add to your ~/.bash_profile:
+[[ -r "/opt/homebrew/etc/profile.d/bash_completion.sh" ]] && . "/opt/homebrew/etc/profile.d/bash_completion.sh"
+
+# Reload profile:
+source ~/.bash_profile
+```
+
+For Linux:
+
+```bash
+# Ubuntu/Debian:
+apt-get install bash-completion
+
+# CentOS/RHEL:
+yum install bash-completion
+```
+
+**Installation:**
+
+For current session:
+```bash
+source <(kubectl-coco completion bash)
+```
+
+For all sessions (permanent):
+```bash
+# MacOS:
+kubectl-coco completion bash > $(brew --prefix)/etc/bash_completion.d/kubectl-coco
+
+# Linux:
+kubectl-coco completion bash > /etc/bash_completion.d/kubectl-coco
+
+# Then restart your shell
+```
+
+**For kubectl plugin (`kubectl coco`):**
+
+Install kubectl completion first:
+
+```bash
+# MacOS:
+kubectl completion bash > $(brew --prefix)/etc/bash_completion.d/kubectl
+
+# Linux:
+kubectl completion bash > /etc/bash_completion.d/kubectl
+```
+
+### Zsh
+
+Enable completion if not already enabled:
+```bash
+echo "autoload -U compinit; compinit" >> ~/.zshrc
+```
+
+Install kubectl-coco completion:
+```bash
+kubectl-coco completion zsh > "${fpath[1]}/_kubectl-coco"
+```
+
+Start a new shell for completion to take effect.
+
 ## Usage
 
 ### Initialize Configuration
