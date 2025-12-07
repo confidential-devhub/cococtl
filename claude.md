@@ -45,6 +45,7 @@ make clean
 # Build and test locally
 ./kubectl-coco init --help
 ./kubectl-coco apply --help
+./kubectl-coco completion bash  # Generate shell completion
 
 # Test transformation without applying
 ./kubectl-coco apply -f examples/pod.yaml --skip-apply
