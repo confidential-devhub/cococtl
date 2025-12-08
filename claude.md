@@ -61,7 +61,14 @@ make release GOOS=linux GOARCH=amd64
 
 # Build for all platforms
 make release-all
+
+# Build with custom version
+VERSION=v1.0.0 make build
 ```
+
+**Versioning**: Version is automatically set from git tags using `git describe
+--tags --always --dirty`. The version is injected at build time via ldflags
+into `cmd.version` variable. Default version is "dev" if git is not available.
 
 ## Architecture Overview
 
