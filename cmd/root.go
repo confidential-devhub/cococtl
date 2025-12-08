@@ -10,6 +10,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// version is set at build time via ldflags
+var version = "dev"
+
 var rootCmd = &cobra.Command{
 	Use:   "kubectl-coco",
 	Short: "A kubectl plugin to deploy confidential containers (CoCo)",
@@ -20,7 +23,7 @@ It provides commands to:
   - Create CoCo configuration
   - Transform regular K8s manifests to CoCo-enabled manifests
   - Deploy CoCo applications`,
-	Version: "0.1.0",
+	Version: version,
 }
 
 // Execute runs the root command

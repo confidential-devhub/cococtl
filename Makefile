@@ -17,8 +17,11 @@ GOMOD=$(GOCMD) mod
 # Test parameters
 TEST?=.
 
+# Version from git
+VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+
 # Build flags
-LDFLAGS=-ldflags "-s -w"
+LDFLAGS=-ldflags "-s -w -X github.com/confidential-devhub/cococtl/cmd.version=$(VERSION)"
 
 # Release parameters
 GOOS?=$(shell go env GOOS)
@@ -31,7 +34,7 @@ all: build
 
 ## build: Build the kubectl-coco binary
 build:
-	@echo "Building $(BINARY_NAME)..."
+	@echo "Building $(BINARY_NAME) (version: $(VERSION))..."
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) .
 	@echo "Build complete: $(BINARY_NAME)"
 
@@ -99,9 +102,9 @@ help:
 
 ## release: Build static binary for specific OS/ARCH (use GOOS and GOARCH env vars)
 release:
-	@echo "Building release binary for $(GOOS)/$(GOARCH)..."
+	@echo "Building release binary for $(GOOS)/$(GOARCH) (version: $(VERSION))..."
 	@mkdir -p $(RELEASE_DIR)
-	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -ldflags "-s -w -extldflags=-static" -o $(RELEASE_DIR)/$(RELEASE_BINARY) .
+	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) -ldflags "-s -w -extldflags=-static -X github.com/confidential-devhub/cococtl/cmd.version=$(VERSION)" -o $(RELEASE_DIR)/$(RELEASE_BINARY) .
 	@chmod +x $(RELEASE_DIR)/$(RELEASE_BINARY)
 	@cd $(RELEASE_DIR) && sha256sum $(RELEASE_BINARY) > $(RELEASE_BINARY).sha256
 	@echo "Release binary created: $(RELEASE_DIR)/$(RELEASE_BINARY)"
