@@ -21,9 +21,14 @@ a regular Kubernetes manifest to a CoCo-enabled manifest.
 This command is purely educational and does not require a cluster connection.
 It helps you understand what changes are made to enable Confidential Containers.
 
+Supports both local files and remote URLs (http/https).
+
 Examples:
   # Explain transformations on your manifest
   kubectl coco explain -f app.yaml
+
+  # Explain from remote URL
+  kubectl coco explain -f https://raw.githubusercontent.com/user/repo/main/app.yaml
 
   # Use a built-in example
   kubectl coco explain --example simple-pod
@@ -56,7 +61,7 @@ var (
 func init() {
 	rootCmd.AddCommand(explainCmd)
 
-	explainCmd.Flags().StringVarP(&explainManifestFile, "filename", "f", "", "Path to Kubernetes manifest file")
+	explainCmd.Flags().StringVarP(&explainManifestFile, "filename", "f", "", "Path to Kubernetes manifest file or URL")
 	explainCmd.Flags().StringVar(&explainExample, "example", "", "Use built-in example (simple-pod, deployment-secrets, sidecar-service)")
 	explainCmd.Flags().StringVar(&explainFormat, "format", "text", "Output format: text, diff, markdown")
 	explainCmd.Flags().BoolVar(&explainListExamples, "list-examples", false, "List available built-in examples")
@@ -77,6 +82,7 @@ func runExplain(_ *cobra.Command, _ []string) error {
 	var manifestPath string
 	var manifestContent string
 	var isExample bool
+	var tempFile string
 
 	if explainExample != "" {
 		// Use built-in example
@@ -108,8 +114,25 @@ func runExplain(_ *cobra.Command, _ []string) error {
 		manifestContent = ex.Manifest
 		isExample = true
 	} else if explainManifestFile != "" {
-		// Use user-provided manifest
-		manifestPath = explainManifestFile
+		// Check if it's a remote URL
+		if isRemoteFile(explainManifestFile) {
+			fmt.Printf("📥 Downloading remote manifest: %s\n", explainManifestFile)
+			var err error
+			tempFile, err = downloadRemoteFile(explainManifestFile)
+			if err != nil {
+				return fmt.Errorf("failed to download remote manifest: %w", err)
+			}
+			defer func() {
+				_ = os.Remove(tempFile)
+			}()
+			manifestPath = tempFile
+			fmt.Printf("   Downloaded to: %s\n\n", tempFile)
+		} else {
+			// Use local file
+			manifestPath = explainManifestFile
+		}
+
+		// Read manifest content
 		// #nosec G304 - User-provided manifest file path is expected
 		data, err := os.ReadFile(manifestPath)
 		if err != nil {

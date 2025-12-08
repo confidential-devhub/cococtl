@@ -30,17 +30,20 @@ var applyCmd = &cobra.Command{
 	Long: `Transform a regular Kubernetes manifest to a CoCo-enabled manifest and apply it.
 
 This command will:
-  1. Load the specified manifest
+  1. Load the specified manifest (local file or URL)
   2. Add/update RuntimeClass
   3. Add initdata annotation
   4. Add first initContainer for attestation (if requested)
   5. Save a backup of the transformed manifest (*-coco.yaml)
   6. Apply the transformed manifest using kubectl
 
+Supports both local files and remote URLs (http/https).
+
 Example:
   kubectl coco apply -f app.yaml
   kubectl coco apply -f app.yaml --runtime-class kata-remote
-  kubectl coco apply -f app.yaml --init-container`,
+  kubectl coco apply -f app.yaml --init-container
+  kubectl coco apply -f https://raw.githubusercontent.com/user/repo/main/app.yaml`,
 	RunE: runApply,
 }
 
@@ -64,7 +67,7 @@ var (
 func init() {
 	rootCmd.AddCommand(applyCmd)
 
-	applyCmd.Flags().StringVarP(&manifestFile, "filename", "f", "", "Path to Kubernetes manifest file (required)")
+	applyCmd.Flags().StringVarP(&manifestFile, "filename", "f", "", "Path to Kubernetes manifest file or URL (required)")
 	applyCmd.Flags().StringVar(&runtimeClass, "runtime-class", "", "RuntimeClass to use (default from config)")
 	applyCmd.Flags().BoolVar(&addInitContainer, "init-container", false, "Add default attestation initContainer")
 	applyCmd.Flags().StringVar(&initContainerImg, "init-container-img", "", "Custom init container image (requires --init-container)")
@@ -110,9 +113,26 @@ func runApply(_ *cobra.Command, _ []string) error {
 		rc = cfg.RuntimeClass
 	}
 
+	// Handle remote files
+	actualManifestFile := manifestFile
+	var tempFile string
+	if isRemoteFile(manifestFile) {
+		fmt.Printf("Downloading remote manifest: %s\n", manifestFile)
+		var err error
+		tempFile, err = downloadRemoteFile(manifestFile)
+		if err != nil {
+			return fmt.Errorf("failed to download remote manifest: %w", err)
+		}
+		defer func() {
+			_ = os.Remove(tempFile)
+		}()
+		actualManifestFile = tempFile
+		fmt.Printf("Downloaded to: %s\n", tempFile)
+	}
+
 	// Load manifest (supports multi-document YAML)
-	fmt.Printf("Loading manifest: %s\n", manifestFile)
-	manifestSet, err := manifest.LoadMultiDocument(manifestFile)
+	fmt.Printf("Loading manifest: %s\n", actualManifestFile)
+	manifestSet, err := manifest.LoadMultiDocument(actualManifestFile)
 	if err != nil {
 		return fmt.Errorf("failed to load manifest: %w", err)
 	}
