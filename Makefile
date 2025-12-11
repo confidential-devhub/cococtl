@@ -61,10 +61,10 @@ clean:
 	@rm -rf $(RELEASE_DIR)
 	@echo "Clean complete"
 
-## test: Run integration tests (use TEST=<regex> to filter, e.g., make test TEST=TestConfig)
+## test: Run all tests (use TEST=<regex> to filter, e.g., make test TEST=TestConfig)
 test:
 	@echo "Running tests (filter: $(TEST))..."
-	$(GOTEST) -v -run $(TEST) ./integration_test/...
+	$(GOTEST) -v -run $(TEST) ./cmd/... ./integration_test/...
 
 ## tidy: Tidy go modules
 tidy:
