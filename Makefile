@@ -44,12 +44,14 @@ install: build
 	@mkdir -p $(INSTALL_PATH)
 	@cp $(BINARY_NAME) $(INSTALL_PATH)/
 	@chmod +x $(INSTALL_PATH)/$(BINARY_NAME)
+	@ln -sf $(INSTALL_PATH)/$(BINARY_NAME) $(INSTALL_PATH)/kubectl_complete-coco
 	@echo "Installation complete. You can now use: kubectl coco"
 
 ## uninstall: Remove kubectl-coco from $(INSTALL_PATH)
 uninstall:
 	@echo "Uninstalling $(BINARY_NAME)..."
 	@rm -f $(INSTALL_PATH)/$(BINARY_NAME)
+	@rm -f $(INSTALL_PATH)/kubectl_complete-coco
 	@echo "Uninstall complete"
 
 ## clean: Remove build artifacts
