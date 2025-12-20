@@ -136,30 +136,14 @@ func genZshCompletionWithPlugin(out io.Writer) error {
 
 	completion := buf.String()
 
-	// Find and remove the last compdef line
-	lastCompdefIdx := strings.LastIndex(completion, "compdef _kubectl-coco kubectl-coco")
-	if lastCompdefIdx > 0 {
-		// Find the start of this line
-		lineStart := strings.LastIndex(completion[:lastCompdefIdx], "\n")
-		if lineStart < 0 {
-			lineStart = 0
-		} else {
-			lineStart++ // Move past the newline
-		}
-		completion = completion[:lineStart]
-	}
+	// Replace both compdef lines to include kubectl_coco for plugin support
+	// 1. #compdef directive (line 1) - used when file is in fpath
+	completion = strings.Replace(completion, "#compdef kubectl-coco", "#compdef kubectl-coco kubectl_coco", 1)
+	// 2. compdef command - used when sourcing file directly
+	completion = strings.Replace(completion, "compdef _kubectl-coco kubectl-coco", "compdef _kubectl-coco kubectl-coco kubectl_coco", 1)
 
 	// Write the modified completion
-	if _, err := fmt.Fprint(out, completion); err != nil {
-		return err
-	}
-
-	// Add kubectl plugin completion (kubectl coco and kubectl-coco)
-	pluginCompletion := `
-# kubectl plugin completion
-compdef _kubectl-coco kubectl-coco kubectl_coco
-`
-	_, err := fmt.Fprint(out, pluginCompletion)
+	_, err := fmt.Fprint(out, completion)
 	return err
 }
 

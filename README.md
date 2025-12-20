@@ -38,6 +38,7 @@ curl -LO "https://github.com/confidential-devhub/cococtl/releases/latest/downloa
 
 # Install
 sudo install -m 0755 kubectl-coco-${OS}-${ARCH} /usr/local/bin/kubectl-coco
+sudo ln -sf /usr/local/bin/kubectl-coco /usr/local/bin/kubectl_complete-coco
 
 # Verify
 kubectl coco --version
@@ -127,12 +128,14 @@ For detailed information, see [TRANSFORMATIONS.md](TRANSFORMATIONS.md).
    System-wide (requires sudo):
    ```bash
    sudo install -m 0755 kubectl-coco-${OS}-${ARCH} /usr/local/bin/kubectl-coco
+   sudo ln -sf /usr/local/bin/kubectl-coco /usr/local/bin/kubectl_complete-coco
    ```
 
    Or user directory:
    ```bash
    mkdir -p ~/.local/bin
    install -m 0755 kubectl-coco-${OS}-${ARCH} ~/.local/bin/kubectl-coco
+   ln -sf ~/.local/bin/kubectl-coco ~/.local/bin/kubectl_complete-coco
    export PATH=$PATH:~/.local/bin  # Add to ~/.bashrc or ~/.zshrc
    ```
 
@@ -226,6 +229,12 @@ kubectl-coco completion zsh > "${fpath[1]}/_kubectl-coco"
 ```
 
 Start a new shell for completion to take effect.
+
+**Note:** The `kubectl_complete-coco` symlink (created during installation) enables `kubectl coco` plugin completion. If `kubectl coco <TAB>` doesn't work, verify:
+```bash
+ls -la /usr/local/bin/kubectl_complete-coco
+# Should point to kubectl-coco
+```
 
 ## Usage
 
