@@ -67,7 +67,7 @@ var (
 func init() {
 	rootCmd.AddCommand(applyCmd)
 
-	applyCmd.Flags().StringVarP(&manifestFile, "filename", "f", "", "Path to Kubernetes manifest file or URL (required)")
+	applyCmd.Flags().StringVarP(&manifestFile, "filename", "f", "", "Path to Kubernetes manifest file or URL")
 	applyCmd.Flags().StringVar(&runtimeClass, "runtime-class", "", "RuntimeClass to use (default from config)")
 	applyCmd.Flags().BoolVar(&addInitContainer, "init-container", false, "Add default attestation initContainer")
 	applyCmd.Flags().StringVar(&initContainerImg, "init-container-img", "", "Custom init container image (requires --init-container)")
@@ -81,13 +81,14 @@ func init() {
 	applyCmd.Flags().StringVar(&sidecarSANDNS, "sidecar-san-dns", "", "Comma-separated list of DNS names for sidecar server certificate SANs")
 	applyCmd.Flags().BoolVar(&sidecarSkipAutoSANs, "sidecar-skip-auto-sans", false, "Skip auto-detection of SANs (node IPs and service DNS)")
 	applyCmd.Flags().IntVar(&sidecarPortForward, "sidecar-port-forward", 0, "Port to forward from primary container (requires --sidecar)")
-
-	if err := applyCmd.MarkFlagRequired("filename"); err != nil {
-		panic(fmt.Sprintf("failed to mark filename flag as required: %v", err))
-	}
 }
 
 func runApply(_ *cobra.Command, _ []string) error {
+	// Validate required flags (manual validation to keep all flags visible in shell completion)
+	if manifestFile == "" {
+		return fmt.Errorf("required flag(s) \"filename\" not set")
+	}
+
 	// Load configuration
 	if configPath == "" {
 		var err error
