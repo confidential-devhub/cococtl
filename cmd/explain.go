@@ -48,14 +48,14 @@ Examples:
 }
 
 var (
-	explainManifestFile   string
-	explainExample        string
-	explainFormat         string
-	explainListExamples   bool
-	explainConfigPath     string
-	explainEnableSidecar  bool
-	explainSidecarPort    int
-	explainOutput         string
+	explainManifestFile  string
+	explainExample       string
+	explainFormat        string
+	explainListExamples  bool
+	explainConfigPath    string
+	explainEnableSidecar bool
+	explainSidecarPort   int
+	explainOutput        string
 )
 
 func init() {
