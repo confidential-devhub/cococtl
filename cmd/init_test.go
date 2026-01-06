@@ -82,10 +82,14 @@ func TestInitCommand_WithoutRuntimeClassFlag(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Verify default runtime class is used
-	if cfg.RuntimeClass != config.DefaultRuntimeClass {
-		t.Errorf("RuntimeClass = %q, want %q", cfg.RuntimeClass, config.DefaultRuntimeClass)
+	// Verify runtime class is set (either auto-detected or default)
+	// Auto-detection may succeed or fail depending on cluster state,
+	// but RuntimeClass should always be non-empty
+	if cfg.RuntimeClass == "" {
+		t.Errorf("RuntimeClass is empty, expected auto-detected or default value")
 	}
+	// Log what was detected for debugging
+	t.Logf("RuntimeClass set to: %q", cfg.RuntimeClass)
 }
 
 // TestInitCommand_RuntimeClassWithTrusteeURL tests runtime-class flag with trustee-url

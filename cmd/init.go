@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/confidential-devhub/cococtl/pkg/cluster"
 	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/confidential-devhub/cococtl/pkg/sidecar/certs"
 	"github.com/confidential-devhub/cococtl/pkg/trustee"
@@ -21,13 +22,14 @@ var initCmd = &cobra.Command{
 This command will:
   - Optionally deploy Trustee KBS to your cluster
   - Create configuration file with Trustee URL and other settings
+  - Auto-detect RuntimeClass with SNP or TDX support (falls back to kata-cc)
   - Optionally set up sidecar certificates (with --enable-sidecar):
     - Generate Client CA and upload to Trustee KBS
     - Generate client certificate for developer access
     - Save client certificate to ~/.kube/coco-sidecar/
   - Prompt for configuration values including:
     - Trustee server URL (or auto-deploy)
-    - Default RuntimeClass (default: kata-cc)
+    - Default RuntimeClass (auto-detected, can be overridden)
     - Trustee CA cert location (optional)
     - Kata-agent policy file path (optional)
     - Default init container image (optional)
@@ -109,9 +111,17 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Set runtime class from flag if provided
+	// Set runtime class from flag if provided, otherwise auto-detect
 	if runtimeClass != "" {
 		cfg.RuntimeClass = runtimeClass
+	} else {
+		// Auto-detect RuntimeClass with SNP or TDX support
+		cfg.RuntimeClass = cluster.DetectRuntimeClass(config.DefaultRuntimeClass)
+	}
+
+	// In non-interactive mode, show the RuntimeClass being used
+	if !interactive {
+		fmt.Printf("RuntimeClass: %s\n", cfg.RuntimeClass)
 	}
 
 	// Continue with other configuration prompts if interactive
