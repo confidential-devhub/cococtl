@@ -76,7 +76,8 @@ func TestDetectSecrets_EnvSecrets(t *testing.T) {
 func TestDetectSecrets_VolumeSecrets(t *testing.T) {
 	manifest := map[string]interface{}{
 		"metadata": map[string]interface{}{
-			"name": "test-pod",
+			"name":      "test-pod",
+			"namespace": "default",
 		},
 		"spec": map[string]interface{}{
 			"containers": []interface{}{
@@ -141,7 +142,8 @@ func TestDetectSecrets_VolumeSecrets(t *testing.T) {
 func TestDetectSecrets_VolumeWithItems(t *testing.T) {
 	manifest := map[string]interface{}{
 		"metadata": map[string]interface{}{
-			"name": "test-pod",
+			"name":      "test-pod",
+			"namespace": "default",
 		},
 		"spec": map[string]interface{}{
 			"containers": []interface{}{
@@ -211,7 +213,8 @@ func TestDetectSecrets_VolumeWithItems(t *testing.T) {
 func TestDetectSecrets_EnvFromSecrets(t *testing.T) {
 	manifest := map[string]interface{}{
 		"metadata": map[string]interface{}{
-			"name": "test-pod",
+			"name":      "test-pod",
+			"namespace": "default",
 		},
 		"spec": map[string]interface{}{
 			"containers": []interface{}{
@@ -365,7 +368,8 @@ func TestDetectSecrets_MixedSecrets(t *testing.T) {
 func TestDetectSecrets_NoSecrets(t *testing.T) {
 	manifest := map[string]interface{}{
 		"metadata": map[string]interface{}{
-			"name": "test-pod",
+			"name":      "test-pod",
+			"namespace": "default",
 		},
 		"spec": map[string]interface{}{
 			"containers": []interface{}{
