@@ -25,6 +25,34 @@ type K8sSecret struct {
 	Data map[string]string `json:"data"` // Keys are base64 encoded values
 }
 
+// GetCurrentNamespace returns the current namespace from kubectl config.
+// If no namespace is set in the current context or if there is no current context,
+// returns "default".
+func GetCurrentNamespace() (string, error) {
+	ctx := context.Background()
+
+	// First check if a current context exists
+	checkCmd := exec.CommandContext(ctx, "kubectl", "config", "current-context")
+	if err := checkCmd.Run(); err != nil {
+		// No current context is not an error; we intentionally return "default"
+		return "default", nil //nolint:nilerr
+	}
+
+	// Get namespace from the current context
+	cmd := exec.CommandContext(ctx, "kubectl", "config", "view", "--minify", "-o", "jsonpath={..namespace}")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current namespace: %w", err)
+	}
+
+	namespace := strings.TrimSpace(string(output))
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	return namespace, nil
+}
+
 // InspectSecret queries K8s to get all keys in a secret
 // If namespace is empty, uses current context namespace (no -n flag)
 // Returns error if kubectl fails or secret doesn't exist

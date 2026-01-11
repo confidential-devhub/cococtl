@@ -122,7 +122,8 @@ func populateSecrets(namespace string, secrets []SecretResource) error {
 	}
 
 	// #nosec G204 - namespace is from function parameter, tmpDir is from os.MkdirTemp, podName is from kubectl get
-	cmd := exec.Command("kubectl", "cp", "-n", namespace,
+	// Use --no-preserve to avoid tar ownership errors when local files have different uid/gid than container
+	cmd := exec.Command("kubectl", "cp", "--no-preserve=true", "-n", namespace,
 		tmpDir+"/.", podName+":"+kbsRepositoryPath+"/")
 	output, err := cmd.CombinedOutput()
 	if err != nil {

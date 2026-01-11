@@ -1,6 +1,8 @@
 package secrets
 
 import (
+	"fmt"
+
 	"github.com/confidential-devhub/cococtl/pkg/manifest"
 )
 
@@ -31,6 +33,15 @@ func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, erro
 
 	// Extract namespace using manifest method
 	namespace := m.GetNamespace()
+
+	// If manifest doesn't specify namespace, get current kubectl context namespace
+	if namespace == "" {
+		var err error
+		namespace, err = GetCurrentNamespace()
+		if err != nil {
+			return nil, fmt.Errorf("manifest has no namespace and failed to get current namespace: %w", err)
+		}
+	}
 
 	// Get pod spec using manifest method (works for both Pod and Deployment!)
 	podSpec, err := m.GetPodSpec()
@@ -291,6 +302,15 @@ func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{
 	m := manifest.GetFromData(manifestData)
 
 	namespace := m.GetNamespace()
+
+	// If manifest doesn't specify namespace, get current kubectl context namespace
+	if namespace == "" {
+		var err error
+		namespace, err = GetCurrentNamespace()
+		if err != nil {
+			return nil, fmt.Errorf("manifest has no namespace and failed to get current namespace: %w", err)
+		}
+	}
 
 	// Get pod spec using manifest method (works for both Pod and Deployment!)
 	podSpec, err := m.GetPodSpec()
