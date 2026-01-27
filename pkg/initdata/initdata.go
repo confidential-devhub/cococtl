@@ -38,7 +38,12 @@ type ImagePullSecretInfo struct {
 
 // Generate creates initdata based on the CoCo configuration
 // imagePullSecrets is optional - pass nil if no imagePullSecrets need to be added
+// Requires trustee_server to be set in config (e.g. init was run without --no-upload or trustee_server was set manually).
 func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (string, error) {
+	if strings.TrimSpace(cfg.TrusteeServer) == "" {
+		return "", fmt.Errorf("trustee_server is not set in config: init may have been run with --no-upload, or trustee_server was never configured; initdata requires a Trustee KBS URL")
+	}
+
 	// Generate aa.toml (Attestation Agent configuration)
 	aaToml, err := generateAAToml(cfg)
 	if err != nil {

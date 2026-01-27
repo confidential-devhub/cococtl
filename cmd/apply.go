@@ -32,7 +32,7 @@ var applyCmd = &cobra.Command{
 This command will:
   1. Load the specified manifest (local file or URL)
   2. Add/update RuntimeClass
-  3. Add initdata annotation
+  3. Add initdata annotation (use --no-initdata to skip)
   4. Add first initContainer for attestation (if requested)
   5. Save a backup of the transformed manifest (*-coco.yaml)
   6. Apply the transformed manifest using kubectl
@@ -54,6 +54,7 @@ var (
 	initContainerImg    string
 	initContainerCmd    string
 	skipApply           bool
+	skipInitdata        bool
 	configPath          string
 	convertSecrets      bool
 	enableSidecar       bool
@@ -73,6 +74,7 @@ func init() {
 	applyCmd.Flags().StringVar(&initContainerImg, "init-container-img", "", "Custom init container image (requires --init-container)")
 	applyCmd.Flags().StringVar(&initContainerCmd, "init-container-cmd", "", "Custom init container command (requires --init-container)")
 	applyCmd.Flags().BoolVar(&skipApply, "skip-apply", false, "Skip kubectl apply, only transform the manifest")
+	applyCmd.Flags().BoolVar(&skipInitdata, "no-initdata", false, "Do not add the initdata annotation to the manifest")
 	applyCmd.Flags().StringVar(&configPath, "config", "", "Path to CoCo config file (default: ~/.kube/coco-config.toml)")
 	applyCmd.Flags().BoolVar(&convertSecrets, "convert-secrets", true, "Automatically convert K8s secrets to sealed secrets")
 	applyCmd.Flags().BoolVar(&enableSidecar, "sidecar", false, "Enable secure access sidecar container")
@@ -335,15 +337,19 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 		}
 	}
 
-	// 6. Generate and add initdata annotation
-	fmt.Println("  - Generating initdata annotation")
-	initdataValue, err := initdata.Generate(cfg, imagePullSecretsInfo)
-	if err != nil {
-		return fmt.Errorf("failed to generate initdata: %w", err)
-	}
+	// 6. Generate and add initdata annotation (skipped when --no-initdata)
+	if !skipInitdata {
+		fmt.Println("  - Generating initdata annotation")
+		initdataValue, err := initdata.Generate(cfg, imagePullSecretsInfo)
+		if err != nil {
+			return fmt.Errorf("failed to generate initdata: %w", err)
+		}
 
-	if err := m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", initdataValue); err != nil {
-		return fmt.Errorf("failed to set initdata annotation: %w", err)
+		if err := m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", initdataValue); err != nil {
+			return fmt.Errorf("failed to set initdata annotation: %w", err)
+		}
+	} else {
+		fmt.Println("  - Skipping initdata annotation (--no-initdata is set)")
 	}
 
 	// 7. Add custom annotations from config
