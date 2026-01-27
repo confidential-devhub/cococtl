@@ -24,9 +24,10 @@ This command will:
   - Create configuration file with Trustee URL and other settings
   - Auto-detect RuntimeClass with SNP or TDX support (falls back to kata-cc)
   - Optionally set up sidecar certificates (with --enable-sidecar):
-    - Generate Client CA and upload to Trustee KBS
+    - Generate Client CA and upload to Trustee KBS (use --no-upload to skip uploads)
     - Generate client certificate for developer access
     - Save client certificate to ~/.kube/coco-sidecar/
+  - Use --no-upload to skip all Trustee operations (deploy and KBS uploads); trustee-related flags are ignored.
   - Prompt for configuration values including:
     - Trustee server URL (or auto-deploy)
     - Default RuntimeClass (auto-detected, can be overridden)
@@ -50,11 +51,13 @@ func init() {
 	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
 	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates")
+	initCmd.Flags().Bool("no-upload", false, "Do not upload anything to Trustee (skips Trustee deployment and all KBS uploads; trustee-related flags are ignored)")
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
 	outputPath, _ := cmd.Flags().GetString("output")
 	interactive, _ := cmd.Flags().GetBool("interactive")
+	noUpload, _ := cmd.Flags().GetBool("no-upload")
 	skipTrusteeDeploy, _ := cmd.Flags().GetBool("skip-trustee-deploy")
 	trusteeNamespace, _ := cmd.Flags().GetString("trustee-namespace")
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
@@ -87,26 +90,33 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	cfg := config.DefaultConfig()
 
-	// Handle Trustee setup
-	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
-	if err != nil {
-		return err
+	var trusteeDeployed bool
+	var actualNamespace string
+	var err error
+
+	// When --no-upload is set, skip all Trustee operations (deploy, URL, uploads)
+	if !noUpload {
+		// Handle Trustee setup
+		trusteeDeployed, actualNamespace, err = handleTrusteeSetup(cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
+		if err != nil {
+			return err
+		}
+	} else {
+		fmt.Println("Skipping Trustee setup (--no-upload is set)")
 	}
 
-	// Determine namespace for sidecar certificate upload
-	// Use the actual namespace where Trustee was deployed
+	// Determine namespace for sidecar certificate upload (only used when uploading)
 	sidecarNamespace := actualNamespace
 	if sidecarNamespace == "" {
-		// If Trustee wasn't deployed (user provided URL), use the flag value or default
 		sidecarNamespace = trusteeNamespace
 		if sidecarNamespace == "" {
 			sidecarNamespace = "default"
 		}
 	}
 
-	// Handle sidecar certificate setup if enabled
+	// Handle sidecar certificate setup if enabled (generates certs; upload skipped when --no-upload)
 	if enableSidecar {
-		if err := handleSidecarCertSetup(sidecarNamespace); err != nil {
+		if err := handleSidecarCertSetup(sidecarNamespace, noUpload); err != nil {
 			return err
 		}
 	}
@@ -275,12 +285,13 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 	return true, namespace, nil
 }
 
-// handleSidecarCertSetup generates and uploads sidecar certificates.
+// handleSidecarCertSetup generates and optionally uploads sidecar certificates.
 // It creates a Client CA, generates a client certificate for the developer,
-// uploads the Client CA to Trustee KBS, and saves both the CA and client certificate locally.
+// optionally uploads the Client CA to Trustee KBS (when noUpload is false),
+// and saves both the CA and client certificate locally.
 // The CA is needed during 'apply' to sign per-app server certificates.
-// The trusteeNamespace parameter specifies where the Trustee KBS pod is deployed.
-func handleSidecarCertSetup(trusteeNamespace string) error {
+// The trusteeNamespace parameter specifies where the Trustee KBS pod is deployed (used only when uploading).
+func handleSidecarCertSetup(trusteeNamespace string, noUpload bool) error {
 	fmt.Println("\nSetting up sidecar certificates...")
 
 	// Generate Client CA
@@ -297,15 +308,19 @@ func handleSidecarCertSetup(trusteeNamespace string) error {
 		return fmt.Errorf("failed to generate client certificate: %w", err)
 	}
 
-	// Upload Client CA to Trustee KBS
-	// Note: We always use "default" namespace in the KBS path for consistency,
-	// regardless of where Trustee is deployed. This ensures all apps reference
-	// the same client CA location.
-	const kbsResourceNamespace = "default"
-	fmt.Printf("  - Uploading Client CA to Trustee KBS (Trustee namespace: %s, resource path: default)...\n", trusteeNamespace)
-	clientCAPath := kbsResourceNamespace + "/sidecar-tls/client-ca"
-	if err := trustee.UploadResource(trusteeNamespace, clientCAPath, clientCA.CertPEM); err != nil {
-		return fmt.Errorf("failed to upload client CA to KBS: %w", err)
+	// Upload Client CA to Trustee KBS (skipped when --no-upload)
+	if !noUpload {
+		// Note: We always use "default" namespace in the KBS path for consistency,
+		// regardless of where Trustee is deployed. This ensures all apps reference
+		// the same client CA location.
+		const kbsResourceNamespace = "default"
+		fmt.Printf("  - Uploading Client CA to Trustee KBS (Trustee namespace: %s, resource path: default)...\n", trusteeNamespace)
+		clientCAPath := kbsResourceNamespace + "/sidecar-tls/client-ca"
+		if err := trustee.UploadResource(trusteeNamespace, clientCAPath, clientCA.CertPEM); err != nil {
+			return fmt.Errorf("failed to upload client CA to KBS: %w", err)
+		}
+	} else {
+		fmt.Println("  - Skipping Client CA upload to Trustee (--no-upload is set)")
 	}
 
 	// Save certificates locally to ~/.kube/coco-sidecar/
@@ -328,7 +343,11 @@ func handleSidecarCertSetup(trusteeNamespace string) error {
 	}
 
 	fmt.Println("\nSidecar certificates configured successfully!")
-	fmt.Printf("  - Client CA uploaded to: kbs:///%s\n", clientCAPath)
+	if !noUpload {
+		const kbsResourceNamespace = "default"
+		clientCAPath := kbsResourceNamespace + "/sidecar-tls/client-ca"
+		fmt.Printf("  - Client CA uploaded to: kbs:///%s\n", clientCAPath)
+	}
 	fmt.Printf("  - Client CA saved to: %s/ca-cert.pem (for signing server certs)\n", certDir)
 	fmt.Printf("  - Client certificate saved to: %s/client-cert.pem\n", certDir)
 	fmt.Printf("  - Client key saved to: %s/client-key.pem\n", certDir)
