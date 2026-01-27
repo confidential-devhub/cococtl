@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/cluster"
@@ -26,7 +25,7 @@ This command will:
   - Optionally set up sidecar certificates (with --enable-sidecar):
     - Generate Client CA and upload to Trustee KBS (use --no-upload to skip uploads)
     - Generate client certificate for developer access
-    - Save all certificates and keys locally to ~/.kube/coco-sidecar/
+    - Save all certificates and keys locally (default: ~/.kube/coco-sidecar, override with --cert-dir)
   - Use --no-upload to skip all Trustee operations (deploy and KBS uploads); trustee-related flags are ignored.
   - Prompt for configuration values including:
     - Trustee server URL (or auto-deploy)
@@ -51,6 +50,7 @@ func init() {
 	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
 	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates")
+	initCmd.Flags().String("cert-dir", "", "Directory to store sidecar certificates and keys (default: ~/.kube/coco-sidecar)")
 	initCmd.Flags().Bool("no-upload", false, "Do not upload anything to Trustee (skips Trustee deployment and all KBS uploads; trustee-related flags are ignored)")
 }
 
@@ -63,6 +63,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
 	runtimeClass, _ := cmd.Flags().GetString("runtime-class")
 	enableSidecar, _ := cmd.Flags().GetBool("enable-sidecar")
+	certDir, _ := cmd.Flags().GetString("cert-dir")
 
 	// Get default config path if not specified
 	if outputPath == "" {
@@ -114,9 +115,18 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	// Resolve cert directory for sidecar: use --cert-dir or default ~/.kube/coco-sidecar
+	if certDir == "" {
+		d, err := config.GetDefaultCertDir()
+		if err != nil {
+			return fmt.Errorf("failed to get default cert directory: %w", err)
+		}
+		certDir = d
+	}
+
 	// Handle sidecar certificate setup if enabled (generates certs; upload skipped when --no-upload)
 	if enableSidecar {
-		if err := handleSidecarCertSetup(sidecarNamespace, noUpload); err != nil {
+		if err := handleSidecarCertSetup(sidecarNamespace, certDir, noUpload); err != nil {
 			return err
 		}
 	}
@@ -288,10 +298,10 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 // handleSidecarCertSetup generates and optionally uploads sidecar certificates.
 // It creates a Client CA, generates a client certificate for the developer,
 // optionally uploads the Client CA to Trustee KBS (when noUpload is false),
-// and saves all certificates and keys locally.
+// and saves all certificates and keys locally to certDir.
 // The CA is needed during 'apply' to sign per-app server certificates.
 // The trusteeNamespace parameter specifies where the Trustee KBS pod is deployed (used only when uploading).
-func handleSidecarCertSetup(trusteeNamespace string, noUpload bool) error {
+func handleSidecarCertSetup(trusteeNamespace string, certDir string, noUpload bool) error {
 	fmt.Println("\nSetting up sidecar certificates...")
 
 	// Generate Client CA
@@ -322,13 +332,6 @@ func handleSidecarCertSetup(trusteeNamespace string, noUpload bool) error {
 	} else {
 		fmt.Println("  - Skipping Client CA upload to Trustee (--no-upload is set)")
 	}
-
-	// Save certificates locally to ~/.kube/coco-sidecar/
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-	certDir := filepath.Join(homeDir, ".kube", "coco-sidecar")
 
 	fmt.Printf("  - Saving all certificates and keys to %s...\n", certDir)
 
