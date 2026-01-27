@@ -244,16 +244,15 @@ func (c *CocoConfig) Save(path string) error {
 	return nil
 }
 
-// Validate checks if the configuration is valid
+// Validate checks if the configuration is valid.
+// trustee_server is optional (e.g. when init was run with --no-upload); callers that require
+// it (e.g. initdata generation, Trustee uploads) must check it themselves.
 func (c *CocoConfig) Validate() error {
-	if c.TrusteeServer == "" {
-		return fmt.Errorf("trustee_server is mandatory and cannot be empty")
-	}
 	if c.RuntimeClass == "" {
 		return fmt.Errorf("runtime_class must be specified")
 	}
 
-	// Normalize trustee_server URL - add https:// prefix if no protocol is specified
+	// Normalize trustee_server URL when set - add https:// prefix if no protocol is specified
 	c.NormalizeTrusteeServer()
 
 	return nil
