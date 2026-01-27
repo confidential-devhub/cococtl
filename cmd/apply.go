@@ -56,6 +56,7 @@ var (
 	skipApply           bool
 	skipInitdata        bool
 	configPath          string
+	certDir             string
 	convertSecrets      bool
 	enableSidecar       bool
 	sidecarImage        string
@@ -76,6 +77,7 @@ func init() {
 	applyCmd.Flags().BoolVar(&skipApply, "skip-apply", false, "Skip kubectl apply, only transform the manifest")
 	applyCmd.Flags().BoolVar(&skipInitdata, "no-initdata", false, "Do not add the initdata annotation to the manifest")
 	applyCmd.Flags().StringVar(&configPath, "config", "", "Path to CoCo config file (default: ~/.kube/coco-config.toml)")
+	applyCmd.Flags().StringVar(&certDir, "cert-dir", "", "Directory containing sidecar Client CA and keys, for signing server certs (default: ~/.kube/coco-sidecar)")
 	applyCmd.Flags().BoolVar(&convertSecrets, "convert-secrets", true, "Automatically convert K8s secrets to sealed secrets")
 	applyCmd.Flags().BoolVar(&enableSidecar, "sidecar", false, "Enable secure access sidecar container")
 	applyCmd.Flags().StringVar(&sidecarImage, "sidecar-image", "", "Custom sidecar image (requires --sidecar)")
@@ -178,6 +180,15 @@ func runApply(_ *cobra.Command, _ []string) error {
 	// Additional validation: ensure forward port doesn't conflict with sidecar HTTPS port
 	if sidecarPortForward == 8443 && (enableSidecar || cfg.Sidecar.Enabled) {
 		return fmt.Errorf("sidecar port forward cannot be 8443 (conflicts with sidecar HTTPS port)")
+	}
+
+	// Resolve cert directory for sidecar: use --cert-dir or default ~/.kube/coco-sidecar
+	if certDir == "" {
+		d, err := config.GetDefaultCertDir()
+		if err != nil {
+			return fmt.Errorf("failed to get default cert directory: %w", err)
+		}
+		certDir = d
 	}
 
 	// Transform manifest
@@ -732,12 +743,6 @@ func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 //   - namespace: namespace for certificate KBS path (from manifest metadata.namespace)
 //   - trusteeNamespace: namespace where Trustee KBS is deployed
 func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error {
-	// Load Client CA from ~/.kube/coco-sidecar/
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-	certDir := filepath.Join(homeDir, ".kube", "coco-sidecar")
 	caCertPath := filepath.Join(certDir, "ca-cert.pem")
 	caKeyPath := filepath.Join(certDir, "ca-key.pem")
 
