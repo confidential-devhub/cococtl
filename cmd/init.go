@@ -26,7 +26,7 @@ This command will:
   - Optionally set up sidecar certificates (with --enable-sidecar):
     - Generate Client CA and upload to Trustee KBS (use --no-upload to skip uploads)
     - Generate client certificate for developer access
-    - Save client certificate to ~/.kube/coco-sidecar/
+    - Save all certificates and keys locally to ~/.kube/coco-sidecar/
   - Use --no-upload to skip all Trustee operations (deploy and KBS uploads); trustee-related flags are ignored.
   - Prompt for configuration values including:
     - Trustee server URL (or auto-deploy)
@@ -288,7 +288,7 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 // handleSidecarCertSetup generates and optionally uploads sidecar certificates.
 // It creates a Client CA, generates a client certificate for the developer,
 // optionally uploads the Client CA to Trustee KBS (when noUpload is false),
-// and saves both the CA and client certificate locally.
+// and saves all certificates and keys locally.
 // The CA is needed during 'apply' to sign per-app server certificates.
 // The trusteeNamespace parameter specifies where the Trustee KBS pod is deployed (used only when uploading).
 func handleSidecarCertSetup(trusteeNamespace string, noUpload bool) error {
@@ -330,7 +330,7 @@ func handleSidecarCertSetup(trusteeNamespace string, noUpload bool) error {
 	}
 	certDir := filepath.Join(homeDir, ".kube", "coco-sidecar")
 
-	fmt.Printf("  - Saving certificates to %s...\n", certDir)
+	fmt.Printf("  - Saving all certificates and keys to %s...\n", certDir)
 
 	// Save Client CA (needed to sign server certificates during apply)
 	if err := clientCA.SaveToFile(certDir, "ca"); err != nil {
@@ -348,9 +348,9 @@ func handleSidecarCertSetup(trusteeNamespace string, noUpload bool) error {
 		clientCAPath := kbsResourceNamespace + "/sidecar-tls/client-ca"
 		fmt.Printf("  - Client CA uploaded to: kbs:///%s\n", clientCAPath)
 	}
-	fmt.Printf("  - Client CA saved to: %s/ca-cert.pem (for signing server certs)\n", certDir)
-	fmt.Printf("  - Client certificate saved to: %s/client-cert.pem\n", certDir)
-	fmt.Printf("  - Client key saved to: %s/client-key.pem\n", certDir)
+	fmt.Println("  - All certificates and keys saved locally:")
+	fmt.Printf("    - %s/ca-cert.pem, %s/ca-key.pem (Client CA for signing server certs)\n", certDir, certDir)
+	fmt.Printf("    - %s/client-cert.pem,%s/ client-key.pem (client cert for developer access)\n", certDir, certDir)
 
 	return nil
 }
