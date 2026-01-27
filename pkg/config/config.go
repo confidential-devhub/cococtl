@@ -139,6 +139,15 @@ func GetConfigPath() (string, error) {
 	return filepath.Join(home, ".kube", "coco-config.toml"), nil
 }
 
+// GetDefaultCertDir returns the default directory for sidecar certificates and keys (~/.kube/coco-sidecar).
+func GetDefaultCertDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user home directory: %w", err)
+	}
+	return filepath.Join(home, ".kube", "coco-sidecar"), nil
+}
+
 // Load reads the configuration from the specified path.
 func Load(path string) (*CocoConfig, error) {
 	// Validate and sanitize the path to prevent directory traversal
