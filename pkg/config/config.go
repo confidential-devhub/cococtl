@@ -67,6 +67,10 @@ type CocoConfig struct {
 func (c *CocoConfig) GetTrusteeNamespace() string {
 	url := c.TrusteeServer
 
+	if url == "" {
+		return ""
+	}
+
 	// Remove protocol if present
 	url = strings.TrimPrefix(url, "http://")
 	url = strings.TrimPrefix(url, "https://")

@@ -333,10 +333,10 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 			}
 		}
 
-		// Get Trustee namespace from config (where KBS is deployed)
+		// Get Trustee namespace from config (where KBS is deployed; empty when trustee not configured)
 		trusteeNamespace := cfg.GetTrusteeNamespace()
 
-		// Generate and upload server certificate
+		// Load CA, build SANs, generate server cert; upload to Trustee only when trusteeNamespace is not empty
 		fmt.Println("  - Setting up sidecar server certificate")
 		if err := handleSidecarServerCert(appName, namespace, trusteeNamespace); err != nil {
 			return fmt.Errorf("failed to setup sidecar server certificate: %w", err)
@@ -735,13 +735,13 @@ func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 	return trustee.AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
 }
 
-// handleSidecarServerCert generates and uploads a server certificate for the sidecar.
-// It loads the Client CA, auto-detects or uses provided SANs, generates the server cert,
-// and uploads it to Trustee KBS at per-app paths.
+// handleSidecarServerCert loads the Client CA, builds SANs, generates a server cert for the sidecar,
+// and optionally uploads it to Trustee KBS. When trusteeNamespace is empty (e.g. trustee not configured),
+// it still runs load/validate/generate for early feedback.
 // Parameters:
 //   - appName: name of the application (from manifest metadata.name)
 //   - namespace: namespace for certificate KBS path (from manifest metadata.namespace)
-//   - trusteeNamespace: namespace where Trustee KBS is deployed
+//   - trusteeNamespace: namespace where Trustee KBS is deployed (used only when trusteeNamespace is not empty)
 func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error {
 	caCertPath := filepath.Join(certDir, "ca-cert.pem")
 	caKeyPath := filepath.Join(certDir, "ca-key.pem")
@@ -810,20 +810,32 @@ func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error 
 		return fmt.Errorf("failed to generate server certificate: %w", err)
 	}
 
-	// Upload to Trustee KBS (in the namespace where Trustee is deployed)
-	fmt.Printf("  - Uploading server certificate to Trustee KBS (namespace: %s)...\n", trusteeNamespace)
-	serverCertPath := namespace + "/sidecar-tls-" + appName + "/server-cert"
-	serverKeyPath := namespace + "/sidecar-tls-" + appName + "/server-key"
+	// Save server certificate and key to certDir (always, for local use / backup)
+	serverCertBaseName := fmt.Sprintf("server-%s-%s", appName, namespace)
+	if err := serverCert.SaveToFile(certDir, serverCertBaseName); err != nil {
+		return fmt.Errorf("failed to save server certificate to %s: %w", certDir, err)
+	}
+	fmt.Printf("  - Server certificate saved to %s/%s-cert.pem, %s-key.pem\n", certDir, serverCertBaseName, serverCertBaseName)
 
-	resources := map[string][]byte{
-		serverCertPath: serverCert.CertPEM,
-		serverKeyPath:  serverCert.KeyPEM,
+	if trusteeNamespace != "" {
+		// Upload to Trustee KBS (in the namespace where Trustee is deployed)
+		fmt.Printf("  - Uploading server certificate to Trustee KBS (namespace: %s)...\n", trusteeNamespace)
+		serverCertPath := namespace + "/sidecar-tls-" + appName + "/server-cert"
+		serverKeyPath := namespace + "/sidecar-tls-" + appName + "/server-key"
+
+		resources := map[string][]byte{
+			serverCertPath: serverCert.CertPEM,
+			serverKeyPath:  serverCert.KeyPEM,
+		}
+
+		if err := trustee.UploadResources(trusteeNamespace, resources); err != nil {
+			return fmt.Errorf("failed to upload server certificate to KBS: %w", err)
+		}
+
+		fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
+	} else {
+		fmt.Println("  - Skipping server certificate upload to Trustee (trustee_server not configured)")
 	}
 
-	if err := trustee.UploadResources(trusteeNamespace, resources); err != nil {
-		return fmt.Errorf("failed to upload server certificate to KBS: %w", err)
-	}
-
-	fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
 	return nil
 }
