@@ -343,7 +343,7 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 		}
 
 		fmt.Println("  - Injecting secure access sidecar container")
-		if err := sidecar.Inject(m, cfg, appName, namespace); err != nil {
+		if err := sidecar.Inject(m, cfg, appName, "default"); err != nil {
 			return fmt.Errorf("failed to inject sidecar: %w", err)
 		}
 	}
@@ -820,8 +820,8 @@ func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error 
 	if trusteeNamespace != "" {
 		// Upload to Trustee KBS (in the namespace where Trustee is deployed)
 		fmt.Printf("  - Uploading server certificate to Trustee KBS (namespace: %s)...\n", trusteeNamespace)
-		serverCertPath := namespace + "/sidecar-tls-" + appName + "/server-cert"
-		serverKeyPath := namespace + "/sidecar-tls-" + appName + "/server-key"
+		serverCertPath := "default" + "/sidecar-tls-" + appName + "/server-cert"
+		serverKeyPath := "default" + "/sidecar-tls-" + appName + "/server-key"
 
 		resources := map[string][]byte{
 			serverCertPath: serverCert.CertPEM,
