@@ -26,6 +26,7 @@ This command will:
     - Generate Client CA and upload to Trustee KBS (use --no-upload to skip uploads)
     - Generate client certificate for developer access
     - Save all certificates and keys locally (default: ~/.kube/coco-sidecar, override with --cert-dir)
+    - Use --no-certs to skip certificate generation (stored in config; apply will also skip server cert generation when sidecar is used)
   - Use --no-upload to skip all Trustee operations (deploy and KBS uploads); trustee-related flags are ignored.
   - Prompt for configuration values including:
     - Trustee server URL (or auto-deploy)
@@ -50,6 +51,7 @@ func init() {
 	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
 	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates")
+	initCmd.Flags().Bool("no-certs", false, "Do not generate sidecar certificates (stored in config; init and apply will skip cert generation when sidecar is used)")
 	initCmd.Flags().String("cert-dir", "", "Directory to store sidecar certificates and keys (default: ~/.kube/coco-sidecar)")
 	initCmd.Flags().Bool("no-upload", false, "Do not upload anything to Trustee (skips Trustee deployment and all KBS uploads; trustee-related flags are ignored)")
 }
@@ -63,6 +65,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
 	runtimeClass, _ := cmd.Flags().GetString("runtime-class")
 	enableSidecar, _ := cmd.Flags().GetBool("enable-sidecar")
+	noCerts, _ := cmd.Flags().GetBool("no-certs")
 	certDir, _ := cmd.Flags().GetString("cert-dir")
 
 	// Get default config path if not specified
@@ -124,11 +127,13 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		certDir = d
 	}
 
-	// Handle sidecar certificate setup if enabled (generates certs; upload skipped when --no-upload)
-	if enableSidecar {
+	// Handle sidecar certificate setup if enabled and not --no-certs (generates certs; upload skipped when --no-upload)
+	if enableSidecar && !noCerts {
 		if err := handleSidecarCertSetup(sidecarNamespace, certDir, noUpload); err != nil {
 			return err
 		}
+	} else if enableSidecar && noCerts {
+		fmt.Println("\nSkipping sidecar certificate generation (--no-certs is set)")
 	}
 
 	// Set runtime class from flag if provided, otherwise auto-detect
@@ -159,6 +164,12 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		cfg.ContainerPolicyURI = promptString("Container policy URI (optional)", cfg.ContainerPolicyURI, false)
 		cfg.RegistryCredURI = promptString("Container registry credentials URI (optional)", cfg.RegistryCredURI, false)
 		cfg.RegistryConfigURI = promptString("Container registry config URI (optional)", cfg.RegistryConfigURI, false)
+	}
+
+	// Persist sidecar settings when --enable-sidecar was used
+	if enableSidecar {
+		cfg.Sidecar.Enabled = true
+		cfg.Sidecar.NoCerts = noCerts
 	}
 
 	// Validate config

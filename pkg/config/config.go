@@ -32,6 +32,7 @@ const (
 // SidecarConfig represents the configuration for the secure access sidecar.
 type SidecarConfig struct {
 	Enabled       bool   `toml:"enabled" comment:"Enable secure access sidecar injection (default: false)"`
+	NoCerts       bool   `toml:"no_certs" comment:"Do not generate or use sidecar certificates (set by init --no-certs)"`
 	Image         string `toml:"image" comment:"Sidecar container image (default: ghcr.io/confidential-containers/coco-secure-access:v0.1.0)"`
 	HTTPSPort     int    `toml:"https_port" comment:"HTTPS server port (default: 8443)"`
 	TLSCertURI    string `toml:"tls_cert_uri" comment:"Server TLS certificate KBS URI (required if sidecar enabled)"`

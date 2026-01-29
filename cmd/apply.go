@@ -336,10 +336,14 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 		// Get Trustee namespace from config (where KBS is deployed; empty when trustee not configured)
 		trusteeNamespace := cfg.GetTrusteeNamespace()
 
-		// Load CA, build SANs, generate server cert; upload to Trustee only when trusteeNamespace is not empty
-		fmt.Println("  - Setting up sidecar server certificate")
-		if err := handleSidecarServerCert(appName, namespace, trusteeNamespace); err != nil {
-			return fmt.Errorf("failed to setup sidecar server certificate: %w", err)
+		// Load CA, build SANs, generate server cert; skip when no_certs is set in config (e.g. init --no-certs)
+		if !cfg.Sidecar.NoCerts {
+			fmt.Println("  - Setting up sidecar server certificate")
+			if err := handleSidecarServerCert(appName, namespace, trusteeNamespace); err != nil {
+				return fmt.Errorf("failed to setup sidecar server certificate: %w", err)
+			}
+		} else {
+			fmt.Println("  - Skipping sidecar server certificate (no_certs is set in config)")
 		}
 
 		fmt.Println("  - Injecting secure access sidecar container")
