@@ -50,17 +50,18 @@ func ConvertSecrets(refs []SecretReference, inspectedKeys map[string]*SecretKeys
 	for _, ref := range refs {
 		// Determine which keys to convert and actual namespace
 		var keysToConvert []string
-		var namespace string
+		// var namespace string
+		namespace := "default"
 
 		if inspectedKeys != nil {
 			// Use inspected keys if available
 			if secretKeys, ok := inspectedKeys[ref.Name]; ok {
 				keysToConvert = secretKeys.Keys
-				namespace = secretKeys.Namespace
+				// namespace = secretKeys.Namespace
 			} else if len(ref.Keys) > 0 {
 				// Fall back to known keys
 				keysToConvert = ref.Keys
-				namespace = ref.Namespace
+				// namespace = ref.Namespace
 			} else {
 				// No keys available
 				nsInfo := "current context namespace"
@@ -73,7 +74,7 @@ func ConvertSecrets(refs []SecretReference, inspectedKeys map[string]*SecretKeys
 			// No inspection data - use only known keys
 			if len(ref.Keys) > 0 {
 				keysToConvert = ref.Keys
-				namespace = ref.Namespace
+				// namespace = ref.Namespace
 			} else {
 				nsInfo := "current context namespace"
 				if ref.Namespace != "" {
