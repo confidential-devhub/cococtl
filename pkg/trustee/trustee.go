@@ -529,11 +529,13 @@ func ConvertDockercfgToDockerConfigJSON(dockercfgData []byte) ([]byte, error) {
 	return newData, nil
 }
 
-// AddK8sSecretToTrustee adds a Kubernetes secret to the Trustee KBS repository
-// This is a temporary solution until proper CLI tooling is available
+// AddK8sSecretToTrustee adds a Kubernetes secret to the Trustee KBS repository.
+// clusterNamespace is where the secret is read from in the cluster.
+// kbsPathNamespace is the namespace used in the KBS path (e.g. "default" for kbs:///default/secretName/key).
+// This is a temporary solution until proper CLI tooling is available.
 //
 // The secret data is stored in the KBS repository with the following structure:
-// /opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}
+// /opt/confidential-containers/kbs/repository/{kbsPathNamespace}/{secret-name}/{key}
 //
 // Key name transformations (via GetKBSKeyName):
 //   - .dockercfg secrets are converted to .dockerconfigjson format (data conversion)
@@ -541,10 +543,10 @@ func ConvertDockercfgToDockerConfigJSON(dockercfgData []byte) ([]byte, error) {
 //   - .dockerconfigjson secrets are stored with key name "dockerconfigjson" (leading dot stripped)
 //   - Other keys with leading dots have the dot stripped for KBS URI compatibility
 //
-// For example, a secret named "reg-cred" with key ".dockercfg" in namespace "coco"
-// will have its data converted to .dockerconfigjson format and be stored at:
-// /opt/confidential-containers/kbs/repository/coco/reg-cred/dockerconfigjson
-func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
+// For example, a secret named "reg-cred" with key ".dockercfg" in cluster namespace "coco"
+// with kbsPathNamespace "default" will be stored at:
+// /opt/confidential-containers/kbs/repository/default/reg-cred/dockerconfigjson
+func AddK8sSecretToTrustee(trusteeNamespace, secretName, clusterNamespace, kbsPathNamespace string) error {
 	// Get the KBS pod name
 	cmd := exec.Command("kubectl", "get", "pod", "-n", trusteeNamespace,
 		"-l", "app=kbs", "-o", "jsonpath={.items[0].metadata.name}")
@@ -566,12 +568,12 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 		return fmt.Errorf("pod not ready: %w\n%s", err, output)
 	}
 
-	// Get the secret data from Kubernetes
-	cmd = exec.Command("kubectl", "get", "secret", secretName, "-n", secretNamespace,
+	// Get the secret data from Kubernetes (from cluster namespace)
+	cmd = exec.Command("kubectl", "get", "secret", secretName, "-n", clusterNamespace,
 		"-o", "jsonpath={.data}")
 	output, err = cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to get secret %s in namespace %s: %w\n%s", secretName, secretNamespace, err, output)
+		return fmt.Errorf("failed to get secret %s in namespace %s: %w\n%s", secretName, clusterNamespace, err, output)
 	}
 
 	// Parse the secret data
@@ -595,8 +597,8 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 		}
 	}()
 
-	// Create the directory structure: {tmpDir}/{secretNamespace}/{secretName}/
-	secretDir := filepath.Join(tmpDir, secretNamespace, secretName)
+	// Create the directory structure: {tmpDir}/{kbsPathNamespace}/{secretName}/
+	secretDir := filepath.Join(tmpDir, kbsPathNamespace, secretName)
 	if err := os.MkdirAll(secretDir, 0750); err != nil {
 		return fmt.Errorf("failed to create secret directory: %w", err)
 	}
@@ -632,9 +634,9 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 	}
 
 	// Copy the entire directory structure to the KBS pod
-	// The structure will be: /opt/confidential-containers/kbs/repository/{secretNamespace}/{secretName}/{key}
-	srcPath := filepath.Join(tmpDir, secretNamespace) + "/."
-	destPath := fmt.Sprintf("%s:/opt/confidential-containers/kbs/repository/%s/", podName, secretNamespace)
+	// The structure will be: /opt/confidential-containers/kbs/repository/{kbsPathNamespace}/{secretName}/{key}
+	srcPath := filepath.Join(tmpDir, kbsPathNamespace) + "/."
+	destPath := fmt.Sprintf("%s:/opt/confidential-containers/kbs/repository/%s/", podName, kbsPathNamespace)
 
 	// #nosec G204 - trusteeNamespace is from function parameter, srcPath uses os.MkdirTemp tmpDir, podName is from kubectl get
 	cmd = exec.Command("kubectl", "cp", "-n", trusteeNamespace, srcPath, destPath)
@@ -646,8 +648,8 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 	return nil
 }
 
-// AddImagePullSecretToTrustee adds an imagePullSecret to the Trustee KBS repository
-// This is a temporary solution until proper CLI tooling is available
+// AddImagePullSecretToTrustee adds an imagePullSecret to the Trustee KBS repository.
+// This is a temporary solution until proper CLI tooling is available.
 //
 // The secret data is stored in the KBS repository with the following structure:
 // /opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}
@@ -657,10 +659,8 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 //
 // This function is isolated for easy removal when proper tooling is available
 func AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
-	// Reuse the existing AddK8sSecretToTrustee function
-	// ImagePullSecrets are just regular K8s secrets, so the logic is the same
-	// All key name transformations are handled consistently via GetKBSKeyName
-	return AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
+	// Reuse the existing AddK8sSecretToTrustee function (imagePullSecrets use cluster namespace for KBS path)
+	return AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace, secretNamespace)
 }
 
 // createDefaultAttestationStatus creates a default attestation-status secret in Trustee

@@ -619,8 +619,8 @@ func addSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeNamespace 
 			}
 		}
 
-		// Add the secret to Trustee
-		if err := addK8sSecretToTrustee(trusteeNamespace, ref.Name, secretNamespace); err != nil {
+		// Add the secret to Trustee (read from cluster/manifest namespace, store in KBS at "default")
+		if err := addK8sSecretToTrustee(trusteeNamespace, ref.Name, secretNamespace, "default"); err != nil {
 			return fmt.Errorf("failed to add secret %s: %w", ref.Name, err)
 		}
 	}
@@ -628,10 +628,10 @@ func addSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeNamespace 
 	return nil
 }
 
-// addK8sSecretToTrustee is a wrapper that calls the trustee package function
-// This is kept separate to maintain the isolation of the temporary functionality
-func addK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
-	return trustee.AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
+// addK8sSecretToTrustee is a wrapper that calls the trustee package function.
+// clusterNamespace: where to read the secret in the cluster; kbsPathNamespace: path in KBS (e.g. "default" for kbs:///default/secretName/key).
+func addK8sSecretToTrustee(trusteeNamespace, secretName, clusterNamespace, kbsPathNamespace string) error {
+	return trustee.AddK8sSecretToTrustee(trusteeNamespace, secretName, clusterNamespace, kbsPathNamespace)
 }
 
 // handleImagePullSecrets processes imagePullSecrets from the manifest
