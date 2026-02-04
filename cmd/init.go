@@ -9,6 +9,7 @@ import (
 
 	"github.com/confidential-devhub/cococtl/pkg/cluster"
 	"github.com/confidential-devhub/cococtl/pkg/config"
+	"github.com/confidential-devhub/cococtl/pkg/k8s"
 	"github.com/confidential-devhub/cococtl/pkg/sidecar/certs"
 	"github.com/confidential-devhub/cococtl/pkg/trustee"
 	"github.com/spf13/cobra"
@@ -116,7 +117,16 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		cfg.RuntimeClass = runtimeClass
 	} else {
 		// Auto-detect RuntimeClass with SNP or TDX support
-		cfg.RuntimeClass = cluster.DetectRuntimeClass(config.DefaultRuntimeClass)
+		// Create Kubernetes client for runtime class detection
+		client, err := k8s.NewClient(k8s.ClientOptions{})
+		if err != nil {
+			// Log warning but don't fail - use default runtime class
+			fmt.Printf("Warning: unable to create Kubernetes client: %v\n", err)
+			cfg.RuntimeClass = config.DefaultRuntimeClass
+		} else {
+			ctx := cmd.Context()
+			cfg.RuntimeClass = cluster.DetectRuntimeClass(ctx, client.Clientset, config.DefaultRuntimeClass)
+		}
 	}
 
 	// In non-interactive mode, show the RuntimeClass being used

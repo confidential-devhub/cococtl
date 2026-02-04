@@ -11,6 +11,7 @@ import (
 	"github.com/confidential-devhub/cococtl/pkg/cluster"
 	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/confidential-devhub/cococtl/pkg/initdata"
+	"github.com/confidential-devhub/cococtl/pkg/k8s"
 	"github.com/confidential-devhub/cococtl/pkg/manifest"
 	"github.com/confidential-devhub/cococtl/pkg/secrets"
 	"github.com/confidential-devhub/cococtl/pkg/sidecar"
@@ -769,11 +770,18 @@ func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error 
 	// Auto-detect SANs unless skipped
 	if !sidecarSkipAutoSANs {
 		// Auto-detect node IPs
-		nodeIPs, err := cluster.GetNodeIPs()
-		if err != nil {
-			fmt.Printf("Warning: failed to auto-detect node IPs: %v\n", err)
+		// Create Kubernetes client for node IP detection
+		client, clientErr := k8s.NewClient(k8s.ClientOptions{})
+		if clientErr != nil {
+			fmt.Printf("Warning: failed to create Kubernetes client for node IP detection: %v\n", clientErr)
 		} else {
-			sans.IPAddresses = append(sans.IPAddresses, nodeIPs...)
+			ctx := context.Background()
+			nodeIPs, err := cluster.GetNodeIPs(ctx, client.Clientset)
+			if err != nil {
+				fmt.Printf("Warning: failed to auto-detect node IPs: %v\n", err)
+			} else {
+				sans.IPAddresses = append(sans.IPAddresses, nodeIPs...)
+			}
 		}
 
 		// Add service DNS names (format: <name>.<namespace>.svc.cluster.local)
