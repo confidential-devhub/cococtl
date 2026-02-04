@@ -84,7 +84,7 @@ func init() {
 	applyCmd.Flags().IntVar(&sidecarPortForward, "sidecar-port-forward", 0, "Port to forward from primary container (requires --sidecar)")
 }
 
-func runApply(_ *cobra.Command, _ []string) error {
+func runApply(cmd *cobra.Command, _ []string) error {
 	// Validate required flags (manual validation to keep all flags visible in shell completion)
 	if manifestFile == "" {
 		return fmt.Errorf("required flag(s) \"filename\" not set")
@@ -180,7 +180,7 @@ func runApply(_ *cobra.Command, _ []string) error {
 	}
 
 	// Transform manifest
-	if err := transformManifest(m, cfg, rc, skipApply); err != nil {
+	if err := transformManifest(cmd.Context(), m, cfg, rc, skipApply); err != nil {
 		return fmt.Errorf("failed to transform manifest: %w", err)
 	}
 
@@ -250,7 +250,7 @@ func runApply(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool) error {
+func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool) error {
 	// 1. Set RuntimeClass
 	fmt.Printf("  - Setting runtimeClassName: %s\n", rc)
 	if err := m.SetRuntimeClass(rc); err != nil {
@@ -326,7 +326,7 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 
 		// Generate and upload server certificate
 		fmt.Println("  - Setting up sidecar server certificate")
-		if err := handleSidecarServerCert(appName, namespace, trusteeNamespace); err != nil {
+		if err := handleSidecarServerCert(ctx, appName, namespace, trusteeNamespace); err != nil {
 			return fmt.Errorf("failed to setup sidecar server certificate: %w", err)
 		}
 
@@ -723,10 +723,11 @@ func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 // It loads the Client CA, auto-detects or uses provided SANs, generates the server cert,
 // and uploads it to Trustee KBS at per-app paths.
 // Parameters:
+//   - ctx: context for Kubernetes API calls (for proper signal handling)
 //   - appName: name of the application (from manifest metadata.name)
 //   - namespace: namespace for certificate KBS path (from manifest metadata.namespace)
 //   - trusteeNamespace: namespace where Trustee KBS is deployed
-func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error {
+func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNamespace string) error {
 	// Load Client CA from ~/.kube/coco-sidecar/
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -775,7 +776,6 @@ func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error 
 		if clientErr != nil {
 			fmt.Printf("Warning: failed to create Kubernetes client for node IP detection: %v\n", clientErr)
 		} else {
-			ctx := context.Background()
 			nodeIPs, err := cluster.GetNodeIPs(ctx, client.Clientset)
 			if err != nil {
 				fmt.Printf("Warning: failed to auto-detect node IPs: %v\n", err)
