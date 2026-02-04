@@ -2,59 +2,49 @@
 package cluster
 
 import (
-	"bytes"
+	"context"
 	"fmt"
-	"os/exec"
-	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 // GetNodeIPs retrieves IP addresses of all nodes in the cluster.
 // It attempts to get ExternalIP first, falling back to InternalIP if unavailable.
 // Returns a deduplicated list of node IP addresses.
-func GetNodeIPs() ([]string, error) {
+func GetNodeIPs(ctx context.Context, clientset kubernetes.Interface) ([]string, error) {
+	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list nodes: %w", err)
+	}
+
 	// Try external IPs first
-	externalIPs, err := getNodeIPsByType("ExternalIP")
-	if err == nil && len(externalIPs) > 0 {
-		return externalIPs, nil
+	externalIPs := extractAddresses(nodes.Items, corev1.NodeExternalIP)
+	if len(externalIPs) > 0 {
+		return deduplicateStrings(externalIPs), nil
 	}
 
 	// Fall back to internal IPs
-	internalIPs, err := getNodeIPsByType("InternalIP")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get node IPs: %w", err)
-	}
-
+	internalIPs := extractAddresses(nodes.Items, corev1.NodeInternalIP)
 	if len(internalIPs) == 0 {
 		return nil, fmt.Errorf("no node IPs found in cluster")
 	}
 
-	return internalIPs, nil
+	return deduplicateStrings(internalIPs), nil
 }
 
-// getNodeIPsByType retrieves node IPs of a specific address type.
-func getNodeIPsByType(addressType string) ([]string, error) {
-	jsonPath := fmt.Sprintf("{.items[*].status.addresses[?(@.type==\"%s\")].address}", addressType)
-
-	// #nosec G204 -- addressType is controlled, only called with "ExternalIP" or "InternalIP"
-	cmd := exec.Command("kubectl", "get", "nodes",
-		"-o", fmt.Sprintf("jsonpath=%s", jsonPath))
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("kubectl get nodes failed: %w: %s", err, stderr.String())
+// extractAddresses extracts addresses of a specific type from all nodes.
+func extractAddresses(nodes []corev1.Node, addrType corev1.NodeAddressType) []string {
+	var addresses []string
+	for _, node := range nodes {
+		for _, addr := range node.Status.Addresses {
+			if addr.Type == addrType {
+				addresses = append(addresses, addr.Address)
+			}
+		}
 	}
-
-	output := strings.TrimSpace(stdout.String())
-	if output == "" {
-		return nil, nil
-	}
-
-	// Split by spaces and deduplicate
-	ips := strings.Fields(output)
-	return deduplicateStrings(ips), nil
+	return addresses
 }
 
 // deduplicateStrings removes duplicate entries from a string slice.
