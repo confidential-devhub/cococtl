@@ -3,6 +3,7 @@ package secrets
 import (
 	"fmt"
 
+	"github.com/confidential-devhub/cococtl/pkg/k8s"
 	"github.com/confidential-devhub/cococtl/pkg/manifest"
 )
 
@@ -37,7 +38,7 @@ func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, erro
 	// If manifest doesn't specify namespace, get current kubectl context namespace
 	if namespace == "" {
 		var err error
-		namespace, err = GetCurrentNamespace()
+		namespace, err = k8s.GetCurrentNamespace()
 		if err != nil {
 			return nil, fmt.Errorf("manifest has no namespace and failed to get current namespace: %w", err)
 		}
@@ -306,7 +307,7 @@ func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{
 	// If manifest doesn't specify namespace, get current kubectl context namespace
 	if namespace == "" {
 		var err error
-		namespace, err = GetCurrentNamespace()
+		namespace, err = k8s.GetCurrentNamespace()
 		if err != nil {
 			return nil, fmt.Errorf("manifest has no namespace and failed to get current namespace: %w", err)
 		}

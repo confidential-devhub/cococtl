@@ -7,124 +7,108 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+
+	"github.com/confidential-devhub/cococtl/pkg/k8s"
 )
 
 // SecretKeys holds the keys found in a K8s secret
+// Kept for backward compatibility with converter and cmd layer
 type SecretKeys struct {
 	Name      string
 	Namespace string
 	Keys      []string
 }
 
-// K8sSecret represents the structure of a K8s secret from kubectl output
-type K8sSecret struct {
-	Metadata struct {
-		Name      string `json:"name"`
-		Namespace string `json:"namespace"`
-	} `json:"metadata"`
-	Data map[string]string `json:"data"` // Keys are base64 encoded values
-}
-
-// GetCurrentNamespace returns the current namespace from kubectl config.
-// If no namespace is set in the current context or if there is no current context,
-// returns "default".
-func GetCurrentNamespace() (string, error) {
-	ctx := context.Background()
-
-	// First check if a current context exists
-	checkCmd := exec.CommandContext(ctx, "kubectl", "config", "current-context")
-	if err := checkCmd.Run(); err != nil {
-		// No current context is not an error; we intentionally return "default"
-		return "default", nil //nolint:nilerr
-	}
-
-	// Get namespace from the current context
-	cmd := exec.CommandContext(ctx, "kubectl", "config", "view", "--minify", "-o", "jsonpath={..namespace}")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current namespace: %w", err)
-	}
-
-	namespace := strings.TrimSpace(string(output))
-	if namespace == "" {
-		namespace = "default"
-	}
-
-	return namespace, nil
-}
-
-// InspectSecret queries K8s to get all keys in a secret
-// If namespace is empty, uses current context namespace (no -n flag)
-// Returns error if kubectl fails or secret doesn't exist
-func InspectSecret(secretName, namespace string) (*SecretKeys, error) {
-	ctx := context.Background()
-	// Build kubectl command
-	var cmd *exec.Cmd
-	if namespace != "" {
-		// Explicit namespace specified
-		cmd = exec.CommandContext(ctx, "kubectl", "get", "secret", secretName, "-n", namespace, "-o", "json")
-	} else {
-		// No namespace specified - use current context namespace
-		cmd = exec.CommandContext(ctx, "kubectl", "get", "secret", secretName, "-o", "json")
-	}
-
-	// Execute command
-	output, err := cmd.Output()
-	if err != nil {
-		// Check if it's an exit error with stderr
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return nil, fmt.Errorf("kubectl get secret failed: %s", string(exitErr.Stderr))
-		}
-		return nil, fmt.Errorf("kubectl get secret failed: %w", err)
-	}
-
-	// Parse JSON output
-	var k8sSecret K8sSecret
-	if err := json.Unmarshal(output, &k8sSecret); err != nil {
-		return nil, fmt.Errorf("failed to parse kubectl output: %w", err)
-	}
-
-	// Extract keys
-	keys := make([]string, 0, len(k8sSecret.Data))
-	for key := range k8sSecret.Data {
+// SecretToSecretKeys converts a corev1.Secret to SecretKeys format
+func SecretToSecretKeys(secret *corev1.Secret) *SecretKeys {
+	keys := make([]string, 0, len(secret.Data))
+	for key := range secret.Data {
 		keys = append(keys, key)
 	}
 
-	// Use the actual namespace from kubectl response (not the input parameter)
-	actualNamespace := k8sSecret.Metadata.Namespace
-
 	return &SecretKeys{
-		Name:      secretName,
-		Namespace: actualNamespace,
+		Name:      secret.Name,
+		Namespace: secret.Namespace,
 		Keys:      keys,
-	}, nil
+	}
 }
 
-// InspectSecrets queries multiple secrets in batch
-// Returns a map of secretName -> SecretKeys (includes namespace and keys)
+// SecretsToSecretKeys converts a map of corev1.Secret to SecretKeys format
+func SecretsToSecretKeys(secrets map[string]*corev1.Secret) map[string]*SecretKeys {
+	result := make(map[string]*SecretKeys, len(secrets))
+	for name, secret := range secrets {
+		result[name] = SecretToSecretKeys(secret)
+	}
+	return result
+}
+
+// InspectSecret queries K8s to get a secret using client-go
+// If namespace is empty, uses current context namespace
+// Returns typed *corev1.Secret with decoded Data field
+func InspectSecret(ctx context.Context, clientset kubernetes.Interface, secretName, namespace string) (*corev1.Secret, error) {
+	// Resolve empty namespace to current context namespace
+	ns := namespace
+	if ns == "" {
+		var err error
+		ns, err = k8s.GetCurrentNamespace()
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve namespace: %w", err)
+		}
+	}
+
+	// Get secret using client-go
+	secret, err := clientset.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil {
+		return nil, k8s.WrapError(err, "get", fmt.Sprintf("secret/%s", secretName), ns)
+	}
+
+	return secret, nil
+}
+
+// InspectSecrets queries multiple secrets in batch using client-go
+// Returns a map of secretName -> *corev1.Secret
 // Fails immediately on first error
-func InspectSecrets(refs []SecretReference) (map[string]*SecretKeys, error) {
-	result := make(map[string]*SecretKeys)
+func InspectSecrets(ctx context.Context, clientset kubernetes.Interface, refs []SecretReference) (map[string]*corev1.Secret, error) {
+	result := make(map[string]*corev1.Secret)
 
 	for _, ref := range refs {
 		// Skip if lookup not needed (all keys already known)
 		if !ref.NeedsLookup {
 			if len(ref.Keys) > 0 {
-				// For secrets that don't need lookup, we still need namespace
-				// Use the namespace from ref (could be empty or explicit)
-				// If empty, it will be resolved during conversion
-				result[ref.Name] = &SecretKeys{
-					Name:      ref.Name,
-					Namespace: ref.Namespace,
-					Keys:      ref.Keys,
+				// For secrets that don't need lookup, create minimal corev1.Secret
+				// with known keys populated
+				data := make(map[string][]byte)
+				for _, key := range ref.Keys {
+					data[key] = []byte{} // Empty data - actual values unknown
+				}
+
+				// Resolve namespace if empty
+				ns := ref.Namespace
+				if ns == "" {
+					var err error
+					ns, err = k8s.GetCurrentNamespace()
+					if err != nil {
+						return nil, fmt.Errorf("failed to resolve namespace for secret %s: %w", ref.Name, err)
+					}
+				}
+
+				result[ref.Name] = &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      ref.Name,
+						Namespace: ns,
+					},
+					Data: data,
 				}
 			}
 			continue
 		}
 
-		// Inspect the secret
-		secretKeys, err := InspectSecret(ref.Name, ref.Namespace)
+		// Inspect the secret using client-go
+		secret, err := InspectSecret(ctx, clientset, ref.Name, ref.Namespace)
 		if err != nil {
 			// Fail immediately
 			nsInfo := "current context namespace"
@@ -134,27 +118,7 @@ func InspectSecrets(refs []SecretReference) (map[string]*SecretKeys, error) {
 			return nil, fmt.Errorf("failed to inspect secret %s in %s: %w", ref.Name, nsInfo, err)
 		}
 
-		// Merge with known keys
-		allKeys := make(map[string]bool)
-		for _, key := range ref.Keys {
-			allKeys[key] = true
-		}
-		for _, key := range secretKeys.Keys {
-			allKeys[key] = true
-		}
-
-		// Convert to slice
-		keys := make([]string, 0, len(allKeys))
-		for key := range allKeys {
-			keys = append(keys, key)
-		}
-
-		// Store with actual namespace from kubectl
-		result[ref.Name] = &SecretKeys{
-			Name:      ref.Name,
-			Namespace: secretKeys.Namespace,
-			Keys:      keys,
-		}
+		result[ref.Name] = secret
 	}
 
 	return result, nil

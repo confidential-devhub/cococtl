@@ -259,7 +259,7 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 
 	// 2. Convert secrets if enabled
 	if convertSecrets {
-		if err := handleSecrets(m, cfg, skipApply); err != nil {
+		if err := handleSecrets(ctx, m, cfg, skipApply); err != nil {
 			return fmt.Errorf("failed to convert secrets: %w", err)
 		}
 	} else {
@@ -276,7 +276,7 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 	var imagePullSecretsInfo []initdata.ImagePullSecretInfo
 	if convertSecrets {
 		var err error
-		imagePullSecretsInfo, err = handleImagePullSecrets(m, cfg, skipApply)
+		imagePullSecretsInfo, err = handleImagePullSecrets(ctx, m, cfg, skipApply)
 		if err != nil {
 			return fmt.Errorf("failed to handle imagePullSecrets: %w", err)
 		}
@@ -401,7 +401,7 @@ func handleInitContainer(m *manifest.Manifest, cfg *config.CocoConfig) error {
 	return nil
 }
 
-func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) error {
+func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) error {
 	// 1. Detect all secret references
 	allSecretRefs, err := secrets.DetectSecrets(m.GetData())
 	if err != nil {
@@ -430,13 +430,22 @@ func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool)
 
 	fmt.Printf("  - Found %d K8s secret(s) to convert\n", len(secretRefs))
 
-	// 2. Inspect K8s secrets
-	inspectedKeys, err := secrets.InspectSecrets(secretRefs)
-	if err != nil {
-		return fmt.Errorf("failed to inspect secrets via kubectl: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the secrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
+	// 2. Create Kubernetes client for secret inspection
+	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
+	if clientErr != nil {
+		return fmt.Errorf("failed to create Kubernetes client: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the secrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", clientErr)
 	}
 
-	// 3. Convert to sealed secrets
+	// 3. Inspect K8s secrets
+	inspectedSecrets, err := secrets.InspectSecrets(ctx, client.Clientset, secretRefs)
+	if err != nil {
+		return fmt.Errorf("failed to inspect secrets: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the secrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
+	}
+
+	// Convert to SecretKeys format for converter
+	inspectedKeys := secrets.SecretsToSecretKeys(inspectedSecrets)
+
+	// 4. Convert to sealed secrets
 	sealedSecrets, err := secrets.ConvertSecrets(secretRefs, inspectedKeys)
 	if err != nil {
 		return err
@@ -444,7 +453,7 @@ func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool)
 
 	fmt.Printf("  - Generated %d sealed secret(s)\n", len(sealedSecrets))
 
-	// 4. Create or save sealed secrets based on skipApply flag
+	// 5. Create or save sealed secrets based on skipApply flag
 	var sealedSecretNames map[string]string
 	if skipApply {
 		// Generate YAML and save to file instead of creating in cluster
@@ -617,7 +626,7 @@ func addK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 // handleImagePullSecrets processes imagePullSecrets from the manifest
 // It detects, uploads to KBS, and prepares them for initdata
 // Falls back to default service account if no imagePullSecrets in manifest
-func handleImagePullSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) ([]initdata.ImagePullSecretInfo, error) {
+func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) ([]initdata.ImagePullSecretInfo, error) {
 	// Detect imagePullSecrets in manifest, with fallback to default service account
 	imagePullSecretRefs, err := secrets.DetectImagePullSecretsWithServiceAccount(m.GetData())
 	if err != nil {
@@ -638,11 +647,20 @@ func handleImagePullSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipAp
 		imagePullSecretRefs = imagePullSecretRefs[:1]
 	}
 
-	// Inspect K8s secrets to get keys
-	inspectedKeys, err := secrets.InspectSecrets(imagePullSecretRefs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to inspect imagePullSecrets via kubectl: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
+	// Create Kubernetes client for secret inspection
+	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
+	if clientErr != nil {
+		return nil, fmt.Errorf("failed to create Kubernetes client: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", clientErr)
 	}
+
+	// Inspect K8s secrets to get keys
+	inspectedSecrets, err := secrets.InspectSecrets(ctx, client.Clientset, imagePullSecretRefs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect imagePullSecrets: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
+	}
+
+	// Convert to SecretKeys format
+	inspectedKeys := secrets.SecretsToSecretKeys(inspectedSecrets)
 
 	// Build ImagePullSecretInfo for initdata
 	var imagePullSecretsInfo []initdata.ImagePullSecretInfo
