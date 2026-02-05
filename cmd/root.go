@@ -2,11 +2,6 @@
 package cmd
 
 import (
-	"context"
-	"fmt"
-	"os/exec"
-	"strings"
-
 	"github.com/spf13/cobra"
 )
 
@@ -33,21 +28,4 @@ func Execute() error {
 
 func init() {
 	cobra.OnInitialize()
-}
-
-// getCurrentNamespace gets the current namespace from kubectl config
-func getCurrentNamespace() (string, error) {
-	ctx := context.Background()
-	cmd := exec.CommandContext(ctx, "kubectl", "config", "view", "--minify", "-o", "jsonpath={..namespace}")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current namespace: %w", err)
-	}
-
-	namespace := strings.TrimSpace(string(output))
-	if namespace == "" {
-		namespace = "default"
-	}
-
-	return namespace, nil
 }

@@ -89,7 +89,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	cfg := config.DefaultConfig()
 
 	// Handle Trustee setup
-	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
+	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cmd, cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
 	if err != nil {
 		return err
 	}
@@ -200,7 +200,7 @@ func promptString(prompt, defaultValue string, required bool) string {
 	return input
 }
 
-func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, namespace, url string) (bool, string, error) {
+func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive, skipDeploy bool, namespace, url string) (bool, string, error) {
 	// If URL provided via flag, use it and skip deployment
 	if url != "" {
 		cfg.TrusteeServer = url
@@ -241,14 +241,21 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 	// Get current namespace if not specified
 	if namespace == "" {
 		var err error
-		namespace, err = getCurrentNamespace()
+		namespace, err = k8s.GetCurrentNamespace()
 		if err != nil {
 			return false, "", err
 		}
 	}
 
+	// Create Kubernetes client for trustee operations
+	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
+	if clientErr != nil {
+		return false, "", fmt.Errorf("failed to create Kubernetes client: %w", clientErr)
+	}
+	ctx := cmd.Context()
+
 	// Check if Trustee is already deployed
-	deployed, err := trustee.IsDeployed(namespace)
+	deployed, err := trustee.IsDeployed(ctx, client.Clientset, namespace)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to check Trustee deployment: %w", err)
 	}
@@ -274,7 +281,7 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 		PCCSURL:     cfg.PCCSURL,
 	}
 
-	if err := trustee.Deploy(trusteeCfg); err != nil {
+	if err := trustee.Deploy(ctx, client.Clientset, trusteeCfg); err != nil {
 		return false, "", fmt.Errorf("failed to deploy Trustee: %w", err)
 	}
 
