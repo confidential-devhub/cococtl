@@ -314,3 +314,102 @@ func TestInspectSecrets_FailFast(t *testing.T) {
 		t.Errorf("InspectSecrets() error = %q, want error mentioning 'missing-secret'", err.Error())
 	}
 }
+
+func TestGetServiceAccountImagePullSecrets_Found(t *testing.T) {
+	// Setup fake clientset with serviceaccount that has imagePullSecrets
+	fakeClient := fake.NewSimpleClientset(
+		&corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-sa",
+				Namespace: "default",
+			},
+			ImagePullSecrets: []corev1.LocalObjectReference{
+				{Name: "regcred"},
+				{Name: "regcred2"},
+			},
+		},
+	)
+
+	ctx := context.Background()
+	secretName, err := GetServiceAccountImagePullSecrets(ctx, fakeClient, "test-sa", "default")
+	if err != nil {
+		t.Fatalf("GetServiceAccountImagePullSecrets() error = %v, want nil", err)
+	}
+
+	// Should return first imagePullSecret name
+	expectedName := "regcred"
+	if secretName != expectedName {
+		t.Errorf("GetServiceAccountImagePullSecrets() = %q, want %q", secretName, expectedName)
+	}
+}
+
+func TestGetServiceAccountImagePullSecrets_NotFound(t *testing.T) {
+	// Empty fake clientset - serviceaccount doesn't exist
+	fakeClient := fake.NewSimpleClientset()
+
+	ctx := context.Background()
+	_, err := GetServiceAccountImagePullSecrets(ctx, fakeClient, "missing-sa", "default")
+	if err == nil {
+		t.Fatal("GetServiceAccountImagePullSecrets() expected error for missing serviceaccount, got nil")
+	}
+
+	// Error should mention the serviceaccount name
+	if !strings.Contains(err.Error(), "missing-sa") && !strings.Contains(err.Error(), "not found") {
+		t.Errorf("GetServiceAccountImagePullSecrets() error = %q, want error mentioning 'missing-sa' or 'not found'", err.Error())
+	}
+}
+
+func TestGetServiceAccountImagePullSecrets_NoSecrets(t *testing.T) {
+	// Setup fake clientset with serviceaccount but no imagePullSecrets
+	fakeClient := fake.NewSimpleClientset(
+		&corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-sa",
+				Namespace: "default",
+			},
+			ImagePullSecrets: []corev1.LocalObjectReference{},
+		},
+	)
+
+	ctx := context.Background()
+	secretName, err := GetServiceAccountImagePullSecrets(ctx, fakeClient, "test-sa", "default")
+	if err != nil {
+		t.Fatalf("GetServiceAccountImagePullSecrets() error = %v, want nil", err)
+	}
+
+	// Should return empty string when no imagePullSecrets configured
+	if secretName != "" {
+		t.Errorf("GetServiceAccountImagePullSecrets() = %q, want empty string", secretName)
+	}
+}
+
+func TestGetServiceAccountImagePullSecrets_EmptyNamespace(t *testing.T) {
+	// Setup fake clientset with serviceaccount in default namespace
+	// Note: fake clientset doesn't validate empty namespace (known limitation)
+	// Real client would error: "an empty namespace may not be set when a resource name is provided"
+	// This test verifies we resolve namespace before calling API
+	fakeClient := fake.NewSimpleClientset(
+		&corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-sa",
+				Namespace: "default",
+			},
+			ImagePullSecrets: []corev1.LocalObjectReference{
+				{Name: "regcred"},
+			},
+		},
+	)
+
+	ctx := context.Background()
+	// Empty namespace should resolve to current context namespace
+	secretName, err := GetServiceAccountImagePullSecrets(ctx, fakeClient, "test-sa", "")
+	if err != nil {
+		t.Fatalf("GetServiceAccountImagePullSecrets() error = %v, want nil", err)
+	}
+
+	// Should still return the secret name
+	expectedName := "regcred"
+	if secretName != expectedName {
+		t.Errorf("GetServiceAccountImagePullSecrets() = %q, want %q", secretName, expectedName)
+	}
+}

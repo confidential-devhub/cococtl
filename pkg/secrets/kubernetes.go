@@ -2,7 +2,6 @@ package secrets
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -264,47 +263,31 @@ func CreateSealedSecrets(sealedSecrets []*SealedSecretData) (map[string]string, 
 	return result, nil
 }
 
-// ServiceAccount represents the structure of a K8s service account from kubectl output
-type ServiceAccount struct {
-	Metadata struct {
-		Name      string `json:"name"`
-		Namespace string `json:"namespace"`
-	} `json:"metadata"`
-	ImagePullSecrets []struct {
-		Name string `json:"name"`
-	} `json:"imagePullSecrets"`
-}
-
 // GetServiceAccountImagePullSecrets queries a service account for imagePullSecrets
 // If namespace is empty, uses current context namespace
 // Returns the first imagePullSecret name or empty string if none found
-func GetServiceAccountImagePullSecrets(serviceAccountName, namespace string) (string, error) {
-	ctx := context.Background()
-
-	var cmd *exec.Cmd
-	if namespace != "" {
-		cmd = exec.CommandContext(ctx, "kubectl", "get", "sa", serviceAccountName, "-n", namespace, "-o", "json")
-	} else {
-		cmd = exec.CommandContext(ctx, "kubectl", "get", "sa", serviceAccountName, "-o", "json")
-	}
-
-	output, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return "", fmt.Errorf("kubectl get sa failed: %s", string(exitErr.Stderr))
+func GetServiceAccountImagePullSecrets(ctx context.Context, clientset kubernetes.Interface, serviceAccountName, namespace string) (string, error) {
+	// Resolve empty namespace to current context namespace
+	ns := namespace
+	if ns == "" {
+		var err error
+		ns, err = k8s.GetCurrentNamespace()
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve namespace: %w", err)
 		}
-		return "", fmt.Errorf("kubectl get sa failed: %w", err)
 	}
 
-	var sa ServiceAccount
-	if err := json.Unmarshal(output, &sa); err != nil {
-		return "", fmt.Errorf("failed to parse kubectl output: %w", err)
+	// Get ServiceAccount using client-go
+	sa, err := clientset.CoreV1().ServiceAccounts(ns).Get(ctx, serviceAccountName, metav1.GetOptions{})
+	if err != nil {
+		return "", k8s.WrapError(err, "get", fmt.Sprintf("serviceaccount/%s", serviceAccountName), ns)
 	}
 
+	// Typed field access - ImagePullSecrets is []corev1.LocalObjectReference
 	if len(sa.ImagePullSecrets) == 0 {
 		return "", nil
 	}
 
+	// Return first imagePullSecret name
 	return sa.ImagePullSecrets[0].Name, nil
 }

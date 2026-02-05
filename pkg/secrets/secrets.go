@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/confidential-devhub/cococtl/pkg/k8s"
@@ -326,14 +327,19 @@ func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{
 
 	// If no imagePullSecrets found in manifest, check default service account
 	if len(secretsMap) == 0 {
-		secretName, err := GetServiceAccountImagePullSecrets("default", namespace)
-		if err == nil && secretName != "" {
-			// Found imagePullSecret in default service account
-			ref := getOrCreateSecretRef(secretsMap, secretName, namespace)
-			ref.NeedsLookup = true
-			ref.Usages = append(ref.Usages, SecretUsage{
-				Type: "imagePullSecrets",
-			})
+		// Create context and clientset for serviceaccount query
+		ctx := context.Background()
+		client, err := k8s.NewClient(k8s.ClientOptions{})
+		if err == nil {
+			secretName, err := GetServiceAccountImagePullSecrets(ctx, client.Clientset, "default", namespace)
+			if err == nil && secretName != "" {
+				// Found imagePullSecret in default service account
+				ref := getOrCreateSecretRef(secretsMap, secretName, namespace)
+				ref.NeedsLookup = true
+				ref.Usages = append(ref.Usages, SecretUsage{
+					Type: "imagePullSecrets",
+				})
+			}
 		}
 	}
 
