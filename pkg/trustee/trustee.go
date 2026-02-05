@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -118,29 +119,22 @@ func GetServiceURL(namespace, serviceName string) string {
 }
 
 func ensureNamespace(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
-	// Check if namespace exists by trying to access it (namespace-level permission)
-	// This is more reliable than 'kubectl get namespace' which requires cluster-level permissions
-	_, err := clientset.CoreV1().ServiceAccounts(namespace).List(ctx, metav1.ListOptions{Limit: 1})
-	if err == nil {
-		// Successfully accessed resources in namespace, so it exists
-		return nil
-	}
-
-	// Check if the error indicates namespace doesn't exist
-	if apierrors.IsNotFound(err) {
-		// Namespace doesn't exist, try to create it with kubectl
-		// (namespace creation via client-go is out of scope for this phase)
-		cmd := exec.Command("kubectl", "create", "namespace", namespace)
-		output, err := cmd.CombinedOutput()
-		if err != nil && !strings.Contains(string(output), "AlreadyExists") {
-			return fmt.Errorf("failed to create namespace: %w\n%s", err, output)
+	// Try to create the namespace directly. This is simpler and more reliable
+	// than checking existence first:
+	// - If namespace doesn't exist: creates it
+	// - If namespace exists: AlreadyExists error is ignored
+	// - If user lacks create permission but namespace exists: subsequent
+	//   operations will work (or fail with clear permission errors)
+	_, err := clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: namespace},
+	}, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		// Ignore Forbidden — namespace likely exists but user lacks create permission.
+		// Subsequent operations will fail appropriately if it truly doesn't exist.
+		if !apierrors.IsForbidden(err) {
+			return fmt.Errorf("failed to create namespace %s: %w", namespace, err)
 		}
-		return nil
 	}
-
-	// For any other error (e.g., Forbidden when user lacks namespace creation permissions
-	// but namespace exists), assume namespace exists and proceed.
-	// Subsequent operations will fail appropriately if the namespace truly doesn't exist.
 	return nil
 }
 
