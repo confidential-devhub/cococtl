@@ -2,6 +2,7 @@
 package trustee
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/base64"
@@ -12,6 +13,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -51,32 +56,26 @@ type SecretResource struct {
 }
 
 // IsDeployed checks if Trustee is already running in the namespace
-func IsDeployed(namespace string) (bool, error) {
-	cmd := exec.Command("kubectl", "get", "deployment", "-n", namespace, "-l", trusteeLabel, "-o", "json")
-	output, err := cmd.CombinedOutput()
+func IsDeployed(ctx context.Context, clientset kubernetes.Interface, namespace string) (bool, error) {
+	// List deployments with the trustee label
+	deployments, err := clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: trusteeLabel,
+	})
 	if err != nil {
-		if strings.Contains(string(output), "NotFound") || strings.Contains(string(output), "No resources found") {
+		// If namespace doesn't exist or no permission, treat as not deployed
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("failed to check Trustee deployment: %w\n%s", err, output)
+		return false, fmt.Errorf("failed to check Trustee deployment: %w", err)
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return false, fmt.Errorf("failed to parse kubectl output: %w", err)
-	}
-
-	items, ok := result["items"].([]interface{})
-	if !ok || len(items) == 0 {
-		return false, nil
-	}
-
-	return true, nil
+	// Check if any deployments were found
+	return len(deployments.Items) > 0, nil
 }
 
 // Deploy deploys Trustee all-in-one KBS to the specified namespace
-func Deploy(cfg *Config) error {
-	if err := ensureNamespace(cfg.Namespace); err != nil {
+func Deploy(ctx context.Context, clientset kubernetes.Interface, cfg *Config) error {
+	if err := ensureNamespace(ctx, clientset, cfg.Namespace); err != nil {
 		return fmt.Errorf("failed to create namespace: %w", err)
 	}
 
@@ -118,26 +117,21 @@ func GetServiceURL(namespace, serviceName string) string {
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", serviceName, namespace)
 }
 
-func ensureNamespace(namespace string) error {
+func ensureNamespace(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
 	// Check if namespace exists by trying to access it (namespace-level permission)
 	// This is more reliable than 'kubectl get namespace' which requires cluster-level permissions
-	cmd := exec.Command("kubectl", "get", "serviceaccounts", "-n", namespace, "--limit=1")
-	output, err := cmd.CombinedOutput()
+	_, err := clientset.CoreV1().ServiceAccounts(namespace).List(ctx, metav1.ListOptions{Limit: 1})
 	if err == nil {
 		// Successfully accessed resources in namespace, so it exists
 		return nil
 	}
 
 	// Check if the error indicates namespace doesn't exist
-	outputStr := string(output)
-	namespaceNotFound := strings.Contains(outputStr, "NotFound") ||
-		strings.Contains(outputStr, "not found") ||
-		strings.Contains(outputStr, fmt.Sprintf("namespace \"%s\" not found", namespace))
-
-	if namespaceNotFound {
-		// Namespace doesn't exist, try to create it
-		cmd = exec.Command("kubectl", "create", "namespace", namespace)
-		output, err = cmd.CombinedOutput()
+	if apierrors.IsNotFound(err) {
+		// Namespace doesn't exist, try to create it with kubectl
+		// (namespace creation via client-go is out of scope for this phase)
+		cmd := exec.Command("kubectl", "create", "namespace", namespace)
+		output, err := cmd.CombinedOutput()
 		if err != nil && !strings.Contains(string(output), "AlreadyExists") {
 			return fmt.Errorf("failed to create namespace: %w\n%s", err, output)
 		}

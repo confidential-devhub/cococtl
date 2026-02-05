@@ -1,11 +1,87 @@
 package trustee
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+
 	"gopkg.in/yaml.v3"
 )
+
+// TestIsDeployed_Found tests that IsDeployed returns true when a deployment with the trustee label exists
+func TestIsDeployed_Found(t *testing.T) {
+	// Create a fake clientset with a deployment that has the trustee label
+	fakeClient := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "trustee-deployment",
+				Namespace: "coco-tenant",
+				Labels: map[string]string{
+					"app": "kbs",
+				},
+			},
+		},
+	)
+
+	ctx := context.Background()
+	deployed, err := IsDeployed(ctx, fakeClient, "coco-tenant")
+
+	if err != nil {
+		t.Fatalf("IsDeployed() error = %v, want nil", err)
+	}
+
+	if !deployed {
+		t.Errorf("IsDeployed() = false, want true")
+	}
+}
+
+// TestIsDeployed_NotFound tests that IsDeployed returns false when no deployment exists
+func TestIsDeployed_NotFound(t *testing.T) {
+	// Create an empty fake clientset
+	fakeClient := fake.NewSimpleClientset()
+
+	ctx := context.Background()
+	deployed, err := IsDeployed(ctx, fakeClient, "coco-tenant")
+
+	if err != nil {
+		t.Fatalf("IsDeployed() error = %v, want nil", err)
+	}
+
+	if deployed {
+		t.Errorf("IsDeployed() = true, want false")
+	}
+}
+
+// TestIsDeployed_WrongLabel tests that IsDeployed returns false when deployment exists but has wrong label
+func TestIsDeployed_WrongLabel(t *testing.T) {
+	// Create a fake clientset with a deployment that has a different label
+	fakeClient := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "other-deployment",
+				Namespace: "coco-tenant",
+				Labels: map[string]string{
+					"app": "other-app",
+				},
+			},
+		},
+	)
+
+	ctx := context.Background()
+	deployed, err := IsDeployed(ctx, fakeClient, "coco-tenant")
+
+	if err != nil {
+		t.Fatalf("IsDeployed() error = %v, want nil", err)
+	}
+
+	if deployed {
+		t.Errorf("IsDeployed() = true, want false when deployment has wrong label")
+	}
+}
 
 // TestDeployKBS_ResourceLimits tests that the KBS deployment includes CPU resource requests and limits
 func TestDeployKBS_ResourceLimits(t *testing.T) {
