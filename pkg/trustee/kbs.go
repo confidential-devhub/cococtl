@@ -1,12 +1,18 @@
 package trustee
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+
+	"github.com/confidential-devhub/cococtl/pkg/k8s"
 )
 
 const kbsRepositoryPath = "/opt/confidential-containers/kbs/repository"
@@ -45,25 +51,24 @@ func UploadResources(namespace string, resources map[string][]byte) error {
 }
 
 // GetKBSPodName retrieves the name of the KBS pod in the specified namespace.
-func GetKBSPodName(namespace string) (string, error) {
-	cmd := exec.Command("kubectl", "get", "pod", "-n", namespace,
-		"-l", "app=kbs", "-o", "jsonpath={.items[0].metadata.name}")
-	output, err := cmd.CombinedOutput()
+func GetKBSPodName(ctx context.Context, clientset kubernetes.Interface, namespace string) (string, error) {
+	pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=kbs",
+	})
 	if err != nil {
-		return "", fmt.Errorf("failed to get KBS pod: %w\n%s", err, output)
+		return "", fmt.Errorf("failed to list pods: %w", err)
 	}
 
-	podName := strings.TrimSpace(string(output))
-	if podName == "" {
+	if len(pods.Items) == 0 {
 		return "", fmt.Errorf("no KBS pod found in namespace %s", namespace)
 	}
 
-	return podName, nil
+	return pods.Items[0].Name, nil
 }
 
 // WaitForKBSReady waits for the KBS pod to be ready.
-func WaitForKBSReady(namespace string) error {
-	podName, err := GetKBSPodName(namespace)
+func WaitForKBSReady(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
+	podName, err := GetKBSPodName(ctx, clientset, namespace)
 	if err != nil {
 		return err
 	}
@@ -84,12 +89,19 @@ func populateSecrets(namespace string, secrets []SecretResource) error {
 		return nil
 	}
 
-	podName, err := GetKBSPodName(namespace)
+	// For now, create context here until UploadResource/UploadResources are migrated
+	ctx := context.Background()
+	client, err := k8s.NewClient(k8s.ClientOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create kubernetes client: %w", err)
+	}
+
+	podName, err := GetKBSPodName(ctx, client.Clientset, namespace)
 	if err != nil {
 		return err
 	}
 
-	if err := WaitForKBSReady(namespace); err != nil {
+	if err := WaitForKBSReady(ctx, client.Clientset, namespace); err != nil {
 		return err
 	}
 
