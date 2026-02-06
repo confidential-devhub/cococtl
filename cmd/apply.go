@@ -85,6 +85,15 @@ func init() {
 }
 
 func runApply(cmd *cobra.Command, _ []string) error {
+	// Detect kubectl availability immediately - needed for apply and secret upload operations
+	ctx := detectKubectl(cmd.Context())
+
+	// Fail fast if kubectl not available - apply command requires kubectl for both
+	// addK8sSecretToTrustee (kubectl cp/exec) and final kubectl apply
+	if err := requireKubectl(ctx, "apply"); err != nil {
+		return err
+	}
+
 	// Validate required flags (manual validation to keep all flags visible in shell completion)
 	if manifestFile == "" {
 		return fmt.Errorf("required flag(s) \"filename\" not set")
@@ -180,7 +189,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Transform manifest
-	if err := transformManifest(cmd.Context(), m, cfg, rc, skipApply); err != nil {
+	if err := transformManifest(ctx, m, cfg, rc, skipApply); err != nil {
 		return fmt.Errorf("failed to transform manifest: %w", err)
 	}
 

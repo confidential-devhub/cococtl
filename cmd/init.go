@@ -252,7 +252,9 @@ func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive,
 	if clientErr != nil {
 		return false, "", fmt.Errorf("failed to create Kubernetes client: %w", clientErr)
 	}
-	ctx := cmd.Context()
+
+	// Detect kubectl availability and enhance context
+	ctx := detectKubectl(cmd.Context())
 
 	// Check if Trustee is already deployed
 	deployed, err := trustee.IsDeployed(ctx, client.Clientset, namespace)
@@ -268,6 +270,11 @@ func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive,
 
 	// Deploy Trustee
 	fmt.Printf("Deploying Trustee to namespace '%s'...\n", namespace)
+
+	// Check kubectl availability before deployment (kubectl is required for trustee.Deploy)
+	if err := requireKubectl(ctx, "init"); err != nil {
+		return false, "", err
+	}
 
 	kbsImage := cfg.KBSImage
 	if kbsImage == "" {
