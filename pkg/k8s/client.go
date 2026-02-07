@@ -112,11 +112,10 @@ func GetCurrentNamespace() (string, error) {
 		configOverrides,
 	)
 
-	namespace, _, err := kubeConfig.Namespace()
-	if err != nil {
-		// If kubeconfig doesn't exist or is invalid, try in-cluster
-		return getInClusterNamespace(""), nil
-	}
+	// Namespace() may fail if kubeconfig is missing or invalid;
+	// treat that the same as an empty namespace and fall through
+	// to in-cluster / "default" resolution below.
+	namespace, _, _ := kubeConfig.Namespace()
 
 	if namespace == "" {
 		namespace = getInClusterNamespace("")
