@@ -87,13 +87,21 @@ func init() {
 }
 
 func runApply(cmd *cobra.Command, _ []string) error {
-	// Detect kubectl availability immediately - needed for apply and secret upload operations
-	ctx := detectKubectl(cmd.Context())
+	var ctx context.Context
 
-	// Fail fast if kubectl not available - apply command requires kubectl for both
-	// addK8sSecretToTrustee (kubectl cp/exec) and final kubectl apply
-	if err := requireKubectl(ctx, "apply"); err != nil {
-		return err
+	if skipApply {
+		// Skip-apply mode: kubectl is optional, only needed for informational message
+		_, err := exec.LookPath("kubectl")
+		if err != nil {
+			fmt.Println("  \u2139 kubectl not found (--skip-apply mode: cluster write operations unavailable)")
+		}
+		ctx = cmd.Context()
+	} else {
+		// Normal mode: kubectl required, fail fast
+		ctx = detectKubectl(cmd.Context())
+		if err := requireKubectl(ctx, "apply"); err != nil {
+			return err
+		}
 	}
 
 	// Validate required flags (manual validation to keep all flags visible in shell completion)
