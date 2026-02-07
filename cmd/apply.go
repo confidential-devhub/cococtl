@@ -444,28 +444,53 @@ func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoCo
 
 	fmt.Printf("  - Found %d K8s secret(s) to convert\n", len(secretRefs))
 
-	// 2. Create Kubernetes client for secret inspection
-	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
-	if clientErr != nil {
-		return fmt.Errorf("failed to create Kubernetes client: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the secrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", clientErr)
+	// 2. Split refs by lookup requirement
+	var offlineRefs, clusterRefs []secrets.SecretReference
+	for _, ref := range secretRefs {
+		if ref.NeedsLookup {
+			clusterRefs = append(clusterRefs, ref)
+		} else {
+			offlineRefs = append(offlineRefs, ref)
+		}
 	}
 
-	// 3. Inspect K8s secrets
-	inspectedSecrets, err := secrets.InspectSecrets(ctx, client.Clientset, secretRefs)
-	if err != nil {
-		return fmt.Errorf("failed to inspect secrets: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the secrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
+	// 3. Process offline refs (always works - uses only manifest metadata, no cluster needed)
+	var allSealedSecrets []*secrets.SealedSecretData
+	if len(offlineRefs) > 0 {
+		fmt.Printf("  - Resolving %d secret(s) offline (explicit keys in manifest)\n", len(offlineRefs))
+		offlineSecrets, err := secrets.InspectSecrets(ctx, nil, offlineRefs)
+		if err != nil {
+			return fmt.Errorf("failed to resolve offline secrets: %w", err)
+		}
+		offlineKeys := secrets.SecretsToSecretKeys(offlineSecrets)
+		offlineSealed, err := secrets.ConvertSecrets(offlineRefs, offlineKeys)
+		if err != nil {
+			return err
+		}
+		allSealedSecrets = append(allSealedSecrets, offlineSealed...)
 	}
 
-	// Convert to SecretKeys format for converter
-	inspectedKeys := secrets.SecretsToSecretKeys(inspectedSecrets)
+	// 4. Process cluster refs (needs cluster connection for key enumeration)
+	if len(clusterRefs) > 0 {
+		fmt.Printf("  - %d secret(s) require cluster access for key enumeration\n", len(clusterRefs))
+		client, clientErr := k8s.NewClient(k8s.ClientOptions{})
+		if clientErr != nil {
+			return secretsClusterUnreachableError(clusterRefs, clientErr)
+		}
 
-	// 4. Convert to sealed secrets
-	sealedSecrets, err := secrets.ConvertSecrets(secretRefs, inspectedKeys)
-	if err != nil {
-		return err
+		clusterSecrets, err := secrets.InspectSecrets(ctx, client.Clientset, clusterRefs)
+		if err != nil {
+			return secretsClusterQueryError(clusterRefs, err)
+		}
+		clusterKeys := secrets.SecretsToSecretKeys(clusterSecrets)
+		clusterSealed, err := secrets.ConvertSecrets(clusterRefs, clusterKeys)
+		if err != nil {
+			return err
+		}
+		allSealedSecrets = append(allSealedSecrets, clusterSealed...)
 	}
 
-	fmt.Printf("  - Generated %d sealed secret(s)\n", len(sealedSecrets))
+	fmt.Printf("  - Generated %d sealed secret(s)\n", len(allSealedSecrets))
 
 	// 5. Create or save sealed secrets based on skipApply flag
 	var sealedSecretNames map[string]string
@@ -473,7 +498,7 @@ func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoCo
 		// Generate YAML and save to file instead of creating in cluster
 		fmt.Println("  - Generating sealed secret manifests")
 		var yamlContent string
-		sealedSecretNames, yamlContent, err = secrets.GenerateSealedSecretsYAML(sealedSecrets)
+		sealedSecretNames, yamlContent, err = secrets.GenerateSealedSecretsYAML(allSealedSecrets)
 		if err != nil {
 			return fmt.Errorf("failed to generate sealed secret YAML: %w", err)
 		}
@@ -494,7 +519,7 @@ func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoCo
 	} else {
 		// Create sealed secrets in cluster
 		fmt.Println("  - Creating K8s sealed secrets in cluster")
-		sealedSecretNames, err = secrets.CreateSealedSecrets(sealedSecrets)
+		sealedSecretNames, err = secrets.CreateSealedSecrets(allSealedSecrets)
 		if err != nil {
 			return fmt.Errorf("failed to create sealed secrets: %w", err)
 		}
@@ -536,12 +561,12 @@ func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoCo
 	baseName := strings.TrimSuffix(manifestFile, ext)
 	trusteeConfigPath := baseName + "-trustee-secrets.yaml"
 
-	if err := secrets.GenerateTrusteeConfig(sealedSecrets, trusteeConfigPath); err != nil {
+	if err := secrets.GenerateTrusteeConfig(allSealedSecrets, trusteeConfigPath); err != nil {
 		return fmt.Errorf("failed to generate Trustee config: %w", err)
 	}
 
 	// 8. Print instructions
-	secrets.PrintTrusteeInstructions(sealedSecrets, trusteeConfigPath, autoUploadSuccess)
+	secrets.PrintTrusteeInstructions(allSealedSecrets, trusteeConfigPath, autoUploadSuccess)
 
 	return nil
 }
@@ -942,4 +967,49 @@ func resolveNamespace(flagNamespace, manifestNamespace string) (string, error) {
 
 	// 4. "default" (final fallback)
 	return "default", nil
+}
+
+// secretsClusterUnreachableError creates an actionable error when the cluster
+// can't be reached and some secrets require key enumeration.
+func secretsClusterUnreachableError(clusterRefs []secrets.SecretReference, clientErr error) error {
+	names := make([]string, len(clusterRefs))
+	for i, ref := range clusterRefs {
+		usageTypes := make([]string, 0)
+		seen := make(map[string]bool)
+		for _, u := range ref.Usages {
+			if !seen[u.Type] {
+				usageTypes = append(usageTypes, u.Type)
+				seen[u.Type] = true
+			}
+		}
+		names[i] = fmt.Sprintf("    - %s (used in %s)", ref.Name, strings.Join(usageTypes, ", "))
+	}
+
+	return fmt.Errorf("cannot determine keys for %d secret(s) in offline mode:\n%s\n\n"+
+		"These secrets use envFrom, volume mounts without explicit items, or other patterns\n"+
+		"that require querying the cluster to enumerate their keys.\n\n"+
+		"To fix:\n"+
+		"  1. Use explicit key references in your manifest instead of envFrom or whole-secret mounts\n"+
+		"     Example: env.valueFrom.secretKeyRef with explicit 'key' field\n"+
+		"  2. Ensure cluster is reachable (check kubeconfig and network connectivity)\n"+
+		"  3. Or disable secret conversion with --convert-secrets=false\n\n"+
+		"Underlying error: %v",
+		len(clusterRefs), strings.Join(names, "\n"), clientErr)
+}
+
+// secretsClusterQueryError creates an actionable error when the cluster is reachable
+// but the secret query fails (e.g., secret doesn't exist, permission denied).
+func secretsClusterQueryError(clusterRefs []secrets.SecretReference, queryErr error) error {
+	names := make([]string, len(clusterRefs))
+	for i, ref := range clusterRefs {
+		names[i] = ref.Name
+	}
+
+	return fmt.Errorf("failed to inspect secrets requiring cluster lookup (%s): %w\n\n"+
+		"To fix:\n"+
+		"  1. Ensure the secrets exist in the cluster\n"+
+		"  2. Verify your kubeconfig has read access to secrets\n"+
+		"  3. Or use explicit key references to avoid cluster lookups\n"+
+		"  4. Or disable secret conversion with --convert-secrets=false",
+		strings.Join(names, ", "), queryErr)
 }
