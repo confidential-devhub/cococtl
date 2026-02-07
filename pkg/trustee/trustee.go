@@ -105,7 +105,7 @@ func Deploy(ctx context.Context, clientset kubernetes.Interface, cfg *Config) er
 	}
 
 	if len(cfg.Secrets) > 0 {
-		if err := populateSecrets(cfg.Namespace, cfg.Secrets); err != nil {
+		if err := populateSecrets(ctx, clientset, cfg.Namespace, cfg.Secrets); err != nil {
 			return fmt.Errorf("failed to populate secrets: %w", err)
 		}
 	}

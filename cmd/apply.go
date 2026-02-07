@@ -667,7 +667,7 @@ func addK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 // Falls back to default service account if no imagePullSecrets in manifest
 func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) ([]initdata.ImagePullSecretInfo, error) {
 	// Detect imagePullSecrets in manifest, with fallback to default service account
-	imagePullSecretRefs, err := secrets.DetectImagePullSecretsWithServiceAccount(m.GetData())
+	imagePullSecretRefs, err := secrets.DetectImagePullSecretsWithServiceAccount(ctx, m.GetData())
 	if err != nil {
 		return nil, err
 	}
@@ -837,11 +837,12 @@ func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNam
 		}
 	}
 
+	// Create Kubernetes client (used for auto-SAN detection and KBS upload)
+	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
+
 	// Auto-detect SANs unless skipped
 	if !sidecarSkipAutoSANs {
 		// Auto-detect node IPs
-		// Create Kubernetes client for node IP detection
-		client, clientErr := k8s.NewClient(k8s.ClientOptions{})
 		if clientErr != nil {
 			fmt.Printf("Warning: failed to create Kubernetes client for node IP detection: %v\n", clientErr)
 		} else {
@@ -882,12 +883,15 @@ func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNam
 
 	if !skipApply {
 		// Normal mode: upload to Trustee KBS
+		if clientErr != nil {
+			return fmt.Errorf("failed to create Kubernetes client for certificate upload: %w", clientErr)
+		}
 		fmt.Printf("  - Uploading server certificate to Trustee KBS (namespace: %s)...\n", trusteeNamespace)
 		resources := map[string][]byte{
 			serverCertPath: serverCert.CertPEM,
 			serverKeyPath:  serverCert.KeyPEM,
 		}
-		if err := trustee.UploadResources(trusteeNamespace, resources); err != nil {
+		if err := trustee.UploadResources(ctx, client.Clientset, trusteeNamespace, resources); err != nil {
 			return fmt.Errorf("failed to upload server certificate to KBS: %w", err)
 		}
 		fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)

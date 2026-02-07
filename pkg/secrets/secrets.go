@@ -299,7 +299,7 @@ func detectImagePullSecrets(spec map[string]interface{}, namespace string, secre
 
 // DetectImagePullSecretsWithServiceAccount detects imagePullSecrets from manifest
 // and falls back to default service account if none are found in the spec
-func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{}) ([]SecretReference, error) {
+func DetectImagePullSecretsWithServiceAccount(ctx context.Context, manifestData map[string]interface{}) ([]SecretReference, error) {
 	// Create manifest wrapper to reuse existing manifest methods
 	m := manifest.GetFromData(manifestData)
 
@@ -327,8 +327,6 @@ func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{
 
 	// If no imagePullSecrets found in manifest, check default service account
 	if len(secretsMap) == 0 {
-		// Create context and clientset for serviceaccount query
-		ctx := context.Background()
 		client, err := k8s.NewClient(k8s.ClientOptions{})
 		if err == nil {
 			secretName, err := GetServiceAccountImagePullSecrets(ctx, client.Clientset, "default", namespace)

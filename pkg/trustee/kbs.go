@@ -11,8 +11,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-
-	"github.com/confidential-devhub/cococtl/pkg/k8s"
 )
 
 const kbsRepositoryPath = "/opt/confidential-containers/kbs/repository"
@@ -20,7 +18,7 @@ const kbsRepositoryPath = "/opt/confidential-containers/kbs/repository"
 // UploadResource uploads a single resource to Trustee KBS.
 // The resourcePath should be relative (e.g., "default/sidecar-tls/server-cert").
 // The data is the raw bytes to upload.
-func UploadResource(namespace, resourcePath string, data []byte) error {
+func UploadResource(ctx context.Context, clientset kubernetes.Interface, namespace, resourcePath string, data []byte) error {
 	resources := []SecretResource{
 		{
 			URI:  "kbs:///" + resourcePath,
@@ -28,13 +26,13 @@ func UploadResource(namespace, resourcePath string, data []byte) error {
 		},
 	}
 
-	return populateSecrets(namespace, resources)
+	return populateSecrets(ctx, clientset, namespace, resources)
 }
 
 // UploadResources uploads multiple resources to Trustee KBS in a single operation.
 // Each resource is specified as a map entry where key is the resource path
 // (e.g., "default/sidecar-tls/server-cert") and value is the data bytes.
-func UploadResources(namespace string, resources map[string][]byte) error {
+func UploadResources(ctx context.Context, clientset kubernetes.Interface, namespace string, resources map[string][]byte) error {
 	if len(resources) == 0 {
 		return nil
 	}
@@ -47,7 +45,7 @@ func UploadResources(namespace string, resources map[string][]byte) error {
 		})
 	}
 
-	return populateSecrets(namespace, secretResources)
+	return populateSecrets(ctx, clientset, namespace, secretResources)
 }
 
 // GetKBSPodName retrieves the name of the KBS pod in the specified namespace.
@@ -84,24 +82,17 @@ func WaitForKBSReady(ctx context.Context, clientset kubernetes.Interface, namesp
 }
 
 // It uploads multiple secrets to KBS via kubectl cp.
-func populateSecrets(namespace string, secrets []SecretResource) error {
+func populateSecrets(ctx context.Context, clientset kubernetes.Interface, namespace string, secrets []SecretResource) error {
 	if len(secrets) == 0 {
 		return nil
 	}
 
-	// For now, create context here until UploadResource/UploadResources are migrated
-	ctx := context.Background()
-	client, err := k8s.NewClient(k8s.ClientOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to create kubernetes client: %w", err)
-	}
-
-	podName, err := GetKBSPodName(ctx, client.Clientset, namespace)
+	podName, err := GetKBSPodName(ctx, clientset, namespace)
 	if err != nil {
 		return err
 	}
 
-	if err := WaitForKBSReady(ctx, client.Clientset, namespace); err != nil {
+	if err := WaitForKBSReady(ctx, clientset, namespace); err != nil {
 		return err
 	}
 
