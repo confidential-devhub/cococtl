@@ -63,6 +63,7 @@ var (
 	sidecarSANDNS       string
 	sidecarSkipAutoSANs bool
 	sidecarPortForward  int
+	namespaceFlag       string
 )
 
 func init() {
@@ -82,6 +83,7 @@ func init() {
 	applyCmd.Flags().StringVar(&sidecarSANDNS, "sidecar-san-dns", "", "Comma-separated list of DNS names for sidecar server certificate SANs")
 	applyCmd.Flags().BoolVar(&sidecarSkipAutoSANs, "sidecar-skip-auto-sans", false, "Skip auto-detection of SANs (node IPs and service DNS)")
 	applyCmd.Flags().IntVar(&sidecarPortForward, "sidecar-port-forward", 0, "Port to forward from primary container (requires --sidecar)")
+	applyCmd.Flags().StringVarP(&namespaceFlag, "namespace", "n", "", "Namespace for operations (overrides manifest and kubeconfig)")
 }
 
 func runApply(cmd *cobra.Command, _ []string) error {
@@ -189,7 +191,13 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Transform manifest
-	if err := transformManifest(ctx, m, cfg, rc, skipApply); err != nil {
+	// Resolve namespace before transformation
+	resolvedNamespace, err := resolveNamespace(namespaceFlag, m.GetNamespace())
+	if err != nil {
+		return err
+	}
+
+	if err := transformManifest(ctx, m, cfg, rc, skipApply, resolvedNamespace); err != nil {
 		return fmt.Errorf("failed to transform manifest: %w", err)
 	}
 
@@ -204,13 +212,9 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	var servicePath string
 	if enableSidecar || cfg.Sidecar.Enabled {
 		appName := m.GetName()
-		namespace := m.GetNamespace()
-		if namespace == "" {
-			var err error
-			namespace, err = getCurrentNamespace()
-			if err != nil {
-				return fmt.Errorf("failed to get current namespace: %w", err)
-			}
+		namespace, err := resolveNamespace(namespaceFlag, m.GetNamespace())
+		if err != nil {
+			return fmt.Errorf("failed to resolve namespace: %w", err)
 		}
 
 		fmt.Println("Generating Service manifest for sidecar...")
@@ -259,7 +263,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool) error {
+func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool, resolvedNamespace string) error {
 	// 1. Set RuntimeClass
 	fmt.Printf("  - Setting runtimeClassName: %s\n", rc)
 	if err := m.SetRuntimeClass(rc); err != nil {
@@ -320,15 +324,7 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 		if appName == "" {
 			return fmt.Errorf("manifest must have metadata.name for sidecar injection")
 		}
-		namespace := m.GetNamespace()
-		if namespace == "" {
-			// Use current kubectl namespace instead of hardcoding "default"
-			var err error
-			namespace, err = getCurrentNamespace()
-			if err != nil {
-				return fmt.Errorf("failed to get current namespace: %w", err)
-			}
-		}
+		namespace := resolvedNamespace
 
 		// Get Trustee namespace from config (where KBS is deployed)
 		trusteeNamespace := cfg.GetTrusteeNamespace()
@@ -611,7 +607,7 @@ func addSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeNamespace 
 		secretNamespace := ref.Namespace
 		if secretNamespace == "" {
 			var err error
-			secretNamespace, err = getCurrentNamespace()
+			secretNamespace, err = k8s.GetCurrentNamespace()
 			if err != nil {
 				return fmt.Errorf("failed to get current namespace for secret %s: %w", ref.Name, err)
 			}
@@ -725,7 +721,7 @@ func addImagePullSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeN
 		secretNamespace := ref.Namespace
 		if secretNamespace == "" {
 			var err error
-			secretNamespace, err = getCurrentNamespace()
+			secretNamespace, err = k8s.GetCurrentNamespace()
 			if err != nil {
 				return fmt.Errorf("failed to get current namespace for imagePullSecret %s: %w", ref.Name, err)
 			}
@@ -850,4 +846,39 @@ func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNam
 
 	fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
 	return nil
+}
+
+// resolveNamespace determines the namespace using kubectl precedence order:
+//  1. --namespace flag (highest priority)
+//  2. manifest metadata.namespace field
+//  3. kubeconfig context namespace (offline via k8s.GetCurrentNamespace)
+//  4. "default" (final fallback)
+//
+// Returns an error if --namespace flag and manifest namespace both exist but differ,
+// matching kubectl behavior.
+func resolveNamespace(flagNamespace, manifestNamespace string) (string, error) {
+	// Validation: flag and manifest namespace must not conflict (kubectl behavior)
+	if flagNamespace != "" && manifestNamespace != "" && flagNamespace != manifestNamespace {
+		return "", fmt.Errorf("the namespace from the provided object %q does not match the namespace %q. You must pass '--namespace=%s' to perform this operation",
+			manifestNamespace, flagNamespace, manifestNamespace)
+	}
+
+	// 1. --namespace flag (highest priority)
+	if flagNamespace != "" {
+		return flagNamespace, nil
+	}
+
+	// 2. manifest metadata.namespace
+	if manifestNamespace != "" {
+		return manifestNamespace, nil
+	}
+
+	// 3. kubeconfig context namespace (offline read)
+	kubeconfigNs, err := k8s.GetCurrentNamespace()
+	if err == nil && kubeconfigNs != "" {
+		return kubeconfigNs, nil
+	}
+
+	// 4. "default" (final fallback)
+	return "default", nil
 }
