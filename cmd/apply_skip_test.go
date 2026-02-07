@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/confidential-devhub/cococtl/pkg/k8s"
+	"github.com/confidential-devhub/cococtl/pkg/secrets"
 	"github.com/confidential-devhub/cococtl/pkg/sidecar/certs"
 	"gopkg.in/yaml.v3"
 )
@@ -274,5 +276,109 @@ func TestSkipApply_SidecarCertFileSaving(t *testing.T) {
 		if string(decoded) != string(serverCert.KeyPEM) {
 			t.Error("data[tls.key] decoded content does not match original key PEM")
 		}
+	}
+}
+
+func TestSkipApply_SecretsClusterUnreachableError_Format(t *testing.T) {
+	refs := []secrets.SecretReference{
+		{
+			Name: "app-config",
+			Usages: []secrets.SecretUsage{
+				{Type: "envFrom", ContainerName: "app"},
+			},
+		},
+		{
+			Name: "volume-data",
+			Usages: []secrets.SecretUsage{
+				{Type: "volume", VolumeName: "data-vol"},
+			},
+		},
+	}
+
+	err := secretsClusterUnreachableError(refs, fmt.Errorf("connection refused"))
+
+	errMsg := err.Error()
+
+	// Verify error mentions secret names
+	if !strings.Contains(errMsg, "app-config") {
+		t.Errorf("Error should mention 'app-config', got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "volume-data") {
+		t.Errorf("Error should mention 'volume-data', got: %s", errMsg)
+	}
+
+	// Verify error mentions usage types
+	if !strings.Contains(errMsg, "envFrom") {
+		t.Errorf("Error should mention 'envFrom' usage type, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "volume") {
+		t.Errorf("Error should mention 'volume' usage type, got: %s", errMsg)
+	}
+
+	// Verify actionable guidance
+	if !strings.Contains(errMsg, "explicit key references") {
+		t.Errorf("Error should suggest explicit key references, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "convert-secrets=false") {
+		t.Errorf("Error should suggest --convert-secrets=false, got: %s", errMsg)
+	}
+
+	// Verify underlying error included
+	if !strings.Contains(errMsg, "connection refused") {
+		t.Errorf("Error should include underlying error, got: %s", errMsg)
+	}
+}
+
+func TestSkipApply_SecretsClusterQueryError_Format(t *testing.T) {
+	refs := []secrets.SecretReference{
+		{Name: "missing-secret"},
+	}
+
+	err := secretsClusterQueryError(refs, fmt.Errorf("secret not found"))
+
+	errMsg := err.Error()
+
+	if !strings.Contains(errMsg, "missing-secret") {
+		t.Errorf("Error should mention secret name, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "secret not found") {
+		t.Errorf("Error should include underlying error, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "explicit key references") {
+		t.Errorf("Error should suggest explicit key references, got: %s", errMsg)
+	}
+}
+
+func TestSkipApply_SecretRefSplitting(t *testing.T) {
+	// Simulate mixed refs
+	allRefs := []secrets.SecretReference{
+		{Name: "explicit-secret", NeedsLookup: false, Keys: []string{"key1"}},
+		{Name: "envfrom-secret", NeedsLookup: true},
+		{Name: "volume-explicit", NeedsLookup: false, Keys: []string{"cert", "key"}},
+		{Name: "volume-all", NeedsLookup: true},
+	}
+
+	var offlineRefs, clusterRefs []secrets.SecretReference
+	for _, ref := range allRefs {
+		if ref.NeedsLookup {
+			clusterRefs = append(clusterRefs, ref)
+		} else {
+			offlineRefs = append(offlineRefs, ref)
+		}
+	}
+
+	if len(offlineRefs) != 2 {
+		t.Errorf("Expected 2 offline refs, got %d", len(offlineRefs))
+	}
+	if len(clusterRefs) != 2 {
+		t.Errorf("Expected 2 cluster refs, got %d", len(clusterRefs))
+	}
+
+	// Verify correct assignment
+	if offlineRefs[0].Name != "explicit-secret" {
+		t.Errorf("First offline ref should be 'explicit-secret', got %q", offlineRefs[0].Name)
+	}
+	if clusterRefs[0].Name != "envfrom-secret" {
+		t.Errorf("First cluster ref should be 'envfrom-secret', got %q", clusterRefs[0].Name)
 	}
 }
