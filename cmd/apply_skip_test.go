@@ -97,17 +97,8 @@ users:
 		t.Fatalf("Failed to write test kubeconfig: %v", err)
 	}
 
-	// Save and restore KUBECONFIG env
-	origKubeconfig := os.Getenv("KUBECONFIG")
-	t.Cleanup(func() {
-		if origKubeconfig == "" {
-			os.Unsetenv("KUBECONFIG")
-		} else {
-			os.Setenv("KUBECONFIG", origKubeconfig)
-		}
-	})
-
-	os.Setenv("KUBECONFIG", kubeconfigPath)
+	// Set KUBECONFIG env (t.Setenv restores original value on cleanup)
+	t.Setenv("KUBECONFIG", kubeconfigPath)
 
 	// Verify k8s.GetCurrentNamespace() returns the kubeconfig namespace
 	kubeconfigNs, err := k8s.GetCurrentNamespace()
@@ -131,18 +122,9 @@ users:
 // TestSkipApply_NamespaceResolution_DefaultFallback tests that "default" is
 // returned when no flag, no manifest namespace, and no kubeconfig namespace exist.
 func TestSkipApply_NamespaceResolution_DefaultFallback(t *testing.T) {
-	// Save and restore KUBECONFIG env
-	origKubeconfig := os.Getenv("KUBECONFIG")
-	t.Cleanup(func() {
-		if origKubeconfig == "" {
-			os.Unsetenv("KUBECONFIG")
-		} else {
-			os.Setenv("KUBECONFIG", origKubeconfig)
-		}
-	})
-
 	// Point KUBECONFIG to a non-existent path so kubeconfig reading fails
-	os.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "nonexistent-kubeconfig"))
+	// (t.Setenv restores original value on cleanup)
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "nonexistent-kubeconfig"))
 
 	ns, err := resolveNamespace("", "")
 	if err != nil {

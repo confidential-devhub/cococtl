@@ -140,10 +140,8 @@ func TestGetCurrentNamespace_FromContext(t *testing.T) {
 	// Create kubeconfig with namespace
 	kubeconfigPath := createTestKubeconfig(t, "test-ns")
 
-	// Save and restore original KUBECONFIG
-	origKubeconfig := os.Getenv("KUBECONFIG")
+	// Set KUBECONFIG env (t.Setenv restores original value on cleanup)
 	t.Setenv("KUBECONFIG", kubeconfigPath)
-	defer os.Setenv("KUBECONFIG", origKubeconfig)
 
 	namespace, err := GetCurrentNamespace()
 	if err != nil {
@@ -159,10 +157,8 @@ func TestGetCurrentNamespace_Default(t *testing.T) {
 	// Create kubeconfig without namespace
 	kubeconfigPath := createTestKubeconfig(t, "")
 
-	// Save and restore original KUBECONFIG
-	origKubeconfig := os.Getenv("KUBECONFIG")
+	// Set KUBECONFIG env (t.Setenv restores original value on cleanup)
 	t.Setenv("KUBECONFIG", kubeconfigPath)
-	defer os.Setenv("KUBECONFIG", origKubeconfig)
 
 	namespace, err := GetCurrentNamespace()
 	if err != nil {
