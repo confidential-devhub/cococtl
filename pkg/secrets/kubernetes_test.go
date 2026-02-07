@@ -656,3 +656,110 @@ func TestInspectSecrets_NilClientset_MixedRefs(t *testing.T) {
 		t.Errorf("error = %q, want error mentioning 'cluster-secret'", err.Error())
 	}
 }
+
+func TestOfflineSecretResolution_EndToEnd(t *testing.T) {
+	ctx := context.Background()
+
+	// Simulate secrets with explicit keys from manifest
+	refs := []SecretReference{
+		{
+			Name:        "db-creds",
+			Namespace:   "production",
+			Keys:        []string{"password", "username"},
+			NeedsLookup: false,
+			Usages: []SecretUsage{
+				{Type: "env", Key: "password"},
+				{Type: "env", Key: "username"},
+			},
+		},
+		{
+			Name:        "api-config",
+			Namespace:   "production",
+			Keys:        []string{"api-key"},
+			NeedsLookup: false,
+			Usages: []SecretUsage{
+				{Type: "volume", VolumeName: "config-vol"},
+			},
+		},
+	}
+
+	// InspectSecrets with nil clientset (offline mode)
+	inspected, err := InspectSecrets(ctx, nil, refs)
+	if err != nil {
+		t.Fatalf("InspectSecrets(nil) failed for offline refs: %v", err)
+	}
+
+	// Verify synthetic secrets created
+	if len(inspected) != 2 {
+		t.Fatalf("Expected 2 inspected secrets, got %d", len(inspected))
+	}
+
+	// Convert to SecretKeys and then to sealed secrets
+	keys := SecretsToSecretKeys(inspected)
+	sealed, err := ConvertSecrets(refs, keys)
+	if err != nil {
+		t.Fatalf("ConvertSecrets failed: %v", err)
+	}
+
+	// Verify correct number of sealed secrets (3 total: 2 from db-creds + 1 from api-config)
+	if len(sealed) != 3 {
+		t.Fatalf("Expected 3 sealed secrets, got %d", len(sealed))
+	}
+
+	// Verify URIs follow consistent format
+	for _, s := range sealed {
+		expectedPrefix := "kbs:///production/"
+		if !strings.HasPrefix(s.ResourceURI, expectedPrefix) {
+			t.Errorf("ResourceURI %q doesn't start with %q", s.ResourceURI, expectedPrefix)
+		}
+
+		// Verify sealed secret format
+		if !strings.HasPrefix(s.SealedSecret, "sealed.fakejwsheader.") {
+			t.Errorf("SealedSecret doesn't have correct format: %s", s.SealedSecret)
+		}
+	}
+}
+
+func TestOfflineSecretResolution_ConsistentWithCluster(t *testing.T) {
+	ctx := context.Background()
+
+	// Same secret resolved offline
+	offlineRef := SecretReference{
+		Name: "test-secret", Namespace: "myns",
+		Keys: []string{"key1"}, NeedsLookup: false,
+	}
+	offlineResult, err := InspectSecrets(ctx, nil, []SecretReference{offlineRef})
+	if err != nil {
+		t.Fatalf("Offline InspectSecrets failed: %v", err)
+	}
+	offlineKeys := SecretsToSecretKeys(offlineResult)
+	offlineSealed, err := ConvertSecrets([]SecretReference{offlineRef}, offlineKeys)
+	if err != nil {
+		t.Fatalf("Offline ConvertSecrets failed: %v", err)
+	}
+
+	// Same secret resolved via cluster (fake clientset)
+	fakeClient := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-secret", Namespace: "myns"},
+		Data:       map[string][]byte{"key1": []byte("value1")},
+	})
+	clusterRef := SecretReference{
+		Name: "test-secret", Namespace: "myns",
+		Keys: []string{"key1"}, NeedsLookup: true,
+	}
+	clusterResult, err := InspectSecrets(ctx, fakeClient, []SecretReference{clusterRef})
+	if err != nil {
+		t.Fatalf("Cluster InspectSecrets failed: %v", err)
+	}
+	clusterKeys := SecretsToSecretKeys(clusterResult)
+	clusterSealed, err := ConvertSecrets([]SecretReference{clusterRef}, clusterKeys)
+	if err != nil {
+		t.Fatalf("Cluster ConvertSecrets failed: %v", err)
+	}
+
+	// URIs must match regardless of resolution path
+	if offlineSealed[0].ResourceURI != clusterSealed[0].ResourceURI {
+		t.Errorf("URI mismatch: offline=%q cluster=%q",
+			offlineSealed[0].ResourceURI, clusterSealed[0].ResourceURI)
+	}
+}
