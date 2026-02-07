@@ -2,11 +2,11 @@ package secrets
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 
+	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -106,6 +106,11 @@ func InspectSecrets(ctx context.Context, clientset kubernetes.Interface, refs []
 			continue
 		}
 
+		// clientset required for cluster lookup
+		if clientset == nil {
+			return nil, fmt.Errorf("cluster connection required to inspect secret %q (needs key enumeration for %s usage)", ref.Name, describeUsageTypes(ref.Usages))
+		}
+
 		// Inspect the secret using client-go
 		secret, err := InspectSecret(ctx, clientset, ref.Name, ref.Namespace)
 		if err != nil {
@@ -129,36 +134,31 @@ func InspectSecrets(ctx context.Context, clientset kubernetes.Interface, refs []
 func GenerateSealedSecretYAML(secretName, namespace string, sealedData map[string]string) (string, string, error) {
 	sealedSecretName := secretName + "-sealed"
 
-	// Build kubectl command to create secret
-	args := []string{"create", "secret", "generic", sealedSecretName}
-
-	// Add namespace if specified
-	if namespace != "" {
-		args = append(args, "-n", namespace)
+	// Build Kubernetes Secret structure using stringData for readability
+	// stringData is functionally equivalent to data (Kubernetes auto-encodes on apply)
+	secret := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata": map[string]interface{}{
+			"name":      sealedSecretName,
+			"namespace": namespace,
+		},
+		"type":       "Opaque",
+		"stringData": sealedData,
 	}
 
-	// Add each sealed secret as a literal
-	for key, sealedValue := range sealedData {
-		args = append(args, fmt.Sprintf("--from-literal=%s=%s", key, sealedValue))
+	// Omit namespace from metadata if empty (matches kubectl behavior)
+	if namespace == "" {
+		metadata := secret["metadata"].(map[string]interface{})
+		delete(metadata, "namespace")
 	}
 
-	// Add --dry-run=client and -o yaml to generate YAML without applying
-	args = append(args, "--dry-run=client", "-o", "yaml")
-
-	// Execute command to generate YAML
-	// #nosec G204 - args are constructed from application-controlled inputs (secret name, namespace, sealed values)
-	// No arbitrary user input is passed to kubectl
-	cmd := exec.Command("kubectl", args...)
-	output, err := cmd.Output()
+	yamlData, err := yaml.Marshal(secret)
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return "", "", fmt.Errorf("kubectl create secret failed: %s", string(exitErr.Stderr))
-		}
-		return "", "", fmt.Errorf("kubectl create secret failed: %w", err)
+		return "", "", fmt.Errorf("failed to marshal sealed secret YAML: %w", err)
 	}
 
-	return sealedSecretName, string(output), nil
+	return sealedSecretName, string(yamlData), nil
 }
 
 // CreateSealedSecret creates a K8s secret with sealed secret values
@@ -290,4 +290,17 @@ func GetServiceAccountImagePullSecrets(ctx context.Context, clientset kubernetes
 
 	// Return first imagePullSecret name
 	return sa.ImagePullSecrets[0].Name, nil
+}
+
+// describeUsageTypes returns a comma-separated list of usage types for error messages
+func describeUsageTypes(usages []SecretUsage) string {
+	types := make([]string, 0, len(usages))
+	seen := make(map[string]bool)
+	for _, u := range usages {
+		if !seen[u.Type] {
+			types = append(types, u.Type)
+			seen[u.Type] = true
+		}
+	}
+	return strings.Join(types, ", ")
 }
