@@ -1,10 +1,11 @@
 package secrets
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestGenerateTrusteeConfig(t *testing.T) {
@@ -38,8 +39,8 @@ func TestGenerateTrusteeConfig(t *testing.T) {
 	}
 
 	var config TrusteeConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		t.Fatalf("Failed to parse JSON: %v", err)
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		t.Fatalf("Failed to parse YAML: %v", err)
 	}
 
 	// Verify content
@@ -107,8 +108,8 @@ func TestGenerateTrusteeConfig_MultipleSecrets(t *testing.T) {
 	}
 
 	var config TrusteeConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		t.Fatalf("Failed to parse JSON: %v", err)
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		t.Fatalf("Failed to parse YAML: %v", err)
 	}
 
 	if len(config.Secrets) != 2 {
@@ -134,8 +135,8 @@ func TestGenerateTrusteeConfig_EmptySecrets(t *testing.T) {
 	}
 
 	var config TrusteeConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		t.Fatalf("Failed to parse JSON: %v", err)
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		t.Fatalf("Failed to parse YAML: %v", err)
 	}
 
 	if len(config.Secrets) != 0 {
