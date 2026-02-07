@@ -689,12 +689,22 @@ func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *conf
 	// Create Kubernetes client for secret inspection
 	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
 	if clientErr != nil {
+		if skipApply {
+			// In skip-apply mode, imagePullSecrets are optional since we're not applying
+			fmt.Printf("  - Skipping imagePullSecret inspection (cluster not reachable in offline mode)\n")
+			fmt.Printf("    To include imagePullSecrets, ensure cluster is reachable or specify them manually\n")
+			return nil, nil
+		}
 		return nil, fmt.Errorf("failed to create Kubernetes client: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", clientErr)
 	}
 
 	// Inspect K8s secrets to get keys
 	inspectedSecrets, err := secrets.InspectSecrets(ctx, client.Clientset, imagePullSecretRefs)
 	if err != nil {
+		if skipApply {
+			fmt.Printf("  - Skipping imagePullSecret inspection (cluster query failed in offline mode)\n")
+			return nil, nil
+		}
 		return nil, fmt.Errorf("failed to inspect imagePullSecrets: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
 	}
 
