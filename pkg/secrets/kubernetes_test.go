@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -411,5 +412,247 @@ func TestGetServiceAccountImagePullSecrets_EmptyNamespace(t *testing.T) {
 	expectedName := "regcred"
 	if secretName != expectedName {
 		t.Errorf("GetServiceAccountImagePullSecrets() = %q, want %q", secretName, expectedName)
+	}
+}
+
+func TestGenerateSealedSecretYAML_NativeYAML(t *testing.T) {
+	// Test native YAML generation produces correct Kubernetes Secret structure
+	secretName := "db-creds"
+	namespace := "production"
+	sealedData := map[string]string{
+		"password": "sealed-value",
+		"username": "sealed-user",
+	}
+
+	sealedName, yamlContent, err := GenerateSealedSecretYAML(secretName, namespace, sealedData)
+	if err != nil {
+		t.Fatalf("GenerateSealedSecretYAML() error = %v", err)
+	}
+
+	// Verify returned name
+	expectedName := "db-creds-sealed"
+	if sealedName != expectedName {
+		t.Errorf("GenerateSealedSecretYAML() name = %q, want %q", sealedName, expectedName)
+	}
+
+	// Parse the YAML
+	var secret map[string]interface{}
+	if err := yaml.Unmarshal([]byte(yamlContent), &secret); err != nil {
+		t.Fatalf("Failed to parse YAML: %v", err)
+	}
+
+	// Verify apiVersion
+	if secret["apiVersion"] != "v1" {
+		t.Errorf("apiVersion = %q, want %q", secret["apiVersion"], "v1")
+	}
+
+	// Verify kind
+	if secret["kind"] != "Secret" {
+		t.Errorf("kind = %q, want %q", secret["kind"], "Secret")
+	}
+
+	// Verify type
+	if secret["type"] != "Opaque" {
+		t.Errorf("type = %q, want %q", secret["type"], "Opaque")
+	}
+
+	// Verify metadata
+	metadata, ok := secret["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatal("metadata is not a map")
+	}
+	if metadata["name"] != expectedName {
+		t.Errorf("metadata.name = %q, want %q", metadata["name"], expectedName)
+	}
+	if metadata["namespace"] != namespace {
+		t.Errorf("metadata.namespace = %q, want %q", metadata["namespace"], namespace)
+	}
+
+	// Verify stringData contains correct keys and values
+	stringData, ok := secret["stringData"].(map[string]interface{})
+	if !ok {
+		t.Fatal("stringData is not a map")
+	}
+	if stringData["password"] != "sealed-value" {
+		t.Errorf("stringData.password = %q, want %q", stringData["password"], "sealed-value")
+	}
+	if stringData["username"] != "sealed-user" {
+		t.Errorf("stringData.username = %q, want %q", stringData["username"], "sealed-user")
+	}
+}
+
+func TestGenerateSealedSecretYAML_EmptyNamespace(t *testing.T) {
+	// Test that empty namespace is omitted from metadata
+	secretName := "test-secret"
+	namespace := ""
+	sealedData := map[string]string{
+		"key": "value",
+	}
+
+	_, yamlContent, err := GenerateSealedSecretYAML(secretName, namespace, sealedData)
+	if err != nil {
+		t.Fatalf("GenerateSealedSecretYAML() error = %v", err)
+	}
+
+	// Parse the YAML
+	var secret map[string]interface{}
+	if err := yaml.Unmarshal([]byte(yamlContent), &secret); err != nil {
+		t.Fatalf("Failed to parse YAML: %v", err)
+	}
+
+	// Verify metadata does NOT contain namespace key
+	metadata, ok := secret["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatal("metadata is not a map")
+	}
+	if _, hasNamespace := metadata["namespace"]; hasNamespace {
+		t.Error("metadata contains namespace key when it should be omitted for empty namespace")
+	}
+}
+
+func TestGenerateSealedSecretYAML_SpecialCharacters(t *testing.T) {
+	// Test that JWS-format values are correctly included
+	secretName := "jws-secret"
+	namespace := "default"
+	sealedData := map[string]string{
+		"key": "sealed.fakejwsheader.eyJ0ZXN0IjoiZGF0YSJ9.fakesignature",
+	}
+
+	_, yamlContent, err := GenerateSealedSecretYAML(secretName, namespace, sealedData)
+	if err != nil {
+		t.Fatalf("GenerateSealedSecretYAML() error = %v", err)
+	}
+
+	// Verify the YAML contains the value (no escaping issues)
+	if !strings.Contains(yamlContent, "sealed.fakejwsheader.eyJ0ZXN0IjoiZGF0YSJ9.fakesignature") {
+		t.Errorf("YAML does not contain expected JWS value, got:\n%s", yamlContent)
+	}
+
+	// Parse to verify it's valid YAML
+	var secret map[string]interface{}
+	if err := yaml.Unmarshal([]byte(yamlContent), &secret); err != nil {
+		t.Fatalf("Failed to parse YAML with special characters: %v", err)
+	}
+
+	// Verify stringData preserves the value
+	stringData, ok := secret["stringData"].(map[string]interface{})
+	if !ok {
+		t.Fatal("stringData is not a map")
+	}
+	if stringData["key"] != "sealed.fakejwsheader.eyJ0ZXN0IjoiZGF0YSJ9.fakesignature" {
+		t.Errorf("stringData.key = %q, want JWS value", stringData["key"])
+	}
+}
+
+func TestInspectSecrets_NilClientset_OfflineRefsSucceed(t *testing.T) {
+	// Test that offline refs (NeedsLookup=false) succeed with nil clientset
+	ctx := context.Background()
+	refs := []SecretReference{
+		{
+			Name:        "offline-secret",
+			Namespace:   "default",
+			Keys:        []string{"key1", "key2"},
+			NeedsLookup: false,
+		},
+	}
+
+	secrets, err := InspectSecrets(ctx, nil, refs)
+	if err != nil {
+		t.Fatalf("InspectSecrets() with nil clientset and offline refs error = %v, want nil", err)
+	}
+
+	// Verify secret returned
+	if len(secrets) != 1 {
+		t.Errorf("InspectSecrets() returned %d secrets, want 1", len(secrets))
+	}
+
+	secret, ok := secrets["offline-secret"]
+	if !ok {
+		t.Fatal("InspectSecrets() missing 'offline-secret' in results")
+	}
+
+	// Verify metadata
+	if secret.Name != "offline-secret" {
+		t.Errorf("secret.Name = %q, want %q", secret.Name, "offline-secret")
+	}
+	if secret.Namespace != "default" {
+		t.Errorf("secret.Namespace = %q, want %q", secret.Namespace, "default")
+	}
+
+	// Verify keys are present
+	if len(secret.Data) != 2 {
+		t.Errorf("secret.Data has %d keys, want 2", len(secret.Data))
+	}
+	if _, ok := secret.Data["key1"]; !ok {
+		t.Error("secret missing 'key1' in Data")
+	}
+	if _, ok := secret.Data["key2"]; !ok {
+		t.Error("secret missing 'key2' in Data")
+	}
+}
+
+func TestInspectSecrets_NilClientset_ClusterRefsError(t *testing.T) {
+	// Test that cluster refs (NeedsLookup=true) fail with nil clientset
+	ctx := context.Background()
+	refs := []SecretReference{
+		{
+			Name:        "cluster-secret",
+			Namespace:   "default",
+			NeedsLookup: true,
+			Usages: []SecretUsage{
+				{Type: "volume"},
+			},
+		},
+	}
+
+	_, err := InspectSecrets(ctx, nil, refs)
+	if err == nil {
+		t.Fatal("InspectSecrets() with nil clientset and cluster refs expected error, got nil")
+	}
+
+	// Verify error mentions cluster connection required
+	if !strings.Contains(err.Error(), "cluster connection required") {
+		t.Errorf("error = %q, want error mentioning 'cluster connection required'", err.Error())
+	}
+
+	// Verify error mentions the secret name
+	if !strings.Contains(err.Error(), "cluster-secret") {
+		t.Errorf("error = %q, want error mentioning 'cluster-secret'", err.Error())
+	}
+}
+
+func TestInspectSecrets_NilClientset_MixedRefs(t *testing.T) {
+	// Test that mixed refs (offline + cluster) fail on the cluster ref
+	ctx := context.Background()
+	refs := []SecretReference{
+		{
+			Name:        "offline-secret",
+			Namespace:   "default",
+			Keys:        []string{"key1"},
+			NeedsLookup: false,
+		},
+		{
+			Name:        "cluster-secret",
+			Namespace:   "default",
+			NeedsLookup: true,
+			Usages: []SecretUsage{
+				{Type: "env"},
+			},
+		},
+	}
+
+	_, err := InspectSecrets(ctx, nil, refs)
+	if err == nil {
+		t.Fatal("InspectSecrets() with nil clientset and mixed refs expected error, got nil")
+	}
+
+	// Verify error mentions cluster connection (fails on cluster ref)
+	if !strings.Contains(err.Error(), "cluster connection required") {
+		t.Errorf("error = %q, want error mentioning 'cluster connection required'", err.Error())
+	}
+
+	// Verify error mentions the cluster secret name
+	if !strings.Contains(err.Error(), "cluster-secret") {
+		t.Errorf("error = %q, want error mentioning 'cluster-secret'", err.Error())
 	}
 }
