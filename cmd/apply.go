@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -337,9 +338,9 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 		// Get Trustee namespace from config (where KBS is deployed)
 		trusteeNamespace := cfg.GetTrusteeNamespace()
 
-		// Generate and upload server certificate
+		// Generate and upload server certificate (or save to file in skip-apply mode)
 		fmt.Println("  - Setting up sidecar server certificate")
-		if err := handleSidecarServerCert(ctx, appName, namespace, trusteeNamespace); err != nil {
+		if err := handleSidecarServerCert(ctx, appName, namespace, trusteeNamespace, skipApply, manifestFile); err != nil {
 			return fmt.Errorf("failed to setup sidecar server certificate: %w", err)
 		}
 
@@ -752,13 +753,15 @@ func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 
 // handleSidecarServerCert generates and uploads a server certificate for the sidecar.
 // It loads the Client CA, auto-detects or uses provided SANs, generates the server cert,
-// and uploads it to Trustee KBS at per-app paths.
+// and either uploads it to Trustee KBS or saves it to a file (when skipApply is true).
 // Parameters:
 //   - ctx: context for Kubernetes API calls (for proper signal handling)
 //   - appName: name of the application (from manifest metadata.name)
 //   - namespace: namespace for certificate KBS path (from manifest metadata.namespace)
 //   - trusteeNamespace: namespace where Trustee KBS is deployed
-func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNamespace string) error {
+//   - skipApply: when true, save certs to file instead of uploading to Trustee
+//   - manifestPath: path to the original manifest file (for cert file naming)
+func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNamespace string, skipApply bool, manifestPath string) error {
 	// Load Client CA from ~/.kube/coco-sidecar/
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -838,22 +841,72 @@ func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNam
 		return fmt.Errorf("failed to generate server certificate: %w", err)
 	}
 
-	// Upload to Trustee KBS (in the namespace where Trustee is deployed)
-	fmt.Printf("  - Uploading server certificate to Trustee KBS (namespace: %s)...\n", trusteeNamespace)
+	// Build KBS resource paths for certificate storage
 	serverCertPath := namespace + "/sidecar-tls-" + appName + "/server-cert"
 	serverKeyPath := namespace + "/sidecar-tls-" + appName + "/server-key"
 
-	resources := map[string][]byte{
-		serverCertPath: serverCert.CertPEM,
-		serverKeyPath:  serverCert.KeyPEM,
+	if !skipApply {
+		// Normal mode: upload to Trustee KBS
+		fmt.Printf("  - Uploading server certificate to Trustee KBS (namespace: %s)...\n", trusteeNamespace)
+		resources := map[string][]byte{
+			serverCertPath: serverCert.CertPEM,
+			serverKeyPath:  serverCert.KeyPEM,
+		}
+		if err := trustee.UploadResources(trusteeNamespace, resources); err != nil {
+			return fmt.Errorf("failed to upload server certificate to KBS: %w", err)
+		}
+		fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
+	} else {
+		// Skip-apply mode: save certs to file instead of uploading
+		certFilePath, err := saveSidecarCertsToYAML(manifestPath, serverCert, appName, namespace)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("  - Sidecar certificate saved to: %s (Trustee upload skipped)\n", certFilePath)
+		fmt.Printf("  - KBS resource paths: kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
 	}
 
-	if err := trustee.UploadResources(trusteeNamespace, resources); err != nil {
-		return fmt.Errorf("failed to upload server certificate to KBS: %w", err)
-	}
-
-	fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
 	return nil
+}
+
+// saveSidecarCertsToYAML saves sidecar server certificate and key to a YAML file
+// as a Kubernetes TLS Secret. The file is saved alongside the manifest with the
+// naming convention {basename}-sidecar-certs.yaml, matching the existing pattern
+// used by other generated files (e.g., {basename}-sealed-secrets.yaml).
+func saveSidecarCertsToYAML(manifestPath string, serverCert *certs.CertificateSet, appName, namespace string) (string, error) {
+	// Build output path following existing naming convention
+	ext := filepath.Ext(manifestPath)
+	if ext == "" {
+		ext = ".yaml"
+	}
+	baseName := strings.TrimSuffix(manifestPath, ext)
+	certFilePath := baseName + "-sidecar-certs.yaml"
+
+	// Build Kubernetes Secret structure (kubernetes.io/tls)
+	secretData := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata": map[string]interface{}{
+			"name":      "sidecar-tls-" + appName,
+			"namespace": namespace,
+		},
+		"type": "kubernetes.io/tls",
+		"data": map[string]string{
+			"tls.crt": base64.StdEncoding.EncodeToString(serverCert.CertPEM),
+			"tls.key": base64.StdEncoding.EncodeToString(serverCert.KeyPEM),
+		},
+	}
+
+	yamlData, err := yaml.Marshal(secretData)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal sidecar certificate Secret: %w", err)
+	}
+
+	if err := os.WriteFile(certFilePath, yamlData, 0600); err != nil {
+		return "", fmt.Errorf("failed to write sidecar certificate file: %w", err)
+	}
+
+	return certFilePath, nil
 }
 
 // resolveNamespace determines the namespace using kubectl precedence order:
