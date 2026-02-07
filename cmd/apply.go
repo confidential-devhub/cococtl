@@ -462,7 +462,7 @@ func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoCo
 		if err != nil {
 			return fmt.Errorf("failed to resolve offline secrets: %w", err)
 		}
-		offlineKeys := secrets.SecretsToSecretKeys(offlineSecrets)
+		offlineKeys := secrets.ToSecretKeys(offlineSecrets)
 		offlineSealed, err := secrets.ConvertSecrets(offlineRefs, offlineKeys)
 		if err != nil {
 			return err
@@ -482,7 +482,7 @@ func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoCo
 		if err != nil {
 			return secretsClusterQueryError(clusterRefs, err)
 		}
-		clusterKeys := secrets.SecretsToSecretKeys(clusterSecrets)
+		clusterKeys := secrets.ToSecretKeys(clusterSecrets)
 		clusterSealed, err := secrets.ConvertSecrets(clusterRefs, clusterKeys)
 		if err != nil {
 			return err
@@ -709,7 +709,7 @@ func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *conf
 	}
 
 	// Convert to SecretKeys format
-	inspectedKeys := secrets.SecretsToSecretKeys(inspectedSecrets)
+	inspectedKeys := secrets.ToSecretKeys(inspectedSecrets)
 
 	// Build ImagePullSecretInfo for initdata
 	var imagePullSecretsInfo []initdata.ImagePullSecretInfo

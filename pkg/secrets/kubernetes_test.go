@@ -695,7 +695,7 @@ func TestOfflineSecretResolution_EndToEnd(t *testing.T) {
 	}
 
 	// Convert to SecretKeys and then to sealed secrets
-	keys := SecretsToSecretKeys(inspected)
+	keys := ToSecretKeys(inspected)
 	sealed, err := ConvertSecrets(refs, keys)
 	if err != nil {
 		t.Fatalf("ConvertSecrets failed: %v", err)
@@ -732,7 +732,7 @@ func TestOfflineSecretResolution_ConsistentWithCluster(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Offline InspectSecrets failed: %v", err)
 	}
-	offlineKeys := SecretsToSecretKeys(offlineResult)
+	offlineKeys := ToSecretKeys(offlineResult)
 	offlineSealed, err := ConvertSecrets([]SecretReference{offlineRef}, offlineKeys)
 	if err != nil {
 		t.Fatalf("Offline ConvertSecrets failed: %v", err)
@@ -751,7 +751,7 @@ func TestOfflineSecretResolution_ConsistentWithCluster(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cluster InspectSecrets failed: %v", err)
 	}
-	clusterKeys := SecretsToSecretKeys(clusterResult)
+	clusterKeys := ToSecretKeys(clusterResult)
 	clusterSealed, err := ConvertSecrets([]SecretReference{clusterRef}, clusterKeys)
 	if err != nil {
 		t.Fatalf("Cluster ConvertSecrets failed: %v", err)

@@ -36,8 +36,8 @@ func SecretToSecretKeys(secret *corev1.Secret) *SecretKeys {
 	}
 }
 
-// SecretsToSecretKeys converts a map of corev1.Secret to SecretKeys format
-func SecretsToSecretKeys(secrets map[string]*corev1.Secret) map[string]*SecretKeys {
+// ToSecretKeys converts a map of corev1.Secret to SecretKeys format
+func ToSecretKeys(secrets map[string]*corev1.Secret) map[string]*SecretKeys {
 	result := make(map[string]*SecretKeys, len(secrets))
 	for name, secret := range secrets {
 		result[name] = SecretToSecretKeys(secret)
