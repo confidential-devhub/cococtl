@@ -248,14 +248,14 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	// Apply manifests if not skipped
 	if !skipApply {
 		fmt.Println("Applying manifest with kubectl...")
-		if err := applyWithKubectl(backupPath); err != nil {
+		if err := applyWithKubectl(ctx, backupPath); err != nil {
 			return fmt.Errorf("failed to apply manifest: %w", err)
 		}
 
 		// Apply Service manifest if generated
 		if servicePath != "" {
 			fmt.Println("Applying sidecar Service manifest with kubectl...")
-			if err := applyWithKubectl(servicePath); err != nil {
+			if err := applyWithKubectl(ctx, servicePath); err != nil {
 				return fmt.Errorf("failed to apply sidecar Service: %w", err)
 			}
 		}
@@ -580,8 +580,7 @@ func updateManifestSecretNames(m *manifest.Manifest, sealedSecretNames map[strin
 	return nil
 }
 
-func applyWithKubectl(manifestPath string) error {
-	ctx := context.Background()
+func applyWithKubectl(ctx context.Context, manifestPath string) error {
 	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", manifestPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
