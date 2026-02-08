@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"k8s.io/client-go/kubernetes"
+
 	"github.com/confidential-devhub/cococtl/pkg/cluster"
 	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/confidential-devhub/cococtl/pkg/initdata"
@@ -661,8 +663,16 @@ func addK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 // It detects, uploads to KBS, and prepares them for initdata
 // Falls back to default service account if no imagePullSecrets in manifest
 func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) ([]initdata.ImagePullSecretInfo, error) {
+	// Create Kubernetes client for SA fallback detection and secret inspection
+	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
+	var clientset kubernetes.Interface
+	if clientErr == nil {
+		clientset = client.Clientset
+	}
+
 	// Detect imagePullSecrets in manifest, with fallback to default service account
-	imagePullSecretRefs, err := secrets.DetectImagePullSecretsWithServiceAccount(ctx, m.GetData())
+	// Pass clientset for SA fallback (nil if client creation failed — fallback is skipped)
+	imagePullSecretRefs, err := secrets.DetectImagePullSecretsWithServiceAccount(ctx, clientset, m.GetData())
 	if err != nil {
 		return nil, err
 	}
@@ -681,8 +691,7 @@ func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *conf
 		imagePullSecretRefs = imagePullSecretRefs[:1]
 	}
 
-	// Create Kubernetes client for secret inspection
-	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
+	// Ensure client is available for secret inspection
 	if clientErr != nil {
 		if skipApply {
 			// In skip-apply mode, imagePullSecrets are optional since we're not applying
@@ -694,7 +703,7 @@ func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *conf
 	}
 
 	// Inspect K8s secrets to get keys
-	inspectedSecrets, err := secrets.InspectSecrets(ctx, client.Clientset, imagePullSecretRefs)
+	inspectedSecrets, err := secrets.InspectSecrets(ctx, clientset, imagePullSecretRefs)
 	if err != nil {
 		if skipApply {
 			fmt.Printf("  - Skipping imagePullSecret inspection (cluster query failed in offline mode)\n")

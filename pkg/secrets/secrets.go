@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/client-go/kubernetes"
+
 	"github.com/confidential-devhub/cococtl/pkg/k8s"
 	"github.com/confidential-devhub/cococtl/pkg/manifest"
 )
@@ -298,8 +300,10 @@ func detectImagePullSecrets(spec map[string]interface{}, namespace string, secre
 }
 
 // DetectImagePullSecretsWithServiceAccount detects imagePullSecrets from manifest
-// and falls back to default service account if none are found in the spec
-func DetectImagePullSecretsWithServiceAccount(ctx context.Context, manifestData map[string]interface{}) ([]SecretReference, error) {
+// and falls back to default service account if none are found in the spec.
+// The clientset parameter is used for the service account fallback lookup;
+// pass nil to skip the fallback.
+func DetectImagePullSecretsWithServiceAccount(ctx context.Context, clientset kubernetes.Interface, manifestData map[string]interface{}) ([]SecretReference, error) {
 	// Create manifest wrapper to reuse existing manifest methods
 	m := manifest.GetFromData(manifestData)
 
@@ -326,18 +330,15 @@ func DetectImagePullSecretsWithServiceAccount(ctx context.Context, manifestData 
 	detectImagePullSecrets(podSpec, namespace, secretsMap)
 
 	// If no imagePullSecrets found in manifest, check default service account
-	if len(secretsMap) == 0 {
-		client, err := k8s.NewClient(k8s.ClientOptions{})
-		if err == nil {
-			secretName, err := GetServiceAccountImagePullSecrets(ctx, client.Clientset, "default", namespace)
-			if err == nil && secretName != "" {
-				// Found imagePullSecret in default service account
-				ref := getOrCreateSecretRef(secretsMap, secretName, namespace)
-				ref.NeedsLookup = true
-				ref.Usages = append(ref.Usages, SecretUsage{
-					Type: "imagePullSecrets",
-				})
-			}
+	if len(secretsMap) == 0 && clientset != nil {
+		secretName, err := GetServiceAccountImagePullSecrets(ctx, clientset, "default", namespace)
+		if err == nil && secretName != "" {
+			// Found imagePullSecret in default service account
+			ref := getOrCreateSecretRef(secretsMap, secretName, namespace)
+			ref.NeedsLookup = true
+			ref.Usages = append(ref.Usages, SecretUsage{
+				Type: "imagePullSecrets",
+			})
 		}
 	}
 
