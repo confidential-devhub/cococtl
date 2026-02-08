@@ -271,6 +271,14 @@ func runApply(cmd *cobra.Command, _ []string) error {
 }
 
 func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool, resolvedNamespace string) error {
+	// Create Kubernetes client once for all operations that need cluster access.
+	// Client creation is deferred-error: handlers that need it check clientErr.
+	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
+	var clientset kubernetes.Interface
+	if clientErr == nil {
+		clientset = client.Clientset
+	}
+
 	// 1. Set RuntimeClass
 	fmt.Printf("  - Setting runtimeClassName: %s\n", rc)
 	if err := m.SetRuntimeClass(rc); err != nil {
@@ -279,7 +287,7 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 
 	// 2. Convert secrets if enabled
 	if convertSecrets {
-		if err := handleSecrets(ctx, m, cfg, skipApply); err != nil {
+		if err := handleSecrets(ctx, m, cfg, skipApply, clientset, clientErr); err != nil {
 			return fmt.Errorf("failed to convert secrets: %w", err)
 		}
 	} else {
@@ -296,7 +304,7 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 	var imagePullSecretsInfo []initdata.ImagePullSecretInfo
 	if convertSecrets {
 		var err error
-		imagePullSecretsInfo, err = handleImagePullSecrets(ctx, m, cfg, skipApply)
+		imagePullSecretsInfo, err = handleImagePullSecrets(ctx, m, cfg, skipApply, clientset, clientErr)
 		if err != nil {
 			return fmt.Errorf("failed to handle imagePullSecrets: %w", err)
 		}
@@ -338,7 +346,7 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 
 		// Generate and upload server certificate (or save to file in skip-apply mode)
 		fmt.Println("  - Setting up sidecar server certificate")
-		if err := handleSidecarServerCert(ctx, appName, namespace, trusteeNamespace, skipApply, manifestFile); err != nil {
+		if err := handleSidecarServerCert(ctx, appName, namespace, trusteeNamespace, skipApply, manifestFile, clientset, clientErr); err != nil {
 			return fmt.Errorf("failed to setup sidecar server certificate: %w", err)
 		}
 
@@ -413,7 +421,7 @@ func handleInitContainer(m *manifest.Manifest, cfg *config.CocoConfig) error {
 	return nil
 }
 
-func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) error {
+func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool, clientset kubernetes.Interface, clientErr error) error {
 	// 1. Detect all secret references
 	allSecretRefs, err := secrets.DetectSecrets(m.GetData())
 	if err != nil {
@@ -471,12 +479,11 @@ func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoCo
 	// 4. Process cluster refs (needs cluster connection for key enumeration)
 	if len(clusterRefs) > 0 {
 		fmt.Printf("  - %d secret(s) require cluster access for key enumeration\n", len(clusterRefs))
-		client, clientErr := k8s.NewClient(k8s.ClientOptions{})
 		if clientErr != nil {
 			return secretsClusterUnreachableError(clusterRefs, clientErr)
 		}
 
-		clusterSecrets, err := secrets.InspectSecrets(ctx, client.Clientset, clusterRefs)
+		clusterSecrets, err := secrets.InspectSecrets(ctx, clientset, clusterRefs)
 		if err != nil {
 			return secretsClusterQueryError(clusterRefs, err)
 		}
@@ -662,14 +669,7 @@ func addK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 // handleImagePullSecrets processes imagePullSecrets from the manifest
 // It detects, uploads to KBS, and prepares them for initdata
 // Falls back to default service account if no imagePullSecrets in manifest
-func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) ([]initdata.ImagePullSecretInfo, error) {
-	// Create Kubernetes client for SA fallback detection and secret inspection
-	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
-	var clientset kubernetes.Interface
-	if clientErr == nil {
-		clientset = client.Clientset
-	}
-
+func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool, clientset kubernetes.Interface, clientErr error) ([]initdata.ImagePullSecretInfo, error) {
 	// Detect imagePullSecrets in manifest, with fallback to default service account
 	// Pass clientset for SA fallback (nil if client creation failed — fallback is skipped)
 	imagePullSecretRefs, err := secrets.DetectImagePullSecretsWithServiceAccount(ctx, clientset, m.GetData())
@@ -800,7 +800,7 @@ func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 //   - trusteeNamespace: namespace where Trustee KBS is deployed
 //   - skipApply: when true, save certs to file instead of uploading to Trustee
 //   - manifestPath: path to the original manifest file (for cert file naming)
-func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNamespace string, skipApply bool, manifestPath string) error {
+func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNamespace string, skipApply bool, manifestPath string, clientset kubernetes.Interface, clientErr error) error {
 	// Load Client CA from ~/.kube/coco-sidecar/
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -841,16 +841,13 @@ func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNam
 		}
 	}
 
-	// Create Kubernetes client (used for auto-SAN detection and KBS upload)
-	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
-
 	// Auto-detect SANs unless skipped
 	if !sidecarSkipAutoSANs {
 		// Auto-detect node IPs
 		if clientErr != nil {
 			fmt.Printf("Warning: failed to create Kubernetes client for node IP detection: %v\n", clientErr)
 		} else {
-			nodeIPs, err := cluster.GetNodeIPs(ctx, client.Clientset)
+			nodeIPs, err := cluster.GetNodeIPs(ctx, clientset)
 			if err != nil {
 				fmt.Printf("Warning: failed to auto-detect node IPs: %v\n", err)
 			} else {
@@ -895,7 +892,7 @@ func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNam
 			serverCertPath: serverCert.CertPEM,
 			serverKeyPath:  serverCert.KeyPEM,
 		}
-		if err := trustee.UploadResources(ctx, client.Clientset, trusteeNamespace, resources); err != nil {
+		if err := trustee.UploadResources(ctx, clientset, trusteeNamespace, resources); err != nil {
 			return fmt.Errorf("failed to upload server certificate to KBS: %w", err)
 		}
 		fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
