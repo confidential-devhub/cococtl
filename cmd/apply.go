@@ -221,13 +221,9 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	var servicePath string
 	if enableSidecar || cfg.Sidecar.Enabled {
 		appName := m.GetName()
-		namespace, err := resolveNamespace(namespaceFlag, m.GetNamespace())
-		if err != nil {
-			return fmt.Errorf("failed to resolve namespace: %w", err)
-		}
 
 		fmt.Println("Generating Service manifest for sidecar...")
-		serviceManifest, err := sidecar.GenerateService(m, cfg, appName, namespace)
+		serviceManifest, err := sidecar.GenerateService(m, cfg, appName, resolvedNamespace)
 		if err != nil {
 			return fmt.Errorf("failed to generate sidecar Service: %w", err)
 		}
