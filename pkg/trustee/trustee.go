@@ -80,22 +80,22 @@ func Deploy(ctx context.Context, clientset kubernetes.Interface, cfg *Config) er
 		return fmt.Errorf("failed to create namespace: %w", err)
 	}
 
-	if err := createAuthSecretFromKeys(cfg.Namespace); err != nil {
+	if err := createAuthSecretFromKeys(ctx, cfg.Namespace); err != nil {
 		return fmt.Errorf("failed to create auth secret: %w", err)
 	}
 
-	if err := deployConfigMaps(cfg.Namespace); err != nil {
+	if err := deployConfigMaps(ctx, cfg.Namespace); err != nil {
 		return fmt.Errorf("failed to deploy ConfigMaps: %w", err)
 	}
 
 	// Deploy PCCS ConfigMap if PCCSURL is configured
 	if cfg.PCCSURL != "" {
-		if err := deployPCCSConfigMap(cfg.Namespace, cfg.PCCSURL); err != nil {
+		if err := deployPCCSConfigMap(ctx, cfg.Namespace, cfg.PCCSURL); err != nil {
 			return fmt.Errorf("failed to deploy PCCS ConfigMap: %w", err)
 		}
 	}
 
-	if err := deployKBS(cfg); err != nil {
+	if err := deployKBS(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to deploy KBS: %w", err)
 	}
 
@@ -138,8 +138,8 @@ func ensureNamespace(ctx context.Context, clientset kubernetes.Interface, namesp
 	return nil
 }
 
-func applyManifest(yaml string) error {
-	cmd := exec.Command("kubectl", "apply", "-f", "-")
+func applyManifest(ctx context.Context, yaml string) error {
+	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(yaml)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -148,7 +148,7 @@ func applyManifest(yaml string) error {
 	return nil
 }
 
-func createAuthSecretFromKeys(namespace string) error {
+func createAuthSecretFromKeys(ctx context.Context, namespace string) error {
 	// Generate ED25519 key pair locally
 	publicKey, privateKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -211,10 +211,10 @@ func createAuthSecretFromKeys(namespace string) error {
 	}
 
 	// Apply the secret
-	return applyManifest(string(secretYAML))
+	return applyManifest(ctx, string(secretYAML))
 }
 
-func deployConfigMaps(namespace string) error {
+func deployConfigMaps(ctx context.Context, namespace string) error {
 	manifest := fmt.Sprintf(`
 apiVersion: v1
 kind: ConfigMap
@@ -275,10 +275,10 @@ data:
     {}
 `, namespace, namespace, namespace)
 
-	return applyManifest(manifest)
+	return applyManifest(ctx, manifest)
 }
 
-func deployPCCSConfigMap(namespace, pccsURL string) error {
+func deployPCCSConfigMap(ctx context.Context, namespace, pccsURL string) error {
 	qcnlConfig := fmt.Sprintf(`{"collateral_service":"%s"}`, pccsURL)
 
 	manifest := fmt.Sprintf(`
@@ -291,10 +291,10 @@ data:
   sgx_default_qcnl.conf: '%s'
 `, namespace, qcnlConfig)
 
-	return applyManifest(manifest)
+	return applyManifest(ctx, manifest)
 }
 
-func deployKBS(cfg *Config) error {
+func deployKBS(ctx context.Context, cfg *Config) error {
 	// Build volumeMounts - base mounts
 	volumeMounts := `        - name: confidential-containers
           mountPath: /opt/confidential-containers
@@ -405,7 +405,7 @@ spec:
     protocol: TCP
 `, cfg.Namespace, cfg.KBSImage, volumeMounts, volumes, cfg.ServiceName, cfg.Namespace)
 
-	return applyManifest(manifest)
+	return applyManifest(ctx, manifest)
 }
 
 // ParseSecretSpec parses a secret specification and reads the file
