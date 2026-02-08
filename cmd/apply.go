@@ -690,7 +690,7 @@ func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *conf
 			fmt.Printf("    To include imagePullSecrets, ensure cluster is reachable or specify them manually\n")
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to create Kubernetes client: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", clientErr)
+		return nil, fmt.Errorf("failed to create Kubernetes client: %w\n\nTo fix:\n  1. Ensure kubeconfig is properly configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", clientErr)
 	}
 
 	// Inspect K8s secrets to get keys
@@ -700,7 +700,7 @@ func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *conf
 			fmt.Printf("  - Skipping imagePullSecret inspection (cluster query failed in offline mode)\n")
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to inspect imagePullSecrets: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
+		return nil, fmt.Errorf("failed to inspect imagePullSecrets: %w\n\nTo fix:\n  1. Ensure kubeconfig is properly configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
 	}
 
 	// Convert to SecretKeys format
