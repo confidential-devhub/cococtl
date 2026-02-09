@@ -32,6 +32,7 @@ const (
 // SidecarConfig represents the configuration for the secure access sidecar.
 type SidecarConfig struct {
 	Enabled       bool   `toml:"enabled" comment:"Enable secure access sidecar injection (default: false)"`
+	NoCerts       bool   `toml:"no_certs" comment:"Do not generate or use sidecar certificates (set by init --no-certs)"`
 	Image         string `toml:"image" comment:"Sidecar container image (default: ghcr.io/confidential-containers/coco-secure-access:v0.1.0)"`
 	HTTPSPort     int    `toml:"https_port" comment:"HTTPS server port (default: 8443)"`
 	TLSCertURI    string `toml:"tls_cert_uri" comment:"Server TLS certificate KBS URI (required if sidecar enabled)"`
@@ -66,6 +67,10 @@ type CocoConfig struct {
 // and returns "coco-test". Returns "default" if parsing fails.
 func (c *CocoConfig) GetTrusteeNamespace() string {
 	url := c.TrusteeServer
+
+	if url == "" {
+		return ""
+	}
 
 	// Remove protocol if present
 	url = strings.TrimPrefix(url, "http://")
@@ -137,6 +142,15 @@ func GetConfigPath() (string, error) {
 		return "", fmt.Errorf("failed to get user home directory: %w", err)
 	}
 	return filepath.Join(home, ".kube", "coco-config.toml"), nil
+}
+
+// GetDefaultCertDir returns the default directory for sidecar certificates and keys (~/.kube/coco-sidecar).
+func GetDefaultCertDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user home directory: %w", err)
+	}
+	return filepath.Join(home, ".kube", "coco-sidecar"), nil
 }
 
 // Load reads the configuration from the specified path.
@@ -235,16 +249,15 @@ func (c *CocoConfig) Save(path string) error {
 	return nil
 }
 
-// Validate checks if the configuration is valid
+// Validate checks if the configuration is valid.
+// trustee_server is optional (e.g. when init was run with --no-upload); callers that require
+// it (e.g. initdata generation, Trustee uploads) must check it themselves.
 func (c *CocoConfig) Validate() error {
-	if c.TrusteeServer == "" {
-		return fmt.Errorf("trustee_server is mandatory and cannot be empty")
-	}
 	if c.RuntimeClass == "" {
 		return fmt.Errorf("runtime_class must be specified")
 	}
 
-	// Normalize trustee_server URL - add https:// prefix if no protocol is specified
+	// Normalize trustee_server URL when set - add https:// prefix if no protocol is specified
 	c.NormalizeTrusteeServer()
 
 	return nil

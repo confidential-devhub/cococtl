@@ -32,7 +32,7 @@ var applyCmd = &cobra.Command{
 This command will:
   1. Load the specified manifest (local file or URL)
   2. Add/update RuntimeClass
-  3. Add initdata annotation
+  3. Add initdata annotation (use --no-initdata to skip)
   4. Add first initContainer for attestation (if requested)
   5. Save a backup of the transformed manifest (*-coco.yaml)
   6. Apply the transformed manifest using kubectl
@@ -54,7 +54,9 @@ var (
 	initContainerImg    string
 	initContainerCmd    string
 	skipApply           bool
+	skipInitdata        bool
 	configPath          string
+	certDir             string
 	convertSecrets      bool
 	enableSidecar       bool
 	sidecarImage        string
@@ -73,7 +75,9 @@ func init() {
 	applyCmd.Flags().StringVar(&initContainerImg, "init-container-img", "", "Custom init container image (requires --init-container)")
 	applyCmd.Flags().StringVar(&initContainerCmd, "init-container-cmd", "", "Custom init container command (requires --init-container)")
 	applyCmd.Flags().BoolVar(&skipApply, "skip-apply", false, "Skip kubectl apply, only transform the manifest")
+	applyCmd.Flags().BoolVar(&skipInitdata, "no-initdata", false, "Do not add the initdata annotation to the manifest")
 	applyCmd.Flags().StringVar(&configPath, "config", "", "Path to CoCo config file (default: ~/.kube/coco-config.toml)")
+	applyCmd.Flags().StringVar(&certDir, "cert-dir", "", "Directory containing sidecar Client CA and keys, for signing server certs (default: ~/.kube/coco-sidecar)")
 	applyCmd.Flags().BoolVar(&convertSecrets, "convert-secrets", true, "Automatically convert K8s secrets to sealed secrets")
 	applyCmd.Flags().BoolVar(&enableSidecar, "sidecar", false, "Enable secure access sidecar container")
 	applyCmd.Flags().StringVar(&sidecarImage, "sidecar-image", "", "Custom sidecar image (requires --sidecar)")
@@ -176,6 +180,15 @@ func runApply(_ *cobra.Command, _ []string) error {
 	// Additional validation: ensure forward port doesn't conflict with sidecar HTTPS port
 	if sidecarPortForward == 8443 && (enableSidecar || cfg.Sidecar.Enabled) {
 		return fmt.Errorf("sidecar port forward cannot be 8443 (conflicts with sidecar HTTPS port)")
+	}
+
+	// Resolve cert directory for sidecar: use --cert-dir or default ~/.kube/coco-sidecar
+	if certDir == "" {
+		d, err := config.GetDefaultCertDir()
+		if err != nil {
+			return fmt.Errorf("failed to get default cert directory: %w", err)
+		}
+		certDir = d
 	}
 
 	// Transform manifest
@@ -320,30 +333,38 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 			}
 		}
 
-		// Get Trustee namespace from config (where KBS is deployed)
+		// Get Trustee namespace from config (where KBS is deployed; empty when trustee not configured)
 		trusteeNamespace := cfg.GetTrusteeNamespace()
 
-		// Generate and upload server certificate
-		fmt.Println("  - Setting up sidecar server certificate")
-		if err := handleSidecarServerCert(appName, namespace, trusteeNamespace); err != nil {
-			return fmt.Errorf("failed to setup sidecar server certificate: %w", err)
+		// Load CA, build SANs, generate server cert; skip when no_certs is set in config (e.g. init --no-certs)
+		if !cfg.Sidecar.NoCerts {
+			fmt.Println("  - Setting up sidecar server certificate")
+			if err := handleSidecarServerCert(appName, namespace, trusteeNamespace); err != nil {
+				return fmt.Errorf("failed to setup sidecar server certificate: %w", err)
+			}
+		} else {
+			fmt.Println("  - Skipping sidecar server certificate (no_certs is set in config)")
 		}
 
 		fmt.Println("  - Injecting secure access sidecar container")
-		if err := sidecar.Inject(m, cfg, appName, namespace); err != nil {
+		if err := sidecar.Inject(m, cfg, appName, "default"); err != nil {
 			return fmt.Errorf("failed to inject sidecar: %w", err)
 		}
 	}
 
-	// 6. Generate and add initdata annotation
-	fmt.Println("  - Generating initdata annotation")
-	initdataValue, err := initdata.Generate(cfg, imagePullSecretsInfo)
-	if err != nil {
-		return fmt.Errorf("failed to generate initdata: %w", err)
-	}
+	// 6. Generate and add initdata annotation (skipped when --no-initdata)
+	if !skipInitdata {
+		fmt.Println("  - Generating initdata annotation")
+		initdataValue, err := initdata.Generate(cfg, imagePullSecretsInfo)
+		if err != nil {
+			return fmt.Errorf("failed to generate initdata: %w", err)
+		}
 
-	if err := m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", initdataValue); err != nil {
-		return fmt.Errorf("failed to set initdata annotation: %w", err)
+		if err := m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", initdataValue); err != nil {
+			return fmt.Errorf("failed to set initdata annotation: %w", err)
+		}
+	} else {
+		fmt.Println("  - Skipping initdata annotation (--no-initdata is set)")
 	}
 
 	// 7. Add custom annotations from config
@@ -598,8 +619,8 @@ func addSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeNamespace 
 			}
 		}
 
-		// Add the secret to Trustee
-		if err := addK8sSecretToTrustee(trusteeNamespace, ref.Name, secretNamespace); err != nil {
+		// Add the secret to Trustee (read from cluster/manifest namespace, store in KBS at "default")
+		if err := addK8sSecretToTrustee(trusteeNamespace, ref.Name, secretNamespace, "default"); err != nil {
 			return fmt.Errorf("failed to add secret %s: %w", ref.Name, err)
 		}
 	}
@@ -607,10 +628,10 @@ func addSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeNamespace 
 	return nil
 }
 
-// addK8sSecretToTrustee is a wrapper that calls the trustee package function
-// This is kept separate to maintain the isolation of the temporary functionality
-func addK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
-	return trustee.AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
+// addK8sSecretToTrustee is a wrapper that calls the trustee package function.
+// clusterNamespace: where to read the secret in the cluster; kbsPathNamespace: path in KBS (e.g. "default" for kbs:///default/secretName/key).
+func addK8sSecretToTrustee(trusteeNamespace, secretName, clusterNamespace, kbsPathNamespace string) error {
+	return trustee.AddK8sSecretToTrustee(trusteeNamespace, secretName, clusterNamespace, kbsPathNamespace)
 }
 
 // handleImagePullSecrets processes imagePullSecrets from the manifest
@@ -718,20 +739,14 @@ func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 	return trustee.AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
 }
 
-// handleSidecarServerCert generates and uploads a server certificate for the sidecar.
-// It loads the Client CA, auto-detects or uses provided SANs, generates the server cert,
-// and uploads it to Trustee KBS at per-app paths.
+// handleSidecarServerCert loads the Client CA, builds SANs, generates a server cert for the sidecar,
+// and optionally uploads it to Trustee KBS. When trusteeNamespace is empty (e.g. trustee not configured),
+// it still runs load/validate/generate for early feedback.
 // Parameters:
 //   - appName: name of the application (from manifest metadata.name)
 //   - namespace: namespace for certificate KBS path (from manifest metadata.namespace)
-//   - trusteeNamespace: namespace where Trustee KBS is deployed
+//   - trusteeNamespace: namespace where Trustee KBS is deployed (used only when trusteeNamespace is not empty)
 func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error {
-	// Load Client CA from ~/.kube/coco-sidecar/
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-	certDir := filepath.Join(homeDir, ".kube", "coco-sidecar")
 	caCertPath := filepath.Join(certDir, "ca-cert.pem")
 	caKeyPath := filepath.Join(certDir, "ca-key.pem")
 
@@ -799,20 +814,32 @@ func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error 
 		return fmt.Errorf("failed to generate server certificate: %w", err)
 	}
 
-	// Upload to Trustee KBS (in the namespace where Trustee is deployed)
-	fmt.Printf("  - Uploading server certificate to Trustee KBS (namespace: %s)...\n", trusteeNamespace)
-	serverCertPath := namespace + "/sidecar-tls-" + appName + "/server-cert"
-	serverKeyPath := namespace + "/sidecar-tls-" + appName + "/server-key"
+	// Save server certificate and key to certDir (always, for local use / backup)
+	serverCertBaseName := fmt.Sprintf("server-%s-%s", appName, namespace)
+	if err := serverCert.SaveToFile(certDir, serverCertBaseName); err != nil {
+		return fmt.Errorf("failed to save server certificate to %s: %w", certDir, err)
+	}
+	fmt.Printf("  - Server certificate saved to %s/%s-cert.pem, %s-key.pem\n", certDir, serverCertBaseName, serverCertBaseName)
 
-	resources := map[string][]byte{
-		serverCertPath: serverCert.CertPEM,
-		serverKeyPath:  serverCert.KeyPEM,
+	if trusteeNamespace != "" {
+		// Upload to Trustee KBS (in the namespace where Trustee is deployed)
+		fmt.Printf("  - Uploading server certificate to Trustee KBS (namespace: %s)...\n", trusteeNamespace)
+		serverCertPath := "default" + "/sidecar-tls-" + appName + "/server-cert"
+		serverKeyPath := "default" + "/sidecar-tls-" + appName + "/server-key"
+
+		resources := map[string][]byte{
+			serverCertPath: serverCert.CertPEM,
+			serverKeyPath:  serverCert.KeyPEM,
+		}
+
+		if err := trustee.UploadResources(trusteeNamespace, resources); err != nil {
+			return fmt.Errorf("failed to upload server certificate to KBS: %w", err)
+		}
+
+		fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
+	} else {
+		fmt.Println("  - Skipping server certificate upload to Trustee (trustee_server not configured)")
 	}
 
-	if err := trustee.UploadResources(trusteeNamespace, resources); err != nil {
-		return fmt.Errorf("failed to upload server certificate to KBS: %w", err)
-	}
-
-	fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
 	return nil
 }
