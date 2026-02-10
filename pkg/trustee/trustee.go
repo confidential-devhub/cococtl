@@ -2,6 +2,7 @@
 package trustee
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/base64"
@@ -12,6 +13,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -51,51 +57,45 @@ type SecretResource struct {
 }
 
 // IsDeployed checks if Trustee is already running in the namespace
-func IsDeployed(namespace string) (bool, error) {
-	cmd := exec.Command("kubectl", "get", "deployment", "-n", namespace, "-l", trusteeLabel, "-o", "json")
-	output, err := cmd.CombinedOutput()
+func IsDeployed(ctx context.Context, clientset kubernetes.Interface, namespace string) (bool, error) {
+	// List deployments with the trustee label
+	deployments, err := clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: trusteeLabel,
+	})
 	if err != nil {
-		if strings.Contains(string(output), "NotFound") || strings.Contains(string(output), "No resources found") {
+		// If namespace doesn't exist or no permission, treat as not deployed
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("failed to check Trustee deployment: %w\n%s", err, output)
+		return false, fmt.Errorf("failed to check Trustee deployment: %w", err)
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return false, fmt.Errorf("failed to parse kubectl output: %w", err)
-	}
-
-	items, ok := result["items"].([]interface{})
-	if !ok || len(items) == 0 {
-		return false, nil
-	}
-
-	return true, nil
+	// Check if any deployments were found
+	return len(deployments.Items) > 0, nil
 }
 
 // Deploy deploys Trustee all-in-one KBS to the specified namespace
-func Deploy(cfg *Config) error {
-	if err := ensureNamespace(cfg.Namespace); err != nil {
+func Deploy(ctx context.Context, clientset kubernetes.Interface, cfg *Config) error {
+	if err := ensureNamespace(ctx, clientset, cfg.Namespace); err != nil {
 		return fmt.Errorf("failed to create namespace: %w", err)
 	}
 
-	if err := createAuthSecretFromKeys(cfg.Namespace); err != nil {
+	if err := createAuthSecretFromKeys(ctx, cfg.Namespace); err != nil {
 		return fmt.Errorf("failed to create auth secret: %w", err)
 	}
 
-	if err := deployConfigMaps(cfg.Namespace); err != nil {
+	if err := deployConfigMaps(ctx, cfg.Namespace); err != nil {
 		return fmt.Errorf("failed to deploy ConfigMaps: %w", err)
 	}
 
 	// Deploy PCCS ConfigMap if PCCSURL is configured
 	if cfg.PCCSURL != "" {
-		if err := deployPCCSConfigMap(cfg.Namespace, cfg.PCCSURL); err != nil {
+		if err := deployPCCSConfigMap(ctx, cfg.Namespace, cfg.PCCSURL); err != nil {
 			return fmt.Errorf("failed to deploy PCCS ConfigMap: %w", err)
 		}
 	}
 
-	if err := deployKBS(cfg); err != nil {
+	if err := deployKBS(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to deploy KBS: %w", err)
 	}
 
@@ -105,7 +105,7 @@ func Deploy(cfg *Config) error {
 	}
 
 	if len(cfg.Secrets) > 0 {
-		if err := populateSecrets(cfg.Namespace, cfg.Secrets); err != nil {
+		if err := populateSecrets(ctx, clientset, cfg.Namespace, cfg.Secrets); err != nil {
 			return fmt.Errorf("failed to populate secrets: %w", err)
 		}
 	}
@@ -118,40 +118,28 @@ func GetServiceURL(namespace, serviceName string) string {
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", serviceName, namespace)
 }
 
-func ensureNamespace(namespace string) error {
-	// Check if namespace exists by trying to access it (namespace-level permission)
-	// This is more reliable than 'kubectl get namespace' which requires cluster-level permissions
-	cmd := exec.Command("kubectl", "get", "serviceaccounts", "-n", namespace, "--limit=1")
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		// Successfully accessed resources in namespace, so it exists
-		return nil
-	}
-
-	// Check if the error indicates namespace doesn't exist
-	outputStr := string(output)
-	namespaceNotFound := strings.Contains(outputStr, "NotFound") ||
-		strings.Contains(outputStr, "not found") ||
-		strings.Contains(outputStr, fmt.Sprintf("namespace \"%s\" not found", namespace))
-
-	if namespaceNotFound {
-		// Namespace doesn't exist, try to create it
-		cmd = exec.Command("kubectl", "create", "namespace", namespace)
-		output, err = cmd.CombinedOutput()
-		if err != nil && !strings.Contains(string(output), "AlreadyExists") {
-			return fmt.Errorf("failed to create namespace: %w\n%s", err, output)
+func ensureNamespace(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
+	// Try to create the namespace directly. This is simpler and more reliable
+	// than checking existence first:
+	// - If namespace doesn't exist: creates it
+	// - If namespace exists: AlreadyExists error is ignored
+	// - If user lacks create permission but namespace exists: subsequent
+	//   operations will work (or fail with clear permission errors)
+	_, err := clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: namespace},
+	}, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		// Ignore Forbidden — namespace likely exists but user lacks create permission.
+		// Subsequent operations will fail appropriately if it truly doesn't exist.
+		if !apierrors.IsForbidden(err) {
+			return fmt.Errorf("failed to create namespace %s: %w", namespace, err)
 		}
-		return nil
 	}
-
-	// For any other error (e.g., Forbidden when user lacks namespace creation permissions
-	// but namespace exists), assume namespace exists and proceed.
-	// Subsequent operations will fail appropriately if the namespace truly doesn't exist.
 	return nil
 }
 
-func applyManifest(yaml string) error {
-	cmd := exec.Command("kubectl", "apply", "-f", "-")
+func applyManifest(ctx context.Context, yaml string) error {
+	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(yaml)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -160,7 +148,7 @@ func applyManifest(yaml string) error {
 	return nil
 }
 
-func createAuthSecretFromKeys(namespace string) error {
+func createAuthSecretFromKeys(ctx context.Context, namespace string) error {
 	// Generate ED25519 key pair locally
 	publicKey, privateKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -223,10 +211,10 @@ func createAuthSecretFromKeys(namespace string) error {
 	}
 
 	// Apply the secret
-	return applyManifest(string(secretYAML))
+	return applyManifest(ctx, string(secretYAML))
 }
 
-func deployConfigMaps(namespace string) error {
+func deployConfigMaps(ctx context.Context, namespace string) error {
 	manifest := fmt.Sprintf(`
 apiVersion: v1
 kind: ConfigMap
@@ -287,10 +275,10 @@ data:
     {}
 `, namespace, namespace, namespace)
 
-	return applyManifest(manifest)
+	return applyManifest(ctx, manifest)
 }
 
-func deployPCCSConfigMap(namespace, pccsURL string) error {
+func deployPCCSConfigMap(ctx context.Context, namespace, pccsURL string) error {
 	qcnlConfig := fmt.Sprintf(`{"collateral_service":"%s"}`, pccsURL)
 
 	manifest := fmt.Sprintf(`
@@ -303,10 +291,10 @@ data:
   sgx_default_qcnl.conf: '%s'
 `, namespace, qcnlConfig)
 
-	return applyManifest(manifest)
+	return applyManifest(ctx, manifest)
 }
 
-func deployKBS(cfg *Config) error {
+func deployKBS(ctx context.Context, cfg *Config) error {
 	// Build volumeMounts - base mounts
 	volumeMounts := `        - name: confidential-containers
           mountPath: /opt/confidential-containers
@@ -417,7 +405,7 @@ spec:
     protocol: TCP
 `, cfg.Namespace, cfg.KBSImage, volumeMounts, volumes, cfg.ServiceName, cfg.Namespace)
 
-	return applyManifest(manifest)
+	return applyManifest(ctx, manifest)
 }
 
 // ParseSecretSpec parses a secret specification and reads the file

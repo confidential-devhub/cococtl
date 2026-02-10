@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -35,19 +34,33 @@ func init() {
 	cobra.OnInitialize()
 }
 
-// getCurrentNamespace gets the current namespace from kubectl config
-func getCurrentNamespace() (string, error) {
-	ctx := context.Background()
-	cmd := exec.CommandContext(ctx, "kubectl", "config", "view", "--minify", "-o", "jsonpath={..namespace}")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current namespace: %w", err)
-	}
+// contextKey is the type for context keys used in cococtl
+type contextKey int
 
-	namespace := strings.TrimSpace(string(output))
-	if namespace == "" {
-		namespace = "default"
-	}
+const kubectlAvailableKey contextKey = iota
 
-	return namespace, nil
+// detectKubectl checks if kubectl is available in PATH and caches the result in context
+func detectKubectl(ctx context.Context) context.Context {
+	_, err := exec.LookPath("kubectl")
+	return context.WithValue(ctx, kubectlAvailableKey, err == nil)
+}
+
+// isKubectlAvailable retrieves the cached kubectl availability from context
+func isKubectlAvailable(ctx context.Context) bool {
+	if v := ctx.Value(kubectlAvailableKey); v != nil {
+		return v.(bool)
+	}
+	return false
+}
+
+// requireKubectl returns an error if kubectl is not available, providing installation guidance
+func requireKubectl(ctx context.Context, operation string) error {
+	if !isKubectlAvailable(ctx) {
+		return fmt.Errorf("kubectl is required for %s operations\n\n"+
+			"To fix:\n"+
+			"  1. Install kubectl: https://kubernetes.io/docs/tasks/tools/\n"+
+			"  2. Ensure kubectl is in your PATH\n"+
+			"  3. Verify with: kubectl version --client", operation)
+	}
+	return nil
 }

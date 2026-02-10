@@ -2,15 +2,19 @@ package cmd
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"k8s.io/client-go/kubernetes"
+
 	"github.com/confidential-devhub/cococtl/pkg/cluster"
 	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/confidential-devhub/cococtl/pkg/initdata"
+	"github.com/confidential-devhub/cococtl/pkg/k8s"
 	"github.com/confidential-devhub/cococtl/pkg/manifest"
 	"github.com/confidential-devhub/cococtl/pkg/secrets"
 	"github.com/confidential-devhub/cococtl/pkg/sidecar"
@@ -62,6 +66,7 @@ var (
 	sidecarSANDNS       string
 	sidecarSkipAutoSANs bool
 	sidecarPortForward  int
+	namespaceFlag       string
 )
 
 func init() {
@@ -81,9 +86,27 @@ func init() {
 	applyCmd.Flags().StringVar(&sidecarSANDNS, "sidecar-san-dns", "", "Comma-separated list of DNS names for sidecar server certificate SANs")
 	applyCmd.Flags().BoolVar(&sidecarSkipAutoSANs, "sidecar-skip-auto-sans", false, "Skip auto-detection of SANs (node IPs and service DNS)")
 	applyCmd.Flags().IntVar(&sidecarPortForward, "sidecar-port-forward", 0, "Port to forward from primary container (requires --sidecar)")
+	applyCmd.Flags().StringVarP(&namespaceFlag, "namespace", "n", "", "Namespace for operations (overrides manifest and kubeconfig)")
 }
 
-func runApply(_ *cobra.Command, _ []string) error {
+func runApply(cmd *cobra.Command, _ []string) error {
+	var ctx context.Context
+
+	if skipApply {
+		// Skip-apply mode: kubectl is optional, only needed for informational message
+		_, err := exec.LookPath("kubectl")
+		if err != nil {
+			fmt.Println("  \u2139 kubectl not found (--skip-apply mode: cluster write operations unavailable)")
+		}
+		ctx = cmd.Context()
+	} else {
+		// Normal mode: kubectl required, fail fast
+		ctx = detectKubectl(cmd.Context())
+		if err := requireKubectl(ctx, "apply"); err != nil {
+			return err
+		}
+	}
+
 	// Validate required flags (manual validation to keep all flags visible in shell completion)
 	if manifestFile == "" {
 		return fmt.Errorf("required flag(s) \"filename\" not set")
@@ -179,7 +202,13 @@ func runApply(_ *cobra.Command, _ []string) error {
 	}
 
 	// Transform manifest
-	if err := transformManifest(m, cfg, rc, skipApply); err != nil {
+	// Resolve namespace before transformation
+	resolvedNamespace, err := resolveNamespace(namespaceFlag, m.GetNamespace())
+	if err != nil {
+		return err
+	}
+
+	if err := transformManifest(ctx, m, cfg, rc, skipApply, resolvedNamespace); err != nil {
 		return fmt.Errorf("failed to transform manifest: %w", err)
 	}
 
@@ -194,17 +223,9 @@ func runApply(_ *cobra.Command, _ []string) error {
 	var servicePath string
 	if enableSidecar || cfg.Sidecar.Enabled {
 		appName := m.GetName()
-		namespace := m.GetNamespace()
-		if namespace == "" {
-			var err error
-			namespace, err = getCurrentNamespace()
-			if err != nil {
-				return fmt.Errorf("failed to get current namespace: %w", err)
-			}
-		}
 
 		fmt.Println("Generating Service manifest for sidecar...")
-		serviceManifest, err := sidecar.GenerateService(m, cfg, appName, namespace)
+		serviceManifest, err := sidecar.GenerateService(m, cfg, appName, resolvedNamespace)
 		if err != nil {
 			return fmt.Errorf("failed to generate sidecar Service: %w", err)
 		}
@@ -229,14 +250,14 @@ func runApply(_ *cobra.Command, _ []string) error {
 	// Apply manifests if not skipped
 	if !skipApply {
 		fmt.Println("Applying manifest with kubectl...")
-		if err := applyWithKubectl(backupPath); err != nil {
+		if err := applyWithKubectl(ctx, backupPath); err != nil {
 			return fmt.Errorf("failed to apply manifest: %w", err)
 		}
 
 		// Apply Service manifest if generated
 		if servicePath != "" {
 			fmt.Println("Applying sidecar Service manifest with kubectl...")
-			if err := applyWithKubectl(servicePath); err != nil {
+			if err := applyWithKubectl(ctx, servicePath); err != nil {
 				return fmt.Errorf("failed to apply sidecar Service: %w", err)
 			}
 		}
@@ -249,7 +270,15 @@ func runApply(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool) error {
+func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool, resolvedNamespace string) error {
+	// Create Kubernetes client once for all operations that need cluster access.
+	// Client creation is deferred-error: handlers that need it check clientErr.
+	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
+	var clientset kubernetes.Interface
+	if clientErr == nil {
+		clientset = client.Clientset
+	}
+
 	// 1. Set RuntimeClass
 	fmt.Printf("  - Setting runtimeClassName: %s\n", rc)
 	if err := m.SetRuntimeClass(rc); err != nil {
@@ -258,7 +287,7 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 
 	// 2. Convert secrets if enabled
 	if convertSecrets {
-		if err := handleSecrets(m, cfg, skipApply); err != nil {
+		if err := handleSecrets(ctx, m, cfg, skipApply, clientset, clientErr); err != nil {
 			return fmt.Errorf("failed to convert secrets: %w", err)
 		}
 	} else {
@@ -275,7 +304,7 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 	var imagePullSecretsInfo []initdata.ImagePullSecretInfo
 	if convertSecrets {
 		var err error
-		imagePullSecretsInfo, err = handleImagePullSecrets(m, cfg, skipApply)
+		imagePullSecretsInfo, err = handleImagePullSecrets(ctx, m, cfg, skipApply, clientset, clientErr)
 		if err != nil {
 			return fmt.Errorf("failed to handle imagePullSecrets: %w", err)
 		}
@@ -310,22 +339,14 @@ func transformManifest(m *manifest.Manifest, cfg *config.CocoConfig, rc string, 
 		if appName == "" {
 			return fmt.Errorf("manifest must have metadata.name for sidecar injection")
 		}
-		namespace := m.GetNamespace()
-		if namespace == "" {
-			// Use current kubectl namespace instead of hardcoding "default"
-			var err error
-			namespace, err = getCurrentNamespace()
-			if err != nil {
-				return fmt.Errorf("failed to get current namespace: %w", err)
-			}
-		}
+		namespace := resolvedNamespace
 
 		// Get Trustee namespace from config (where KBS is deployed)
 		trusteeNamespace := cfg.GetTrusteeNamespace()
 
-		// Generate and upload server certificate
+		// Generate and upload server certificate (or save to file in skip-apply mode)
 		fmt.Println("  - Setting up sidecar server certificate")
-		if err := handleSidecarServerCert(appName, namespace, trusteeNamespace); err != nil {
+		if err := handleSidecarServerCert(ctx, appName, namespace, trusteeNamespace, skipApply, manifestFile, clientset, clientErr); err != nil {
 			return fmt.Errorf("failed to setup sidecar server certificate: %w", err)
 		}
 
@@ -400,7 +421,7 @@ func handleInitContainer(m *manifest.Manifest, cfg *config.CocoConfig) error {
 	return nil
 }
 
-func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) error {
+func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool, clientset kubernetes.Interface, clientErr error) error {
 	// 1. Detect all secret references
 	allSecretRefs, err := secrets.DetectSecrets(m.GetData())
 	if err != nil {
@@ -429,27 +450,60 @@ func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool)
 
 	fmt.Printf("  - Found %d K8s secret(s) to convert\n", len(secretRefs))
 
-	// 2. Inspect K8s secrets
-	inspectedKeys, err := secrets.InspectSecrets(secretRefs)
-	if err != nil {
-		return fmt.Errorf("failed to inspect secrets via kubectl: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the secrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
+	// 2. Split refs by lookup requirement
+	var offlineRefs, clusterRefs []secrets.SecretReference
+	for _, ref := range secretRefs {
+		if ref.NeedsLookup {
+			clusterRefs = append(clusterRefs, ref)
+		} else {
+			offlineRefs = append(offlineRefs, ref)
+		}
 	}
 
-	// 3. Convert to sealed secrets
-	sealedSecrets, err := secrets.ConvertSecrets(secretRefs, inspectedKeys)
-	if err != nil {
-		return err
+	// 3. Process offline refs (always works - uses only manifest metadata, no cluster needed)
+	var allSealedSecrets []*secrets.SealedSecretData
+	if len(offlineRefs) > 0 {
+		fmt.Printf("  - Resolving %d secret(s) offline (explicit keys in manifest)\n", len(offlineRefs))
+		offlineSecrets, err := secrets.InspectSecrets(ctx, nil, offlineRefs)
+		if err != nil {
+			return fmt.Errorf("failed to resolve offline secrets: %w", err)
+		}
+		offlineKeys := secrets.ToSecretKeys(offlineSecrets)
+		offlineSealed, err := secrets.ConvertSecrets(offlineRefs, offlineKeys)
+		if err != nil {
+			return err
+		}
+		allSealedSecrets = append(allSealedSecrets, offlineSealed...)
 	}
 
-	fmt.Printf("  - Generated %d sealed secret(s)\n", len(sealedSecrets))
+	// 4. Process cluster refs (needs cluster connection for key enumeration)
+	if len(clusterRefs) > 0 {
+		fmt.Printf("  - %d secret(s) require cluster access for key enumeration\n", len(clusterRefs))
+		if clientErr != nil {
+			return secretsClusterUnreachableError(clusterRefs, clientErr)
+		}
 
-	// 4. Create or save sealed secrets based on skipApply flag
+		clusterSecrets, err := secrets.InspectSecrets(ctx, clientset, clusterRefs)
+		if err != nil {
+			return secretsClusterQueryError(clusterRefs, err)
+		}
+		clusterKeys := secrets.ToSecretKeys(clusterSecrets)
+		clusterSealed, err := secrets.ConvertSecrets(clusterRefs, clusterKeys)
+		if err != nil {
+			return err
+		}
+		allSealedSecrets = append(allSealedSecrets, clusterSealed...)
+	}
+
+	fmt.Printf("  - Generated %d sealed secret(s)\n", len(allSealedSecrets))
+
+	// 5. Create or save sealed secrets based on skipApply flag
 	var sealedSecretNames map[string]string
 	if skipApply {
 		// Generate YAML and save to file instead of creating in cluster
 		fmt.Println("  - Generating sealed secret manifests")
 		var yamlContent string
-		sealedSecretNames, yamlContent, err = secrets.GenerateSealedSecretsYAML(sealedSecrets)
+		sealedSecretNames, yamlContent, err = secrets.GenerateSealedSecretsYAML(allSealedSecrets)
 		if err != nil {
 			return fmt.Errorf("failed to generate sealed secret YAML: %w", err)
 		}
@@ -470,7 +524,7 @@ func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool)
 	} else {
 		// Create sealed secrets in cluster
 		fmt.Println("  - Creating K8s sealed secrets in cluster")
-		sealedSecretNames, err = secrets.CreateSealedSecrets(sealedSecrets)
+		sealedSecretNames, err = secrets.CreateSealedSecrets(allSealedSecrets)
 		if err != nil {
 			return fmt.Errorf("failed to create sealed secrets: %w", err)
 		}
@@ -512,12 +566,12 @@ func handleSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool)
 	baseName := strings.TrimSuffix(manifestFile, ext)
 	trusteeConfigPath := baseName + "-trustee-secrets.yaml"
 
-	if err := secrets.GenerateTrusteeConfig(sealedSecrets, trusteeConfigPath); err != nil {
+	if err := secrets.GenerateTrusteeConfig(allSealedSecrets, trusteeConfigPath); err != nil {
 		return fmt.Errorf("failed to generate Trustee config: %w", err)
 	}
 
 	// 8. Print instructions
-	secrets.PrintTrusteeInstructions(sealedSecrets, trusteeConfigPath, autoUploadSuccess)
+	secrets.PrintTrusteeInstructions(allSealedSecrets, trusteeConfigPath, autoUploadSuccess)
 
 	return nil
 }
@@ -535,8 +589,7 @@ func updateManifestSecretNames(m *manifest.Manifest, sealedSecretNames map[strin
 	return nil
 }
 
-func applyWithKubectl(manifestPath string) error {
-	ctx := context.Background()
+func applyWithKubectl(ctx context.Context, manifestPath string) error {
 	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", manifestPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -592,7 +645,7 @@ func addSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeNamespace 
 		secretNamespace := ref.Namespace
 		if secretNamespace == "" {
 			var err error
-			secretNamespace, err = getCurrentNamespace()
+			secretNamespace, err = k8s.GetCurrentNamespace()
 			if err != nil {
 				return fmt.Errorf("failed to get current namespace for secret %s: %w", ref.Name, err)
 			}
@@ -616,9 +669,10 @@ func addK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 // handleImagePullSecrets processes imagePullSecrets from the manifest
 // It detects, uploads to KBS, and prepares them for initdata
 // Falls back to default service account if no imagePullSecrets in manifest
-func handleImagePullSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool) ([]initdata.ImagePullSecretInfo, error) {
+func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, skipApply bool, clientset kubernetes.Interface, clientErr error) ([]initdata.ImagePullSecretInfo, error) {
 	// Detect imagePullSecrets in manifest, with fallback to default service account
-	imagePullSecretRefs, err := secrets.DetectImagePullSecretsWithServiceAccount(m.GetData())
+	// Pass clientset for SA fallback (nil if client creation failed — fallback is skipped)
+	imagePullSecretRefs, err := secrets.DetectImagePullSecretsWithServiceAccount(ctx, clientset, m.GetData())
 	if err != nil {
 		return nil, err
 	}
@@ -637,11 +691,29 @@ func handleImagePullSecrets(m *manifest.Manifest, cfg *config.CocoConfig, skipAp
 		imagePullSecretRefs = imagePullSecretRefs[:1]
 	}
 
-	// Inspect K8s secrets to get keys
-	inspectedKeys, err := secrets.InspectSecrets(imagePullSecretRefs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to inspect imagePullSecrets via kubectl: %w\n\nTo fix:\n  1. Ensure kubectl is configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
+	// Ensure client is available for secret inspection
+	if clientErr != nil {
+		if skipApply {
+			// In skip-apply mode, imagePullSecrets are optional since we're not applying
+			fmt.Printf("  - Skipping imagePullSecret inspection (cluster not reachable in offline mode)\n")
+			fmt.Printf("    To include imagePullSecrets, ensure cluster is reachable or specify them manually\n")
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to create Kubernetes client: %w\n\nTo fix:\n  1. Ensure kubeconfig is properly configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", clientErr)
 	}
+
+	// Inspect K8s secrets to get keys
+	inspectedSecrets, err := secrets.InspectSecrets(ctx, clientset, imagePullSecretRefs)
+	if err != nil {
+		if skipApply {
+			fmt.Printf("  - Skipping imagePullSecret inspection (cluster query failed in offline mode)\n")
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to inspect imagePullSecrets: %w\n\nTo fix:\n  1. Ensure kubeconfig is properly configured and can access the cluster\n  2. Create the imagePullSecrets in the cluster first, then run this command\n  3. Or disable secret conversion with --convert-secrets=false", err)
+	}
+
+	// Convert to SecretKeys format
+	inspectedKeys := secrets.ToSecretKeys(inspectedSecrets)
 
 	// Build ImagePullSecretInfo for initdata
 	var imagePullSecretsInfo []initdata.ImagePullSecretInfo
@@ -697,7 +769,7 @@ func addImagePullSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeN
 		secretNamespace := ref.Namespace
 		if secretNamespace == "" {
 			var err error
-			secretNamespace, err = getCurrentNamespace()
+			secretNamespace, err = k8s.GetCurrentNamespace()
 			if err != nil {
 				return fmt.Errorf("failed to get current namespace for imagePullSecret %s: %w", ref.Name, err)
 			}
@@ -720,12 +792,15 @@ func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 
 // handleSidecarServerCert generates and uploads a server certificate for the sidecar.
 // It loads the Client CA, auto-detects or uses provided SANs, generates the server cert,
-// and uploads it to Trustee KBS at per-app paths.
+// and either uploads it to Trustee KBS or saves it to a file (when skipApply is true).
 // Parameters:
+//   - ctx: context for Kubernetes API calls (for proper signal handling)
 //   - appName: name of the application (from manifest metadata.name)
 //   - namespace: namespace for certificate KBS path (from manifest metadata.namespace)
 //   - trusteeNamespace: namespace where Trustee KBS is deployed
-func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error {
+//   - skipApply: when true, save certs to file instead of uploading to Trustee
+//   - manifestPath: path to the original manifest file (for cert file naming)
+func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNamespace string, skipApply bool, manifestPath string, clientset kubernetes.Interface, clientErr error) error {
 	// Load Client CA from ~/.kube/coco-sidecar/
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -769,11 +844,15 @@ func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error 
 	// Auto-detect SANs unless skipped
 	if !sidecarSkipAutoSANs {
 		// Auto-detect node IPs
-		nodeIPs, err := cluster.GetNodeIPs()
-		if err != nil {
-			fmt.Printf("Warning: failed to auto-detect node IPs: %v\n", err)
+		if clientErr != nil {
+			fmt.Printf("Warning: failed to create Kubernetes client for node IP detection: %v\n", clientErr)
 		} else {
-			sans.IPAddresses = append(sans.IPAddresses, nodeIPs...)
+			nodeIPs, err := cluster.GetNodeIPs(ctx, clientset)
+			if err != nil {
+				fmt.Printf("Warning: failed to auto-detect node IPs: %v\n", err)
+			} else {
+				sans.IPAddresses = append(sans.IPAddresses, nodeIPs...)
+			}
 		}
 
 		// Add service DNS names (format: <name>.<namespace>.svc.cluster.local)
@@ -799,20 +878,153 @@ func handleSidecarServerCert(appName, namespace, trusteeNamespace string) error 
 		return fmt.Errorf("failed to generate server certificate: %w", err)
 	}
 
-	// Upload to Trustee KBS (in the namespace where Trustee is deployed)
-	fmt.Printf("  - Uploading server certificate to Trustee KBS (namespace: %s)...\n", trusteeNamespace)
+	// Build KBS resource paths for certificate storage
 	serverCertPath := namespace + "/sidecar-tls-" + appName + "/server-cert"
 	serverKeyPath := namespace + "/sidecar-tls-" + appName + "/server-key"
 
-	resources := map[string][]byte{
-		serverCertPath: serverCert.CertPEM,
-		serverKeyPath:  serverCert.KeyPEM,
+	if !skipApply {
+		// Normal mode: upload to Trustee KBS
+		if clientErr != nil {
+			return fmt.Errorf("failed to create Kubernetes client for certificate upload: %w", clientErr)
+		}
+		fmt.Printf("  - Uploading server certificate to Trustee KBS (namespace: %s)...\n", trusteeNamespace)
+		resources := map[string][]byte{
+			serverCertPath: serverCert.CertPEM,
+			serverKeyPath:  serverCert.KeyPEM,
+		}
+		if err := trustee.UploadResources(ctx, clientset, trusteeNamespace, resources); err != nil {
+			return fmt.Errorf("failed to upload server certificate to KBS: %w", err)
+		}
+		fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
+	} else {
+		// Skip-apply mode: save certs to file instead of uploading
+		certFilePath, err := saveSidecarCertsToYAML(manifestPath, serverCert, appName, namespace)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("  - Sidecar certificate saved to: %s (Trustee upload skipped)\n", certFilePath)
+		fmt.Printf("  - KBS resource paths: kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
 	}
 
-	if err := trustee.UploadResources(trusteeNamespace, resources); err != nil {
-		return fmt.Errorf("failed to upload server certificate to KBS: %w", err)
-	}
-
-	fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
 	return nil
+}
+
+// saveSidecarCertsToYAML saves sidecar server certificate and key to a YAML file
+// as a Kubernetes TLS Secret. The file is saved alongside the manifest with the
+// naming convention {basename}-sidecar-certs.yaml, matching the existing pattern
+// used by other generated files (e.g., {basename}-sealed-secrets.yaml).
+func saveSidecarCertsToYAML(manifestPath string, serverCert *certs.CertificateSet, appName, namespace string) (string, error) {
+	// Build output path following existing naming convention
+	ext := filepath.Ext(manifestPath)
+	if ext == "" {
+		ext = ".yaml"
+	}
+	baseName := strings.TrimSuffix(manifestPath, ext)
+	certFilePath := baseName + "-sidecar-certs.yaml"
+
+	// Build Kubernetes Secret structure (kubernetes.io/tls)
+	secretData := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata": map[string]interface{}{
+			"name":      "sidecar-tls-" + appName,
+			"namespace": namespace,
+		},
+		"type": "kubernetes.io/tls",
+		"data": map[string]string{
+			"tls.crt": base64.StdEncoding.EncodeToString(serverCert.CertPEM),
+			"tls.key": base64.StdEncoding.EncodeToString(serverCert.KeyPEM),
+		},
+	}
+
+	yamlData, err := yaml.Marshal(secretData)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal sidecar certificate Secret: %w", err)
+	}
+
+	if err := os.WriteFile(certFilePath, yamlData, 0600); err != nil {
+		return "", fmt.Errorf("failed to write sidecar certificate file: %w", err)
+	}
+
+	return certFilePath, nil
+}
+
+// resolveNamespace determines the namespace using kubectl precedence order:
+//  1. --namespace flag (highest priority)
+//  2. manifest metadata.namespace field
+//  3. kubeconfig context namespace (offline via k8s.GetCurrentNamespace)
+//  4. "default" (final fallback)
+//
+// Returns an error if --namespace flag and manifest namespace both exist but differ,
+// matching kubectl behavior.
+func resolveNamespace(flagNamespace, manifestNamespace string) (string, error) {
+	// Validation: flag and manifest namespace must not conflict (kubectl behavior)
+	if flagNamespace != "" && manifestNamespace != "" && flagNamespace != manifestNamespace {
+		return "", fmt.Errorf("the namespace from the provided object %q does not match the namespace %q. You must pass '--namespace=%s' to perform this operation",
+			manifestNamespace, flagNamespace, manifestNamespace)
+	}
+
+	// 1. --namespace flag (highest priority)
+	if flagNamespace != "" {
+		return flagNamespace, nil
+	}
+
+	// 2. manifest metadata.namespace
+	if manifestNamespace != "" {
+		return manifestNamespace, nil
+	}
+
+	// 3. kubeconfig context namespace (offline read)
+	kubeconfigNs, err := k8s.GetCurrentNamespace()
+	if err == nil && kubeconfigNs != "" {
+		return kubeconfigNs, nil
+	}
+
+	// 4. "default" (final fallback)
+	return "default", nil
+}
+
+// secretsClusterUnreachableError creates an actionable error when the cluster
+// can't be reached and some secrets require key enumeration.
+func secretsClusterUnreachableError(clusterRefs []secrets.SecretReference, clientErr error) error {
+	names := make([]string, len(clusterRefs))
+	for i, ref := range clusterRefs {
+		usageTypes := make([]string, 0)
+		seen := make(map[string]bool)
+		for _, u := range ref.Usages {
+			if !seen[u.Type] {
+				usageTypes = append(usageTypes, u.Type)
+				seen[u.Type] = true
+			}
+		}
+		names[i] = fmt.Sprintf("    - %s (used in %s)", ref.Name, strings.Join(usageTypes, ", "))
+	}
+
+	return fmt.Errorf("cannot determine keys for %d secret(s) in offline mode:\n%s\n\n"+
+		"These secrets use envFrom, volume mounts without explicit items, or other patterns\n"+
+		"that require querying the cluster to enumerate their keys.\n\n"+
+		"To fix:\n"+
+		"  1. Use explicit key references in your manifest instead of envFrom or whole-secret mounts\n"+
+		"     Example: env.valueFrom.secretKeyRef with explicit 'key' field\n"+
+		"  2. Ensure cluster is reachable (check kubeconfig and network connectivity)\n"+
+		"  3. Or disable secret conversion with --convert-secrets=false\n\n"+
+		"Underlying error: %v",
+		len(clusterRefs), strings.Join(names, "\n"), clientErr)
+}
+
+// secretsClusterQueryError creates an actionable error when the cluster is reachable
+// but the secret query fails (e.g., secret doesn't exist, permission denied).
+func secretsClusterQueryError(clusterRefs []secrets.SecretReference, queryErr error) error {
+	names := make([]string, len(clusterRefs))
+	for i, ref := range clusterRefs {
+		names[i] = ref.Name
+	}
+
+	return fmt.Errorf("failed to inspect secrets requiring cluster lookup (%s): %w\n\n"+
+		"To fix:\n"+
+		"  1. Ensure the secrets exist in the cluster\n"+
+		"  2. Verify your kubeconfig has read access to secrets\n"+
+		"  3. Or use explicit key references to avoid cluster lookups\n"+
+		"  4. Or disable secret conversion with --convert-secrets=false",
+		strings.Join(names, ", "), queryErr)
 }

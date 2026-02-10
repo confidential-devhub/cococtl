@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -65,6 +66,9 @@ func TestInitCommand_WithoutRuntimeClassFlag(t *testing.T) {
 	if err := cmd.Flags().Set("runtime-class", ""); err != nil { // Explicitly clear the flag
 		t.Fatalf("Failed to set runtime-class flag: %v", err)
 	}
+
+	// Set context for Kubernetes client operations (required when auto-detecting RuntimeClass)
+	cmd.SetContext(context.Background())
 
 	err := runInit(cmd, []string{})
 	if err != nil {

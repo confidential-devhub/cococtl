@@ -1,12 +1,16 @@
 package trustee
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 const kbsRepositoryPath = "/opt/confidential-containers/kbs/repository"
@@ -14,7 +18,7 @@ const kbsRepositoryPath = "/opt/confidential-containers/kbs/repository"
 // UploadResource uploads a single resource to Trustee KBS.
 // The resourcePath should be relative (e.g., "default/sidecar-tls/server-cert").
 // The data is the raw bytes to upload.
-func UploadResource(namespace, resourcePath string, data []byte) error {
+func UploadResource(ctx context.Context, clientset kubernetes.Interface, namespace, resourcePath string, data []byte) error {
 	resources := []SecretResource{
 		{
 			URI:  "kbs:///" + resourcePath,
@@ -22,13 +26,13 @@ func UploadResource(namespace, resourcePath string, data []byte) error {
 		},
 	}
 
-	return populateSecrets(namespace, resources)
+	return populateSecrets(ctx, clientset, namespace, resources)
 }
 
 // UploadResources uploads multiple resources to Trustee KBS in a single operation.
 // Each resource is specified as a map entry where key is the resource path
 // (e.g., "default/sidecar-tls/server-cert") and value is the data bytes.
-func UploadResources(namespace string, resources map[string][]byte) error {
+func UploadResources(ctx context.Context, clientset kubernetes.Interface, namespace string, resources map[string][]byte) error {
 	if len(resources) == 0 {
 		return nil
 	}
@@ -41,35 +45,34 @@ func UploadResources(namespace string, resources map[string][]byte) error {
 		})
 	}
 
-	return populateSecrets(namespace, secretResources)
+	return populateSecrets(ctx, clientset, namespace, secretResources)
 }
 
 // GetKBSPodName retrieves the name of the KBS pod in the specified namespace.
-func GetKBSPodName(namespace string) (string, error) {
-	cmd := exec.Command("kubectl", "get", "pod", "-n", namespace,
-		"-l", "app=kbs", "-o", "jsonpath={.items[0].metadata.name}")
-	output, err := cmd.CombinedOutput()
+func GetKBSPodName(ctx context.Context, clientset kubernetes.Interface, namespace string) (string, error) {
+	pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=kbs",
+	})
 	if err != nil {
-		return "", fmt.Errorf("failed to get KBS pod: %w\n%s", err, output)
+		return "", fmt.Errorf("failed to list pods: %w", err)
 	}
 
-	podName := strings.TrimSpace(string(output))
-	if podName == "" {
+	if len(pods.Items) == 0 {
 		return "", fmt.Errorf("no KBS pod found in namespace %s", namespace)
 	}
 
-	return podName, nil
+	return pods.Items[0].Name, nil
 }
 
 // WaitForKBSReady waits for the KBS pod to be ready.
-func WaitForKBSReady(namespace string) error {
-	podName, err := GetKBSPodName(namespace)
+func WaitForKBSReady(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
+	podName, err := GetKBSPodName(ctx, clientset, namespace)
 	if err != nil {
 		return err
 	}
 
 	// #nosec G204 - namespace is from function parameter, podName is from kubectl get output
-	cmd := exec.Command("kubectl", "wait", "--for=condition=ready", "--timeout=120s",
+	cmd := exec.CommandContext(ctx, "kubectl", "wait", "--for=condition=ready", "--timeout=120s",
 		"-n", namespace, fmt.Sprintf("pod/%s", podName))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("pod not ready: %w\n%s", err, output)
@@ -79,17 +82,17 @@ func WaitForKBSReady(namespace string) error {
 }
 
 // It uploads multiple secrets to KBS via kubectl cp.
-func populateSecrets(namespace string, secrets []SecretResource) error {
+func populateSecrets(ctx context.Context, clientset kubernetes.Interface, namespace string, secrets []SecretResource) error {
 	if len(secrets) == 0 {
 		return nil
 	}
 
-	podName, err := GetKBSPodName(namespace)
+	podName, err := GetKBSPodName(ctx, clientset, namespace)
 	if err != nil {
 		return err
 	}
 
-	if err := WaitForKBSReady(namespace); err != nil {
+	if err := WaitForKBSReady(ctx, clientset, namespace); err != nil {
 		return err
 	}
 
@@ -123,7 +126,7 @@ func populateSecrets(namespace string, secrets []SecretResource) error {
 
 	// #nosec G204 - namespace is from function parameter, tmpDir is from os.MkdirTemp, podName is from kubectl get
 	// Use --no-preserve to avoid tar ownership errors when local files have different uid/gid than container
-	cmd := exec.Command("kubectl", "cp", "--no-preserve=true", "-n", namespace,
+	cmd := exec.CommandContext(ctx, "kubectl", "cp", "--no-preserve=true", "-n", namespace,
 		tmpDir+"/.", podName+":"+kbsRepositoryPath+"/")
 	output, err := cmd.CombinedOutput()
 	if err != nil {

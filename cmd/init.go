@@ -2,13 +2,17 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"k8s.io/client-go/kubernetes"
+
 	"github.com/confidential-devhub/cococtl/pkg/cluster"
 	"github.com/confidential-devhub/cococtl/pkg/config"
+	"github.com/confidential-devhub/cococtl/pkg/k8s"
 	"github.com/confidential-devhub/cococtl/pkg/sidecar/certs"
 	"github.com/confidential-devhub/cococtl/pkg/trustee"
 	"github.com/spf13/cobra"
@@ -88,7 +92,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	cfg := config.DefaultConfig()
 
 	// Handle Trustee setup
-	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
+	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cmd, cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
 	if err != nil {
 		return err
 	}
@@ -106,7 +110,11 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	// Handle sidecar certificate setup if enabled
 	if enableSidecar {
-		if err := handleSidecarCertSetup(sidecarNamespace); err != nil {
+		sidecarClient, err := k8s.NewClient(k8s.ClientOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to create Kubernetes client for sidecar cert setup: %w", err)
+		}
+		if err := handleSidecarCertSetup(cmd.Context(), sidecarClient.Clientset, sidecarNamespace); err != nil {
 			return err
 		}
 	}
@@ -116,7 +124,16 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		cfg.RuntimeClass = runtimeClass
 	} else {
 		// Auto-detect RuntimeClass with SNP or TDX support
-		cfg.RuntimeClass = cluster.DetectRuntimeClass(config.DefaultRuntimeClass)
+		// Create Kubernetes client for runtime class detection
+		client, err := k8s.NewClient(k8s.ClientOptions{})
+		if err != nil {
+			// Log warning but don't fail - use default runtime class
+			fmt.Printf("Warning: unable to create Kubernetes client: %v\n", err)
+			cfg.RuntimeClass = config.DefaultRuntimeClass
+		} else {
+			ctx := cmd.Context()
+			cfg.RuntimeClass = cluster.DetectRuntimeClass(ctx, client.Clientset, config.DefaultRuntimeClass)
+		}
 	}
 
 	// In non-interactive mode, show the RuntimeClass being used
@@ -190,7 +207,7 @@ func promptString(prompt, defaultValue string, required bool) string {
 	return input
 }
 
-func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, namespace, url string) (bool, string, error) {
+func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive, skipDeploy bool, namespace, url string) (bool, string, error) {
 	// If URL provided via flag, use it and skip deployment
 	if url != "" {
 		cfg.TrusteeServer = url
@@ -231,14 +248,23 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 	// Get current namespace if not specified
 	if namespace == "" {
 		var err error
-		namespace, err = getCurrentNamespace()
+		namespace, err = k8s.GetCurrentNamespace()
 		if err != nil {
 			return false, "", err
 		}
 	}
 
+	// Create Kubernetes client for trustee operations
+	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
+	if clientErr != nil {
+		return false, "", fmt.Errorf("failed to create Kubernetes client: %w", clientErr)
+	}
+
+	// Detect kubectl availability and enhance context
+	ctx := detectKubectl(cmd.Context())
+
 	// Check if Trustee is already deployed
-	deployed, err := trustee.IsDeployed(namespace)
+	deployed, err := trustee.IsDeployed(ctx, client.Clientset, namespace)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to check Trustee deployment: %w", err)
 	}
@@ -252,6 +278,11 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 	// Deploy Trustee
 	fmt.Printf("Deploying Trustee to namespace '%s'...\n", namespace)
 
+	// Check kubectl availability before deployment (kubectl is required for trustee.Deploy)
+	if err := requireKubectl(ctx, "init"); err != nil {
+		return false, "", err
+	}
+
 	kbsImage := cfg.KBSImage
 	if kbsImage == "" {
 		kbsImage = config.DefaultKBSImage
@@ -264,7 +295,7 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 		PCCSURL:     cfg.PCCSURL,
 	}
 
-	if err := trustee.Deploy(trusteeCfg); err != nil {
+	if err := trustee.Deploy(ctx, client.Clientset, trusteeCfg); err != nil {
 		return false, "", fmt.Errorf("failed to deploy Trustee: %w", err)
 	}
 
@@ -280,7 +311,7 @@ func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, na
 // uploads the Client CA to Trustee KBS, and saves both the CA and client certificate locally.
 // The CA is needed during 'apply' to sign per-app server certificates.
 // The trusteeNamespace parameter specifies where the Trustee KBS pod is deployed.
-func handleSidecarCertSetup(trusteeNamespace string) error {
+func handleSidecarCertSetup(ctx context.Context, clientset kubernetes.Interface, trusteeNamespace string) error {
 	fmt.Println("\nSetting up sidecar certificates...")
 
 	// Generate Client CA
@@ -304,7 +335,7 @@ func handleSidecarCertSetup(trusteeNamespace string) error {
 	const kbsResourceNamespace = "default"
 	fmt.Printf("  - Uploading Client CA to Trustee KBS (Trustee namespace: %s, resource path: default)...\n", trusteeNamespace)
 	clientCAPath := kbsResourceNamespace + "/sidecar-tls/client-ca"
-	if err := trustee.UploadResource(trusteeNamespace, clientCAPath, clientCA.CertPEM); err != nil {
+	if err := trustee.UploadResource(ctx, clientset, trusteeNamespace, clientCAPath, clientCA.CertPEM); err != nil {
 		return fmt.Errorf("failed to upload client CA to KBS: %w", err)
 	}
 

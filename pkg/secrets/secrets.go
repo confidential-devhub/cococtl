@@ -1,8 +1,12 @@
 package secrets
 
 import (
+	"context"
 	"fmt"
 
+	"k8s.io/client-go/kubernetes"
+
+	"github.com/confidential-devhub/cococtl/pkg/k8s"
 	"github.com/confidential-devhub/cococtl/pkg/manifest"
 )
 
@@ -37,7 +41,7 @@ func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, erro
 	// If manifest doesn't specify namespace, get current kubectl context namespace
 	if namespace == "" {
 		var err error
-		namespace, err = GetCurrentNamespace()
+		namespace, err = k8s.GetCurrentNamespace()
 		if err != nil {
 			return nil, fmt.Errorf("manifest has no namespace and failed to get current namespace: %w", err)
 		}
@@ -296,8 +300,10 @@ func detectImagePullSecrets(spec map[string]interface{}, namespace string, secre
 }
 
 // DetectImagePullSecretsWithServiceAccount detects imagePullSecrets from manifest
-// and falls back to default service account if none are found in the spec
-func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{}) ([]SecretReference, error) {
+// and falls back to default service account if none are found in the spec.
+// The clientset parameter is used for the service account fallback lookup;
+// pass nil to skip the fallback.
+func DetectImagePullSecretsWithServiceAccount(ctx context.Context, clientset kubernetes.Interface, manifestData map[string]interface{}) ([]SecretReference, error) {
 	// Create manifest wrapper to reuse existing manifest methods
 	m := manifest.GetFromData(manifestData)
 
@@ -306,7 +312,7 @@ func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{
 	// If manifest doesn't specify namespace, get current kubectl context namespace
 	if namespace == "" {
 		var err error
-		namespace, err = GetCurrentNamespace()
+		namespace, err = k8s.GetCurrentNamespace()
 		if err != nil {
 			return nil, fmt.Errorf("manifest has no namespace and failed to get current namespace: %w", err)
 		}
@@ -324,8 +330,8 @@ func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{
 	detectImagePullSecrets(podSpec, namespace, secretsMap)
 
 	// If no imagePullSecrets found in manifest, check default service account
-	if len(secretsMap) == 0 {
-		secretName, err := GetServiceAccountImagePullSecrets("default", namespace)
+	if len(secretsMap) == 0 && clientset != nil {
+		secretName, err := GetServiceAccountImagePullSecrets(ctx, clientset, "default", namespace)
 		if err == nil && secretName != "" {
 			// Found imagePullSecret in default service account
 			ref := getOrCreateSecretRef(secretsMap, secretName, namespace)
