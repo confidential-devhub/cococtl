@@ -72,7 +72,7 @@ func WaitForKBSReady(ctx context.Context, clientset kubernetes.Interface, namesp
 	}
 
 	// #nosec G204 - namespace is from function parameter, podName is from kubectl get output
-	cmd := exec.Command("kubectl", "wait", "--for=condition=ready", "--timeout=120s",
+	cmd := exec.CommandContext(ctx, "kubectl", "wait", "--for=condition=ready", "--timeout=120s",
 		"-n", namespace, fmt.Sprintf("pod/%s", podName))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("pod not ready: %w\n%s", err, output)
@@ -126,7 +126,7 @@ func populateSecrets(ctx context.Context, clientset kubernetes.Interface, namesp
 
 	// #nosec G204 - namespace is from function parameter, tmpDir is from os.MkdirTemp, podName is from kubectl get
 	// Use --no-preserve to avoid tar ownership errors when local files have different uid/gid than container
-	cmd := exec.Command("kubectl", "cp", "--no-preserve=true", "-n", namespace,
+	cmd := exec.CommandContext(ctx, "kubectl", "cp", "--no-preserve=true", "-n", namespace,
 		tmpDir+"/.", podName+":"+kbsRepositoryPath+"/")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
