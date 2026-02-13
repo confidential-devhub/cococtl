@@ -2,11 +2,14 @@ package secrets
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // SecretKeys holds the keys found in a K8s secret
@@ -160,39 +163,48 @@ func InspectSecrets(refs []SecretReference) (map[string]*SecretKeys, error) {
 	return result, nil
 }
 
+// secretYAML represents the structure of a Kubernetes Secret for YAML serialization
+type secretYAML struct {
+	APIVersion string            `yaml:"apiVersion"`
+	Kind       string            `yaml:"kind"`
+	Metadata   secretMetadata    `yaml:"metadata"`
+	Type       string            `yaml:"type"`
+	Data       map[string]string `yaml:"data"`
+}
+
+type secretMetadata struct {
+	Name      string `yaml:"name,omitempty"`
+	Namespace string `yaml:"namespace,omitempty"`
+}
+
 // GenerateSealedSecretYAML generates YAML for a K8s secret with sealed secret values
 // Secret name will be original name with "-sealed" suffix
 // Returns the sealed secret name and YAML content
 func GenerateSealedSecretYAML(secretName, namespace string, sealedData map[string]string) (string, string, error) {
 	sealedSecretName := secretName + "-sealed"
 
-	// Build kubectl command to create secret
-	args := []string{"create", "secret", "generic", sealedSecretName}
-
-	// Add namespace if specified
-	if namespace != "" {
-		args = append(args, "-n", namespace)
-	}
-
-	// Add each sealed secret as a literal
+	// Base64 encode values (Kubernetes Secret data must be base64 encoded)
+	data := make(map[string]string, len(sealedData))
 	for key, sealedValue := range sealedData {
-		args = append(args, fmt.Sprintf("--from-literal=%s=%s", key, sealedValue))
+		data[key] = base64.StdEncoding.EncodeToString([]byte(sealedValue))
 	}
 
-	// Add --dry-run=client and -o yaml to generate YAML without applying
-	args = append(args, "--dry-run=client", "-o", "yaml")
+	metadata := secretMetadata{Name: sealedSecretName}
+	if namespace != "" {
+		metadata.Namespace = namespace
+	}
 
-	// Execute command to generate YAML
-	// #nosec G204 - args are constructed from application-controlled inputs (secret name, namespace, sealed values)
-	// No arbitrary user input is passed to kubectl
-	cmd := exec.Command("kubectl", args...)
-	output, err := cmd.Output()
+	secret := secretYAML{
+		APIVersion: "v1",
+		Kind:       "Secret",
+		Metadata:   metadata,
+		Type:       "Opaque",
+		Data:       data,
+	}
+
+	output, err := yaml.Marshal(secret)
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return "", "", fmt.Errorf("kubectl create secret failed: %s", string(exitErr.Stderr))
-		}
-		return "", "", fmt.Errorf("kubectl create secret failed: %w", err)
+		return "", "", fmt.Errorf("failed to marshal secret YAML: %w", err)
 	}
 
 	return sealedSecretName, string(output), nil
@@ -223,7 +235,7 @@ func CreateSealedSecret(secretName, namespace string, sealedData map[string]stri
 
 // GenerateSealedSecretsYAML generates YAML manifests for sealed secrets
 // Returns a map of original secret name -> sealed secret name, and a combined YAML string
-func GenerateSealedSecretsYAML(sealedSecrets []*SealedSecretData) (map[string]string, string, error) {
+func GenerateSealedSecretsYAML(sealedSecrets []*SealedSecretData, namespace string) (map[string]string, string, error) {
 	// Group by secret name
 	secretMap := make(map[string]map[string]string) // secretName -> key -> sealedValue
 
@@ -239,15 +251,6 @@ func GenerateSealedSecretsYAML(sealedSecrets []*SealedSecretData) (map[string]st
 	yamlParts := make([]string, 0, len(secretMap))
 
 	for secretName, sealedData := range secretMap {
-		// Use namespace from first sealed secret entry
-		var namespace string
-		for _, sealed := range sealedSecrets {
-			if sealed.SecretName == secretName {
-				namespace = sealed.Namespace
-				break
-			}
-		}
-
 		sealedSecretName, yamlContent, err := GenerateSealedSecretYAML(secretName, namespace, sealedData)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to generate sealed secret YAML for %s: %w", secretName, err)

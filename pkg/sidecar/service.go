@@ -11,11 +11,7 @@ import (
 // GenerateService creates a Kubernetes Service manifest for the sidecar.
 // The Service exposes the HTTPS port of the sidecar using the same labels
 // as the workload pods.
-// Returns nil map if sidecar is not enabled.
 func GenerateService(m *manifest.Manifest, cfg *config.CocoConfig, appName, namespace string) (map[string]interface{}, error) {
-	if !cfg.Sidecar.Enabled {
-		return make(map[string]interface{}), nil
-	}
 
 	// Get labels from the pod template to use as selectors
 	labels, err := m.GetPodLabels()

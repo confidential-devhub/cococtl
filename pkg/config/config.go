@@ -13,9 +13,9 @@ import (
 // Default configuration values.
 const (
 	DefaultRuntimeClass       = "kata-cc"
+	DefaultTrusteeNamespace   = "trustee-operator-system"
 	DefaultInitContainerImage = "quay.io/fedora/fedora:44"
 	DefaultInitContainerCmd   = "curl http://localhost:8006/cdh/resource/default/attestation-status/status"
-	DefaultKBSImage           = "ghcr.io/confidential-containers/key-broker-service:built-in-as-v0.15.0"
 	DefaultPCCSURL            = "https://api.trustedservices.intel.com/sgx/certification/v4/"
 	// Sidecar defaults
 	DefaultSidecarImage       = "quay.io/confidential-devhub/coco-secure-access:latest"
@@ -31,8 +31,8 @@ const (
 
 // SidecarConfig represents the configuration for the secure access sidecar.
 type SidecarConfig struct {
-	Enabled       bool   `toml:"enabled" comment:"Enable secure access sidecar injection (default: false)"`
-	NoCerts       bool   `toml:"no_certs" comment:"Do not generate or use sidecar certificates (set by init --no-certs)"`
+	NoCerts       bool   `toml:"no_certs" comment:"Do not generate or use sidecar certificates and keys (default: false)"`
+	CertDir       string `toml:"cert_dir" comment:"Directory to store sidecar certificates and keys (default: ~/.kube/coco-sidecar)"`
 	Image         string `toml:"image" comment:"Sidecar container image (default: ghcr.io/confidential-containers/coco-secure-access:v0.1.0)"`
 	HTTPSPort     int    `toml:"https_port" comment:"HTTPS server port (default: 8443)"`
 	TLSCertURI    string `toml:"tls_cert_uri" comment:"Server TLS certificate KBS URI (required if sidecar enabled)"`
@@ -47,13 +47,12 @@ type SidecarConfig struct {
 
 // CocoConfig represents the configuration for CoCo deployments.
 type CocoConfig struct {
-	TrusteeServer      string            `toml:"trustee_server" comment:"Trustee server URL (mandatory)"`
+	TrusteeServer      string            `toml:"trustee_server" comment:"Trustee server URL (necessary only for initdata generation)"`
 	RuntimeClass       string            `toml:"runtime_class" comment:"Default RuntimeClass to use when --runtime-class is not specified (default: kata-cc)"`
 	TrusteeCACert      string            `toml:"trustee_ca_cert" comment:"Trustee CA cert location (optional)"`
 	KataAgentPolicy    string            `toml:"kata_agent_policy" comment:"Kata-agent policy file path (optional)"`
 	InitContainerImage string            `toml:"init_container_image" comment:"Default init container image (optional, default: quay.io/fedora/fedora:44)"`
 	InitContainerCmd   string            `toml:"init_container_cmd" comment:"Default init container command (optional, default: attestation check)"`
-	KBSImage           string            `toml:"kbs_image" comment:"KBS all-in-one image for Trustee deployment (optional, default: ghcr.io/confidential-containers/key-broker-service:built-in-as-v0.15.0)"`
 	PCCSURL            string            `toml:"pccs_url" comment:"PCCS URL for SGX attestation (optional, default: https://api.trustedservices.intel.com/sgx/certification/v4/)"`
 	ContainerPolicyURI string            `toml:"container_policy_uri" comment:"Container policy URI (optional)"`
 	RegistryCredURI    string            `toml:"registry_cred_uri" comment:"Container registry credentials URI (optional)"`
@@ -64,12 +63,12 @@ type CocoConfig struct {
 
 // GetTrusteeNamespace extracts the namespace from the Trustee server URL.
 // It parses URLs like "http://trustee-kbs.coco-test.svc.cluster.local:8080"
-// and returns "coco-test". Returns "default" if parsing fails.
+// and returns "coco-test". Returns DefaultTrusteeNamespace if parsing fails.
 func (c *CocoConfig) GetTrusteeNamespace() string {
 	url := c.TrusteeServer
 
 	if url == "" {
-		return ""
+		return DefaultTrusteeNamespace
 	}
 
 	// Remove protocol if present
@@ -97,8 +96,8 @@ func (c *CocoConfig) GetTrusteeNamespace() string {
 		}
 	}
 
-	// Default to "default" namespace if we can't parse
-	return "default"
+	// Default to DefaultTrusteeNamespace namespace if we can't parse
+	return DefaultTrusteeNamespace
 }
 
 // DefaultConfig returns a default CoCo configuration.
@@ -110,7 +109,6 @@ func DefaultConfig() *CocoConfig {
 		KataAgentPolicy:    "",
 		InitContainerImage: DefaultInitContainerImage,
 		InitContainerCmd:   DefaultInitContainerCmd,
-		KBSImage:           DefaultKBSImage,
 		PCCSURL:            DefaultPCCSURL,
 		ContainerPolicyURI: "",
 		RegistryCredURI:    "",
@@ -121,7 +119,8 @@ func DefaultConfig() *CocoConfig {
 			"io.katacontainers.config.hypervisor.image":                 "",
 		},
 		Sidecar: SidecarConfig{
-			Enabled:       false,
+			NoCerts:       false,
+			CertDir:       "~/.kube/coco-sidecar",
 			Image:         DefaultSidecarImage,
 			HTTPSPort:     DefaultSidecarHTTPSPort,
 			TLSCertURI:    DefaultSidecarTLSCertURI,
@@ -200,6 +199,11 @@ func Load(path string) (*CocoConfig, error) {
 // applyDefaults applies default values to config fields if they are not set.
 func applyDefaults(cfg *CocoConfig) {
 	// Apply sidecar defaults
+	if cfg.Sidecar.NoCerts == false {
+		cfg.Sidecar.CertDir = "~/.kube/coco-sidecar"
+	} else {
+		cfg.Sidecar.CertDir = ""
+	}
 	if cfg.Sidecar.Image == "" {
 		cfg.Sidecar.Image = DefaultSidecarImage
 	}
@@ -250,11 +254,16 @@ func (c *CocoConfig) Save(path string) error {
 }
 
 // Validate checks if the configuration is valid.
-// trustee_server is optional (e.g. when init was run with --no-upload); callers that require
-// it (e.g. initdata generation, Trustee uploads) must check it themselves.
 func (c *CocoConfig) Validate() error {
 	if c.RuntimeClass == "" {
 		return fmt.Errorf("runtime_class must be specified")
+	}
+
+	if c.Sidecar.NoCerts == true && c.Sidecar.CertDir != "" {
+		return fmt.Errorf("cert_dir must not be specified when no_certs is true")
+	}
+	if c.Sidecar.NoCerts == false && c.Sidecar.CertDir == "" {
+		return fmt.Errorf("cert_dir must be specified when no_certs is false")
 	}
 
 	// Normalize trustee_server URL when set - add https:// prefix if no protocol is specified

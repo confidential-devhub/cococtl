@@ -77,7 +77,7 @@ func ConvertSecrets(refs []SecretReference, inspectedKeys map[string]*SecretKeys
 				if ref.Namespace != "" {
 					nsInfo = "namespace " + ref.Namespace
 				}
-				return nil, fmt.Errorf("no keys found for secret %s in %s (kubectl inspection failed and no explicit keys in manifest)", ref.Name, nsInfo)
+				return nil, fmt.Errorf("no keys found for secret %s in %s (no explicit keys in manifest)", ref.Name, nsInfo)
 			}
 		}
 

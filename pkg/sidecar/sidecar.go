@@ -14,9 +14,6 @@ import (
 // The appName is used to generate per-app certificate URIs in KBS.
 // The namespace is used to construct the KBS URI path.
 func Inject(m *manifest.Manifest, cfg *config.CocoConfig, appName, namespace string) error {
-	if !cfg.Sidecar.Enabled {
-		return nil
-	}
 
 	if err := validateConfig(cfg); err != nil {
 		return fmt.Errorf("invalid sidecar config: %w", err)

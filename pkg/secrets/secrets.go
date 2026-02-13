@@ -1,8 +1,6 @@
 package secrets
 
 import (
-	"fmt"
-
 	"github.com/confidential-devhub/cococtl/pkg/manifest"
 )
 
@@ -27,21 +25,9 @@ type SecretReference struct {
 }
 
 // DetectSecrets scans a manifest for all secret references
-func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, error) {
+func DetectSecrets(manifestData map[string]interface{}, namespace string) ([]SecretReference, error) {
 	// Create manifest wrapper to reuse existing manifest methods
 	m := manifest.GetFromData(manifestData)
-
-	// Extract namespace using manifest method
-	namespace := m.GetNamespace()
-
-	// If manifest doesn't specify namespace, get current kubectl context namespace
-	if namespace == "" {
-		var err error
-		namespace, err = GetCurrentNamespace()
-		if err != nil {
-			return nil, fmt.Errorf("manifest has no namespace and failed to get current namespace: %w", err)
-		}
-	}
 
 	// Get pod spec using manifest method (works for both Pod and Deployment!)
 	podSpec, err := m.GetPodSpec()
@@ -297,20 +283,9 @@ func detectImagePullSecrets(spec map[string]interface{}, namespace string, secre
 
 // DetectImagePullSecretsWithServiceAccount detects imagePullSecrets from manifest
 // and falls back to default service account if none are found in the spec
-func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{}) ([]SecretReference, error) {
+func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{}, namespace string) ([]SecretReference, error) {
 	// Create manifest wrapper to reuse existing manifest methods
 	m := manifest.GetFromData(manifestData)
-
-	namespace := m.GetNamespace()
-
-	// If manifest doesn't specify namespace, get current kubectl context namespace
-	if namespace == "" {
-		var err error
-		namespace, err = GetCurrentNamespace()
-		if err != nil {
-			return nil, fmt.Errorf("manifest has no namespace and failed to get current namespace: %w", err)
-		}
-	}
 
 	// Get pod spec using manifest method (works for both Pod and Deployment!)
 	podSpec, err := m.GetPodSpec()
@@ -324,17 +299,17 @@ func DetectImagePullSecretsWithServiceAccount(manifestData map[string]interface{
 	detectImagePullSecrets(podSpec, namespace, secretsMap)
 
 	// If no imagePullSecrets found in manifest, check default service account
-	if len(secretsMap) == 0 {
-		secretName, err := GetServiceAccountImagePullSecrets("default", namespace)
-		if err == nil && secretName != "" {
-			// Found imagePullSecret in default service account
-			ref := getOrCreateSecretRef(secretsMap, secretName, namespace)
-			ref.NeedsLookup = true
-			ref.Usages = append(ref.Usages, SecretUsage{
-				Type: "imagePullSecrets",
-			})
-		}
-	}
+	// if len(secretsMap) == 0 {
+	// 	secretName, err := GetServiceAccountImagePullSecrets("default", namespace)
+	// 	if err == nil && secretName != "" {
+	// 		// Found imagePullSecret in default service account
+	// 		ref := getOrCreateSecretRef(secretsMap, secretName, namespace)
+	// 		ref.NeedsLookup = true
+	// 		ref.Usages = append(ref.Usages, SecretUsage{
+	// 			Type: "imagePullSecrets",
+	// 		})
+	// 	}
+	// }
 
 	// Convert map to slice
 	secrets := make([]SecretReference, 0, len(secretsMap))
