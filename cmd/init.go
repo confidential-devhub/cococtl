@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/cluster"
@@ -51,7 +50,8 @@ func init() {
 	initCmd.Flags().String("trustee-namespace", "", "Namespace for Trustee deployment (default: current namespace)")
 	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
-	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates")
+	initCmd.Flags().String("cert-dir", "", "Default directory to store/load sidecar certificates and keys (default: ~/.kube/coco-sidecar)")
+	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates in the default directory")
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
@@ -62,6 +62,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
 	runtimeClass, _ := cmd.Flags().GetString("runtime-class")
 	enableSidecar, _ := cmd.Flags().GetBool("enable-sidecar")
+	certDir, _ := cmd.Flags().GetString("cert-dir")
 
 	// Get default config path if not specified
 	if outputPath == "" {
@@ -88,6 +89,13 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	}
 
 	cfg := config.DefaultConfig()
+
+	// If --cert-dir is not provided, use the default directory
+	resolvedCertDir, err := resolveCertDir(certDir)
+	if err != nil {
+		return fmt.Errorf("failed to get cert directory: %w", err)
+	}
+	cfg.Sidecar.CertDir = resolvedCertDir
 
 	// Handle Trustee setup
 	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cmd, cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
@@ -177,6 +185,14 @@ func promptString(prompt, defaultValue string, required bool) string {
 	}
 
 	return input
+}
+
+// resolveCertDir returns the directory to use for sidecar certs: the given path if non-empty, otherwise the default.
+func resolveCertDir(certDir string) (string, error) {
+	if certDir != "" {
+		return certDir, nil
+	}
+	return config.GetDefaultCertDir()
 }
 
 func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive, skipDeploy bool, namespace, url string) (bool, string, error) {
@@ -318,13 +334,7 @@ func handleSidecarCertSetup(ctx context.Context, cfg *config.CocoConfig, trustee
 		fmt.Println("  - Skipping Client CA upload (Trustee server URL not provided)")
 	}
 
-	// Save certificates locally to ~/.kube/coco-sidecar/
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-	certDir := filepath.Join(homeDir, ".kube", "coco-sidecar")
-
+	certDir := cfg.Sidecar.CertDir
 	fmt.Printf("  - Saving certificates to %s...\n", certDir)
 
 	// Save Client CA (needed to sign server certificates during apply)
