@@ -61,6 +61,8 @@ var (
 	configPath          string
 	convertSecrets      bool
 	enableSidecar       bool
+	enableInitData      bool
+	trusteeURL          string
 	sidecarImage        string
 	sidecarSANIPs       string
 	sidecarSANDNS       string
@@ -89,6 +91,8 @@ func init() {
 	applyCmd.Flags().IntVar(&sidecarPortForward, "sidecar-port-forward", 0, "Port to forward from primary container (requires --sidecar)")
 	applyCmd.Flags().StringVarP(&namespaceFlag, "namespace", "n", "", "Namespace for operations (overrides manifest and kubeconfig)")
 	applyCmd.Flags().StringVar(&overrideCertDir, "cert-dir", "", "Override the cert directory used to load/store sidecar certificates and keys")
+	applyCmd.Flags().BoolVar(&enableInitData, "enable-initdata", true, "Generate initdata annotation")
+	applyCmd.Flags().StringVar(&trusteeURL, "trustee-url", "", "Trustee server URL (necessary only for initdata generation)")
 }
 
 func runApply(cmd *cobra.Command, _ []string) error {
@@ -126,6 +130,15 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load config (run 'kubectl coco init' first): %w", err)
+	}
+
+	if trusteeURL == "" {
+		fmt.Printf("Using the Trustee server URL from the config: %s\n", cfg.TrusteeServer)
+		trusteeURL = cfg.TrusteeServer
+	}
+
+	if enableInitData && trusteeURL == "" {
+		return fmt.Errorf("--enable-initdata requires --trustee-url to be set in the config or on the command line")
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -210,7 +223,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	if err := transformManifest(ctx, m, cfg, rc, skipApply, resolvedNamespace); err != nil {
+	if err := transformManifest(ctx, m, cfg, rc, skipApply, resolvedNamespace, enableInitData, trusteeURL); err != nil {
 		return fmt.Errorf("failed to transform manifest: %w", err)
 	}
 
@@ -272,7 +285,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool, resolvedNamespace string) error {
+func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool, resolvedNamespace string, enableInitData bool, trusteeURL string) error {
 	// Create Kubernetes client once for all operations that need cluster access.
 	// Client creation is deferred-error: handlers that need it check clientErr.
 	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
@@ -359,14 +372,18 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 	}
 
 	// 6. Generate and add initdata annotation
-	fmt.Println("  - Generating initdata annotation")
-	initdataValue, err := initdata.Generate(cfg, imagePullSecretsInfo)
-	if err != nil {
-		return fmt.Errorf("failed to generate initdata: %w", err)
-	}
+	if enableInitData {
+		fmt.Println("  - Generating initdata annotation")
+		initdataValue, err := initdata.Generate(cfg, imagePullSecretsInfo, trusteeURL)
+		if err != nil {
+			return fmt.Errorf("failed to generate initdata: %w", err)
+		}
 
-	if err := m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", initdataValue); err != nil {
-		return fmt.Errorf("failed to set initdata annotation: %w", err)
+		if err := m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", initdataValue); err != nil {
+			return fmt.Errorf("failed to set initdata annotation: %w", err)
+		}
+	} else {
+		fmt.Println("  - Skipping initdata annotation generation (--enable-initdata is set to false)")
 	}
 
 	// 7. Add custom annotations from config

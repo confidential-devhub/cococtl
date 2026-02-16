@@ -38,9 +38,13 @@ type ImagePullSecretInfo struct {
 
 // Generate creates initdata based on the CoCo configuration
 // imagePullSecrets is optional - pass nil if no imagePullSecrets need to be added
-func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (string, error) {
+func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo, trusteeURL string) (string, error) {
+	if trusteeURL == "" {
+		return "", fmt.Errorf("trustee server URL is required for initdata generation")
+	}
+
 	// Generate aa.toml (Attestation Agent configuration)
-	aaToml, err := generateAAToml(cfg)
+	aaToml, err := generateAAToml(cfg, trusteeURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate aa.toml: %w", err)
 	}
@@ -90,11 +94,11 @@ func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (s
 }
 
 // generateAAToml creates the Attestation Agent configuration
-func generateAAToml(cfg *config.CocoConfig) (string, error) {
+func generateAAToml(cfg *config.CocoConfig, trusteeURL string) (string, error) {
 	aaConfig := map[string]interface{}{
 		"token_configs": map[string]interface{}{
 			"kbs": map[string]interface{}{
-				"url": cfg.TrusteeServer,
+				"url": trusteeURL,
 			},
 		},
 	}
