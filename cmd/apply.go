@@ -346,7 +346,7 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 
 		// Generate and upload server certificate (or save to file in skip-apply mode)
 		fmt.Println("  - Setting up sidecar server certificate")
-		if err := handleSidecarServerCert(ctx, appName, namespace, trusteeNamespace, skipApply, manifestFile, clientset, clientErr); err != nil {
+		if err := handleSidecarServerCert(ctx, cfg, appName, namespace, trusteeNamespace, skipApply, manifestFile, clientset, clientErr); err != nil {
 			return fmt.Errorf("failed to setup sidecar server certificate: %w", err)
 		}
 
@@ -753,18 +753,15 @@ func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 // and either uploads it to Trustee KBS or saves it to a file (when skipApply is true).
 // Parameters:
 //   - ctx: context for Kubernetes API calls (for proper signal handling)
+//   - cfg: configuration object
 //   - appName: name of the application (from manifest metadata.name)
 //   - namespace: namespace for certificate KBS path (from manifest metadata.namespace)
 //   - trusteeNamespace: namespace where Trustee KBS is deployed
 //   - skipApply: when true, save certs to file instead of uploading to Trustee
 //   - manifestPath: path to the original manifest file (for cert file naming)
-func handleSidecarServerCert(ctx context.Context, appName, namespace, trusteeNamespace string, skipApply bool, manifestPath string, clientset kubernetes.Interface, clientErr error) error {
-	// Load Client CA from ~/.kube/coco-sidecar/
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-	certDir := filepath.Join(homeDir, ".kube", "coco-sidecar")
+func handleSidecarServerCert(ctx context.Context, cfg *config.CocoConfig, appName, namespace, trusteeNamespace string, skipApply bool, manifestPath string, clientset kubernetes.Interface, clientErr error) error {
+	// Load Client CA
+	certDir := cfg.Sidecar.CertDir
 	caCertPath := filepath.Join(certDir, "ca-cert.pem")
 	caKeyPath := filepath.Join(certDir, "ca-key.pem")
 
