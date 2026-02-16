@@ -4,13 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/cluster"
 	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/confidential-devhub/cococtl/pkg/sidecar/certs"
-	"github.com/confidential-devhub/cococtl/pkg/trustee"
 	"github.com/spf13/cobra"
 )
 
@@ -20,17 +18,15 @@ var initCmd = &cobra.Command{
 	Long: `Initialize CoCo configuration file in ~/.kube/coco-config.toml
 
 This command will:
-  - Optionally deploy Trustee KBS to your cluster
   - Create configuration file with Trustee URL and other settings
   - Auto-detect RuntimeClass with SNP or TDX support (falls back to kata-cc)
   - Optionally set up sidecar certificates (with --enable-sidecar):
-    - Generate Client CA and upload to Trustee KBS
+    - Generate Client CA
     - Generate client certificate for developer access
-    - Save client certificate to ~/.kube/coco-sidecar/
+    - Save all certificates and keys locally (default: ~/.kube/coco-sidecar, override with --cert-dir)
   - Prompt for configuration values including:
-    - Trustee server URL (or auto-deploy)
+    - Trustee server URL (necessary only for initdata generation)
     - Default RuntimeClass (auto-detected, can be overridden)
-    - Trustee CA cert location (optional)
     - Kata-agent policy file path (optional)
     - Default init container image (optional)
     - Default init container command (optional)
@@ -45,21 +41,22 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	initCmd.Flags().StringP("output", "o", "", "Output path for config file (default: ~/.kube/coco-config.toml)")
 	initCmd.Flags().BoolP("interactive", "i", false, "Enable interactive prompts for configuration values")
-	initCmd.Flags().Bool("skip-trustee-deploy", false, "Skip Trustee deployment")
-	initCmd.Flags().String("trustee-namespace", "", "Namespace for Trustee deployment (default: current namespace)")
-	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
+
+	initCmd.Flags().String("trustee-url", "", "Trustee server URL (necessary only for initdata generation)")
+
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
-	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates")
+
+	initCmd.Flags().Bool("no-certs", false, "Do not generate sidecar certificates and keys (default: false)")
+	initCmd.Flags().String("cert-dir", "", "Directory to store sidecar certificates and keys (default: ~/.kube/coco-sidecar)")
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
 	outputPath, _ := cmd.Flags().GetString("output")
 	interactive, _ := cmd.Flags().GetBool("interactive")
-	skipTrusteeDeploy, _ := cmd.Flags().GetBool("skip-trustee-deploy")
-	trusteeNamespace, _ := cmd.Flags().GetString("trustee-namespace")
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
 	runtimeClass, _ := cmd.Flags().GetString("runtime-class")
-	enableSidecar, _ := cmd.Flags().GetBool("enable-sidecar")
+	noCerts, _ := cmd.Flags().GetBool("no-certs")
+	certDir, _ := cmd.Flags().GetString("cert-dir")
 
 	// Get default config path if not specified
 	if outputPath == "" {
@@ -68,6 +65,10 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to get default config path: %w", err)
 		}
+	}
+
+	if noCerts == true && certDir != "" {
+		return fmt.Errorf("cert-dir must not be specified when no-certs is true")
 	}
 
 	// Check if config already exists
@@ -87,51 +88,25 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	cfg := config.DefaultConfig()
 
-	// Handle Trustee setup
-	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
-	if err != nil {
+	if err := handleTrusteeSetup(cfg, interactive, trusteeURL); err != nil {
 		return err
 	}
 
-	// Determine namespace for sidecar certificate upload
-	// Use the actual namespace where Trustee was deployed
-	sidecarNamespace := actualNamespace
-	if sidecarNamespace == "" {
-		// If Trustee wasn't deployed (user provided URL), use the flag value or default
-		sidecarNamespace = trusteeNamespace
-		if sidecarNamespace == "" {
-			sidecarNamespace = "default"
-		}
+	// Handle sidecar certificate setup
+	if err := handleSidecarCertSetup(cfg, certDir, noCerts); err != nil {
+		return err
 	}
 
-	// Handle sidecar certificate setup if enabled
-	if enableSidecar {
-		if err := handleSidecarCertSetup(sidecarNamespace); err != nil {
-			return err
-		}
-	}
+	fmt.Println()
 
-	// Set runtime class from flag if provided, otherwise auto-detect
-	if runtimeClass != "" {
-		cfg.RuntimeClass = runtimeClass
-	} else {
-		// Auto-detect RuntimeClass with SNP or TDX support
-		cfg.RuntimeClass = cluster.DetectRuntimeClass(config.DefaultRuntimeClass)
-	}
-
-	// In non-interactive mode, show the RuntimeClass being used
-	if !interactive {
-		fmt.Printf("RuntimeClass: %s\n", cfg.RuntimeClass)
+	if err := handleRuntimeClassSetup(cfg, runtimeClass, interactive); err != nil {
+		return err
 	}
 
 	// Continue with other configuration prompts if interactive
 	if interactive {
-		fmt.Println()
-		cfg.RuntimeClass = promptString("Default RuntimeClass", cfg.RuntimeClass, false)
 		// Only ask for CA cert if user provided their own Trustee URL
-		if !trusteeDeployed {
-			cfg.TrusteeCACert = promptString("Trustee CA cert location (optional)", cfg.TrusteeCACert, false)
-		}
+		cfg.TrusteeCACert = promptString("Trustee CA cert location (optional)", cfg.TrusteeCACert, false)
 		cfg.KataAgentPolicy = promptString("Kata-agent policy file path (optional)", cfg.KataAgentPolicy, false)
 		cfg.InitContainerImage = promptString("Default init container image (optional)", cfg.InitContainerImage, false)
 		cfg.InitContainerCmd = promptString("Default init container command (optional)", cfg.InitContainerCmd, false)
@@ -143,22 +118,19 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	// Validate config
 	if err := cfg.Validate(); err != nil {
-		if !interactive && skipTrusteeDeploy && trusteeURL == "" {
-			fmt.Printf("Warning: %v\n", err)
-			fmt.Println("Config file created but needs to be edited before use")
-		} else if !interactive {
-			fmt.Printf("Warning: %v\n", err)
-		} else {
-			return fmt.Errorf("invalid configuration: %w", err)
-		}
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	// Save config
 	if err := cfg.Save(outputPath); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
-
 	fmt.Printf("\nConfiguration saved to: %s\n", outputPath)
+
+	if !interactive {
+		fmt.Println("If you want to edit the config file to add more configuration, you can do so manually.")
+	}
+
 	return nil
 }
 
@@ -190,97 +162,49 @@ func promptString(prompt, defaultValue string, required bool) string {
 	return input
 }
 
-func handleTrusteeSetup(cfg *config.CocoConfig, interactive, skipDeploy bool, namespace, url string) (bool, string, error) {
-	// If URL provided via flag, use it and skip deployment
-	if url != "" {
-		cfg.TrusteeServer = url
-		if interactive {
-			fmt.Printf("Using provided Trustee URL: %s\n", url)
-		}
-		return false, "", nil
-	}
+func handleTrusteeSetup(cfg *config.CocoConfig, interactive bool, trusteUrl string) error {
 
-	// Interactive mode
 	if interactive {
-		fmt.Println("Initializing CoCo configuration...")
-		fmt.Println()
-
-		// Prompt for Trustee URL
-		url := promptString("Trustee server URL (leave empty to deploy)", "", false)
-		if url != "" {
-			cfg.TrusteeServer = url
-			return false, "", nil
+		if trusteUrl != "" {
+			fmt.Printf("Using provided Trustee URL: %s\n", trusteUrl)
+			cfg.TrusteeServer = trusteUrl
+		} else {
+			trusteUrl = promptString("Trustee server URL", "", false)
+			if trusteUrl != "" {
+				cfg.TrusteeServer = trusteUrl
+			}
 		}
 
-		// If empty, auto-deploy
-		// Prompt for namespace if not provided
-		if namespace == "" {
-			namespace = promptString("Trustee namespace (press Enter for current)", "", false)
-		}
 	} else {
-		// Non-interactive mode
-		if skipDeploy {
-			fmt.Println("Skipping Trustee deployment")
-			fmt.Println("Warning: You must set trustee_server in the config file before use")
-			return false, "", nil
-		}
-
-		fmt.Println("Deploying Trustee KBS...")
-	}
-
-	// Get current namespace if not specified
-	if namespace == "" {
-		var err error
-		namespace, err = getCurrentNamespace()
-		if err != nil {
-			return false, "", err
+		if trusteUrl != "" {
+			cfg.TrusteeServer = trusteUrl
 		}
 	}
 
-	// Check if Trustee is already deployed
-	deployed, err := trustee.IsDeployed(namespace)
-	if err != nil {
-		return false, "", fmt.Errorf("failed to check Trustee deployment: %w", err)
-	}
-
-	if deployed {
-		fmt.Printf("Trustee already deployed in namespace '%s'\n", namespace)
-		cfg.TrusteeServer = trustee.GetServiceURL(namespace, "trustee-kbs")
-		return true, namespace, nil
-	}
-
-	// Deploy Trustee
-	fmt.Printf("Deploying Trustee to namespace '%s'...\n", namespace)
-
-	kbsImage := cfg.KBSImage
-	if kbsImage == "" {
-		kbsImage = config.DefaultKBSImage
-	}
-
-	trusteeCfg := &trustee.Config{
-		Namespace:   namespace,
-		ServiceName: "trustee-kbs",
-		KBSImage:    kbsImage,
-		PCCSURL:     cfg.PCCSURL,
-	}
-
-	if err := trustee.Deploy(trusteeCfg); err != nil {
-		return false, "", fmt.Errorf("failed to deploy Trustee: %w", err)
-	}
-
-	cfg.TrusteeServer = trustee.GetServiceURL(namespace, "trustee-kbs")
-	fmt.Printf("Trustee deployed successfully\n")
-	fmt.Printf("Trustee URL: %s\n", cfg.TrusteeServer)
-
-	return true, namespace, nil
+	return nil
 }
 
-// handleSidecarCertSetup generates and uploads sidecar certificates.
-// It creates a Client CA, generates a client certificate for the developer,
-// uploads the Client CA to Trustee KBS, and saves both the CA and client certificate locally.
-// The CA is needed during 'apply' to sign per-app server certificates.
-// The trusteeNamespace parameter specifies where the Trustee KBS pod is deployed.
-func handleSidecarCertSetup(trusteeNamespace string) error {
+// handleSidecarCertSetup generates and saves sidecar certificates.
+func handleSidecarCertSetup(cfg *config.CocoConfig, certDir string, noCerts bool) error {
+
+	if noCerts {
+		cfg.Sidecar.NoCerts = true
+		cfg.Sidecar.CertDir = ""
+		fmt.Println("Skipping sidecar certificate generation (--no-certs is set)")
+		return nil
+	}
+	cfg.Sidecar.NoCerts = false
+
+	// Resolve cert directory for sidecar: use --cert-dir or default ~/.kube/coco-sidecar
+	if certDir == "" {
+		d, err := config.GetDefaultCertDir()
+		if err != nil {
+			return fmt.Errorf("failed to get default cert directory: %w", err)
+		}
+		certDir = d
+	}
+	cfg.Sidecar.CertDir = certDir
+
 	fmt.Println("\nSetting up sidecar certificates...")
 
 	// Generate Client CA
@@ -297,25 +221,7 @@ func handleSidecarCertSetup(trusteeNamespace string) error {
 		return fmt.Errorf("failed to generate client certificate: %w", err)
 	}
 
-	// Upload Client CA to Trustee KBS
-	// Note: We always use "default" namespace in the KBS path for consistency,
-	// regardless of where Trustee is deployed. This ensures all apps reference
-	// the same client CA location.
-	const kbsResourceNamespace = "default"
-	fmt.Printf("  - Uploading Client CA to Trustee KBS (Trustee namespace: %s, resource path: default)...\n", trusteeNamespace)
-	clientCAPath := kbsResourceNamespace + "/sidecar-tls/client-ca"
-	if err := trustee.UploadResource(trusteeNamespace, clientCAPath, clientCA.CertPEM); err != nil {
-		return fmt.Errorf("failed to upload client CA to KBS: %w", err)
-	}
-
-	// Save certificates locally to ~/.kube/coco-sidecar/
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-	certDir := filepath.Join(homeDir, ".kube", "coco-sidecar")
-
-	fmt.Printf("  - Saving certificates to %s...\n", certDir)
+	fmt.Printf("  - Saving all certificates and keys to %s...\n", certDir)
 
 	// Save Client CA (needed to sign server certificates during apply)
 	if err := clientCA.SaveToFile(certDir, "ca"); err != nil {
@@ -328,10 +234,26 @@ func handleSidecarCertSetup(trusteeNamespace string) error {
 	}
 
 	fmt.Println("\nSidecar certificates configured successfully!")
-	fmt.Printf("  - Client CA uploaded to: kbs:///%s\n", clientCAPath)
-	fmt.Printf("  - Client CA saved to: %s/ca-cert.pem (for signing server certs)\n", certDir)
-	fmt.Printf("  - Client certificate saved to: %s/client-cert.pem\n", certDir)
-	fmt.Printf("  - Client key saved to: %s/client-key.pem\n", certDir)
+	fmt.Println("  - All certificates and keys saved locally:")
+	fmt.Printf("    - %s/ca-cert.pem, %s/ca-key.pem (Client CA for signing server certs)\n", certDir, certDir)
+	fmt.Printf("    - %s/client-cert.pem,%s/ client-key.pem (client cert for developer access)\n", certDir, certDir)
 
+	return nil
+}
+
+func handleRuntimeClassSetup(cfg *config.CocoConfig, runtimeClass string, interactive bool) error {
+	// Set runtime class from flag if provided, otherwise auto-detect
+	if runtimeClass != "" {
+		cfg.RuntimeClass = runtimeClass
+	} else {
+		// Auto-detect RuntimeClass with SNP or TDX support
+		cfg.RuntimeClass = cluster.DetectRuntimeClass(config.DefaultRuntimeClass)
+	}
+
+	if interactive {
+		cfg.RuntimeClass = promptString(fmt.Sprintf("Default RuntimeClass (press Enter for %s)", config.DefaultRuntimeClass), cfg.RuntimeClass, false)
+	} else {
+		fmt.Printf("Using provided RuntimeClass: %s\n", cfg.RuntimeClass)
+	}
 	return nil
 }
