@@ -540,19 +540,14 @@ func handleSecrets(ctx context.Context, m *manifest.Manifest, cfg *config.CocoCo
 	// FIXME: Use proper Trustee apis/CLI to add the secrets
 	autoUploadSuccess := false
 	if !skipApply {
-		trusteeNamespace, err := getTrusteeNamespace(cfg.TrusteeServer)
-		if err != nil {
-			fmt.Printf("  ⚠ Warning: Could not determine Trustee namespace from URL: %v\n", err)
-			fmt.Println("    Skipping automatic secret upload to Trustee")
+		trusteeNamespace := cfg.GetTrusteeNamespace()
+		fmt.Println("  - Adding secrets to Trustee KBS repository")
+		if err := addSecretsToTrustee(secretRefs, trusteeNamespace); err != nil {
+			fmt.Printf("  ⚠ Warning: Failed to add secrets to Trustee: %v\n", err)
+			fmt.Println("    You will need to add secrets manually")
 		} else {
-			fmt.Println("  - Adding secrets to Trustee KBS repository")
-			if err := addSecretsToTrustee(secretRefs, trusteeNamespace); err != nil {
-				fmt.Printf("  ⚠ Warning: Failed to add secrets to Trustee: %v\n", err)
-				fmt.Println("    You will need to add secrets manually")
-			} else {
-				fmt.Printf("  ✓ Successfully added %d secret(s) to Trustee\n", len(secretRefs))
-				autoUploadSuccess = true
-			}
+			fmt.Printf("  ✓ Successfully added %d secret(s) to Trustee\n", len(secretRefs))
+			autoUploadSuccess = true
 		}
 	} else {
 		fmt.Println("  - Skipping Trustee upload (--skip-apply mode)")
@@ -600,39 +595,6 @@ func applyWithKubectl(ctx context.Context, manifestPath string) error {
 	}
 
 	return nil
-}
-
-// getTrusteeNamespace extracts the namespace from the Trustee server URL
-// Expected format: http://trustee-kbs.{namespace}.svc.cluster.local:8080
-func getTrusteeNamespace(trusteeURL string) (string, error) {
-	if trusteeURL == "" {
-		return "", fmt.Errorf("trustee server URL is empty")
-	}
-
-	// Remove protocol
-	url := strings.TrimPrefix(trusteeURL, "http://")
-	url = strings.TrimPrefix(url, "https://")
-
-	// Remove port
-	if idx := strings.Index(url, ":"); idx != -1 {
-		url = url[:idx]
-	}
-
-	// Split by dots to get parts
-	// Expected: trustee-kbs.{namespace}.svc.cluster.local
-	parts := strings.Split(url, ".")
-	if len(parts) < 2 {
-		return "", fmt.Errorf("unexpected URL format: %s", trusteeURL)
-	}
-
-	// Check if it's a cluster-local service URL
-	if len(parts) >= 3 && parts[2] == "svc" {
-		// Second part is the namespace
-		return parts[1], nil
-	}
-
-	// If not a cluster-local URL, we can't determine the namespace
-	return "", fmt.Errorf("cannot determine namespace from non-cluster URL: %s", trusteeURL)
 }
 
 // addSecretsToTrustee adds all K8s secrets to the Trustee KBS repository
@@ -741,18 +703,13 @@ func handleImagePullSecrets(ctx context.Context, m *manifest.Manifest, cfg *conf
 
 	// Upload imagePullSecrets to Trustee KBS (if not skipApply)
 	if !skipApply {
-		trusteeNamespace, err := getTrusteeNamespace(cfg.TrusteeServer)
-		if err != nil {
-			fmt.Printf("  ⚠ Warning: Could not determine Trustee namespace from URL: %v\n", err)
-			fmt.Println("    Skipping automatic imagePullSecret upload to Trustee")
+		trusteeNamespace := cfg.GetTrusteeNamespace()
+		fmt.Println("  - Adding imagePullSecrets to Trustee KBS repository")
+		if err := addImagePullSecretsToTrustee(imagePullSecretRefs, trusteeNamespace); err != nil {
+			fmt.Printf("  ⚠ Warning: Failed to add imagePullSecrets to Trustee: %v\n", err)
+			fmt.Println("    You will need to add imagePullSecrets manually")
 		} else {
-			fmt.Println("  - Adding imagePullSecrets to Trustee KBS repository")
-			if err := addImagePullSecretsToTrustee(imagePullSecretRefs, trusteeNamespace); err != nil {
-				fmt.Printf("  ⚠ Warning: Failed to add imagePullSecrets to Trustee: %v\n", err)
-				fmt.Println("    You will need to add imagePullSecrets manually")
-			} else {
-				fmt.Printf("  ✓ Successfully added %d imagePullSecret(s) to Trustee\n", len(imagePullSecretRefs))
-			}
+			fmt.Printf("  ✓ Successfully added %d imagePullSecret(s) to Trustee\n", len(imagePullSecretRefs))
 		}
 	}
 
