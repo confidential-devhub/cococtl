@@ -13,6 +13,7 @@ import (
 // Default configuration values.
 const (
 	DefaultRuntimeClass       = "kata-cc"
+	DefaultTrusteeNamespace   = "trustee-operator-system"
 	DefaultInitContainerImage = "quay.io/fedora/fedora:44"
 	DefaultInitContainerCmd   = "curl http://localhost:8006/cdh/resource/default/attestation-status/status"
 	DefaultKBSImage           = "ghcr.io/confidential-containers/key-broker-service:built-in-as-v0.15.0"
@@ -63,9 +64,13 @@ type CocoConfig struct {
 
 // GetTrusteeNamespace extracts the namespace from the Trustee server URL.
 // It parses URLs like "http://trustee-kbs.coco-test.svc.cluster.local:8080"
-// and returns "coco-test". Returns "default" if parsing fails.
+// and returns "coco-test". Returns DefaultTrusteeNamespace if parsing fails.
 func (c *CocoConfig) GetTrusteeNamespace() string {
 	url := c.TrusteeServer
+
+	if url == "" {
+		return DefaultTrusteeNamespace
+	}
 
 	// Remove protocol if present
 	url = strings.TrimPrefix(url, "http://")
@@ -92,8 +97,10 @@ func (c *CocoConfig) GetTrusteeNamespace() string {
 		}
 	}
 
-	// Default to "default" namespace if we can't parse
-	return "default"
+	// Default to DefaultTrusteeNamespace namespace if we can't parse
+	fmt.Printf("Warning: Could not determine Trustee namespace from URL: %s\n", url)
+	fmt.Println("    Using default namespace: ", DefaultTrusteeNamespace)
+	return DefaultTrusteeNamespace
 }
 
 // DefaultConfig returns a default CoCo configuration.

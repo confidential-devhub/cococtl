@@ -102,7 +102,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		// If Trustee wasn't deployed (user provided URL), use the flag value or default
 		sidecarNamespace = trusteeNamespace
 		if sidecarNamespace == "" {
-			sidecarNamespace = "default"
+			sidecarNamespace = config.DefaultTrusteeNamespace
 		}
 	}
 
@@ -204,7 +204,7 @@ func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive,
 		// If empty, auto-deploy
 		// Prompt for namespace if not provided
 		if namespace == "" {
-			namespace = promptString("Trustee namespace (press Enter for current)", "", false)
+			namespace = promptString(fmt.Sprintf("Trustee namespace (press Enter for %s)", config.DefaultTrusteeNamespace), "", false)
 		}
 	} else {
 		// Non-interactive mode
@@ -217,13 +217,9 @@ func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive,
 		fmt.Println("Deploying Trustee KBS...")
 	}
 
-	// Get current namespace if not specified
+	// Get default trustee namespace if not specified
 	if namespace == "" {
-		var err error
-		namespace, err = k8s.GetCurrentNamespace()
-		if err != nil {
-			return false, "", err
-		}
+		namespace = config.DefaultTrusteeNamespace
 	}
 
 	// Create Kubernetes client for trustee operations
