@@ -119,32 +119,10 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Set runtime class from flag if provided, otherwise auto-detect
-	if runtimeClass != "" {
-		cfg.RuntimeClass = runtimeClass
-	} else {
-		// Auto-detect RuntimeClass with SNP or TDX support
-		// Create Kubernetes client for runtime class detection
-		client, err := k8s.NewClient(k8s.ClientOptions{})
-		if err != nil {
-			// Log warning but don't fail - use default runtime class
-			fmt.Printf("Warning: unable to create Kubernetes client: %v\n", err)
-			cfg.RuntimeClass = config.DefaultRuntimeClass
-		} else {
-			ctx := cmd.Context()
-			cfg.RuntimeClass = cluster.DetectRuntimeClass(ctx, client.Clientset, config.DefaultRuntimeClass)
-		}
-	}
-
-	// In non-interactive mode, show the RuntimeClass being used
-	if !interactive {
-		fmt.Printf("RuntimeClass: %s\n", cfg.RuntimeClass)
-	}
+	handleRuntimeClassSetup(cmd, cfg, runtimeClass, interactive)
 
 	// Continue with other configuration prompts if interactive
 	if interactive {
-		fmt.Println()
-		cfg.RuntimeClass = promptString("Default RuntimeClass", cfg.RuntimeClass, false)
 		// Only ask for CA cert if user provided their own Trustee URL
 		if !trusteeDeployed {
 			cfg.TrusteeCACert = promptString("Trustee CA cert location (optional)", cfg.TrusteeCACert, false)
@@ -365,4 +343,29 @@ func handleSidecarCertSetup(ctx context.Context, clientset kubernetes.Interface,
 	fmt.Printf("  - Client key saved to: %s/client-key.pem\n", certDir)
 
 	return nil
+}
+
+func handleRuntimeClassSetup(cmd *cobra.Command, cfg *config.CocoConfig, runtimeClass string, interactive bool) {
+	// Set runtime class from flag if provided, otherwise auto-detect
+	if runtimeClass != "" {
+		cfg.RuntimeClass = runtimeClass
+	} else {
+		// Auto-detect RuntimeClass with SNP or TDX support
+		// Create Kubernetes client for runtime class detection
+		client, err := k8s.NewClient(k8s.ClientOptions{})
+		if err != nil {
+			// Log warning but don't fail - use default runtime class
+			fmt.Printf("Warning: unable to create Kubernetes client: %v\n", err)
+			cfg.RuntimeClass = config.DefaultRuntimeClass
+		} else {
+			ctx := cmd.Context()
+			cfg.RuntimeClass = cluster.DetectRuntimeClass(ctx, client.Clientset, config.DefaultRuntimeClass)
+		}
+	}
+	if interactive {
+		cfg.RuntimeClass = promptString("Default RuntimeClass", cfg.RuntimeClass, false)
+	}
+
+	fmt.Println()
+	fmt.Printf("Using provided RuntimeClass: %s\n", cfg.RuntimeClass)
 }
