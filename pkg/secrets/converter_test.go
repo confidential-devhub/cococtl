@@ -6,7 +6,8 @@ import (
 )
 
 func TestConvertToSealed(t *testing.T) {
-	sealed, err := ConvertToSealed("default", "db-creds", "password")
+	// kbsNamespace "default" for URI; k8sNamespace "my-app" for K8s resource
+	sealed, err := ConvertToSealed("default", "my-app", "db-creds", "password")
 	if err != nil {
 		t.Fatalf("ConvertToSealed() failed: %v", err)
 	}
@@ -23,8 +24,9 @@ func TestConvertToSealed(t *testing.T) {
 		t.Errorf("Key = %q, want %q", sealed.Key, "password")
 	}
 
-	if sealed.Namespace != "default" {
-		t.Errorf("Namespace = %q, want %q", sealed.Namespace, "default")
+	// Namespace is K8s resource namespace (from input manifest)
+	if sealed.Namespace != "my-app" {
+		t.Errorf("Namespace = %q, want %q", sealed.Namespace, "my-app")
 	}
 
 	// Verify sealed secret format
@@ -114,9 +116,13 @@ func TestConvertSecrets_WithInspectedKeys(t *testing.T) {
 	keys := make(map[string]bool)
 	for _, s := range sealed {
 		keys[s.Key] = true
-		// Verify namespace is from kubectl response
-		if s.Namespace != "production" {
-			t.Errorf("Expected namespace 'production', got %q", s.Namespace)
+		// K8s namespace is from input manifest (ref.Namespace); ref had empty so we use "default"
+		if s.Namespace != "default" {
+			t.Errorf("Expected namespace 'default' (from manifest), got %q", s.Namespace)
+		}
+		// KBS URI always uses "default"
+		if s.ResourceURI != "kbs:///default/app-config/"+s.Key {
+			t.Errorf("Expected ResourceURI kbs:///default/app-config/%s, got %q", s.Key, s.ResourceURI)
 		}
 	}
 

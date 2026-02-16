@@ -104,9 +104,9 @@ func PrintTrusteeInstructions(sealedSecrets []*SealedSecretData, configPath stri
 		fmt.Println("Note: Secrets have been automatically uploaded to Trustee KBS.")
 		fmt.Println("      The configuration file above is saved for your reference.")
 	} else {
-		fmt.Println("Note: Automatic Trustee upload failed or was skipped.")
-		fmt.Println("      Please manually configure these secrets in your Trustee KBS")
-		fmt.Println("      using the configuration file above.")
+		// fmt.Println("Note: Automatic Trustee upload failed or was skipped.")
+		fmt.Println("Please manually configure these secrets in your Trustee KBS")
+		fmt.Println("using the configuration file above.")
 	}
 	fmt.Println()
 }
