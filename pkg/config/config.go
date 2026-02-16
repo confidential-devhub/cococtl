@@ -48,7 +48,7 @@ type SidecarConfig struct {
 
 // CocoConfig represents the configuration for CoCo deployments.
 type CocoConfig struct {
-	TrusteeServer      string            `toml:"trustee_server" comment:"Trustee server URL (mandatory)"`
+	TrusteeServer      string            `toml:"trustee_server" comment:"Trustee server URL"`
 	RuntimeClass       string            `toml:"runtime_class" comment:"Default RuntimeClass to use when --runtime-class is not specified (default: kata-cc)"`
 	TrusteeCACert      string            `toml:"trustee_ca_cert" comment:"Trustee CA cert location (optional)"`
 	KataAgentPolicy    string            `toml:"kata_agent_policy" comment:"Kata-agent policy file path (optional)"`
@@ -258,9 +258,6 @@ func (c *CocoConfig) Save(path string) error {
 
 // Validate checks if the configuration is valid
 func (c *CocoConfig) Validate() error {
-	if c.TrusteeServer == "" {
-		return fmt.Errorf("trustee_server is mandatory and cannot be empty")
-	}
 	if c.RuntimeClass == "" {
 		return fmt.Errorf("runtime_class must be specified")
 	}

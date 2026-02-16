@@ -48,7 +48,7 @@ func init() {
 	initCmd.Flags().BoolP("interactive", "i", false, "Enable interactive prompts for configuration values")
 	initCmd.Flags().Bool("skip-trustee-deploy", false, "Skip Trustee deployment")
 	initCmd.Flags().String("trustee-namespace", "", "Namespace for Trustee deployment (default: current namespace)")
-	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
+	initCmd.Flags().String("trustee-url", "", "Trustee server URL")
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
 	initCmd.Flags().String("cert-dir", "", "Default directory to store/load sidecar certificates and keys (default: ~/.kube/coco-sidecar)")
 	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates in the default directory")
