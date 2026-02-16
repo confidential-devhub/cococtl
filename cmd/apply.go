@@ -61,6 +61,7 @@ var (
 	configPath          string
 	convertSecrets      bool
 	enableSidecar       bool
+	enableInitData      bool
 	sidecarImage        string
 	sidecarSANIPs       string
 	sidecarSANDNS       string
@@ -87,6 +88,7 @@ func init() {
 	applyCmd.Flags().BoolVar(&sidecarSkipAutoSANs, "sidecar-skip-auto-sans", false, "Skip auto-detection of SANs (node IPs and service DNS)")
 	applyCmd.Flags().IntVar(&sidecarPortForward, "sidecar-port-forward", 0, "Port to forward from primary container (requires --sidecar)")
 	applyCmd.Flags().StringVarP(&namespaceFlag, "namespace", "n", "", "Namespace for operations (overrides manifest and kubeconfig)")
+	applyCmd.Flags().BoolVar(&enableInitData, "enable-initdata", true, "Generate initdata annotation")
 }
 
 func runApply(cmd *cobra.Command, _ []string) error {
@@ -208,7 +210,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	if err := transformManifest(ctx, m, cfg, rc, skipApply, resolvedNamespace); err != nil {
+	if err := transformManifest(ctx, m, cfg, rc, skipApply, resolvedNamespace, enableInitData); err != nil {
 		return fmt.Errorf("failed to transform manifest: %w", err)
 	}
 
@@ -270,7 +272,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool, resolvedNamespace string) error {
+func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.CocoConfig, rc string, skipApply bool, resolvedNamespace string, enableInitData bool) error {
 	// Create Kubernetes client once for all operations that need cluster access.
 	// Client creation is deferred-error: handlers that need it check clientErr.
 	client, clientErr := k8s.NewClient(k8s.ClientOptions{})
@@ -357,14 +359,18 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 	}
 
 	// 6. Generate and add initdata annotation
-	fmt.Println("  - Generating initdata annotation")
-	initdataValue, err := initdata.Generate(cfg, imagePullSecretsInfo)
-	if err != nil {
-		return fmt.Errorf("failed to generate initdata: %w", err)
-	}
+	if enableInitData {
+		fmt.Println("  - Generating initdata annotation")
+		initdataValue, err := initdata.Generate(cfg, imagePullSecretsInfo)
+		if err != nil {
+			return fmt.Errorf("failed to generate initdata: %w", err)
+		}
 
-	if err := m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", initdataValue); err != nil {
-		return fmt.Errorf("failed to set initdata annotation: %w", err)
+		if err := m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", initdataValue); err != nil {
+			return fmt.Errorf("failed to set initdata annotation: %w", err)
+		}
+	} else {
+		fmt.Println("  - Skipping initdata annotation generation (--enable-initdata is set to false)")
 	}
 
 	// 7. Add custom annotations from config

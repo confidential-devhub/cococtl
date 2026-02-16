@@ -39,6 +39,10 @@ type ImagePullSecretInfo struct {
 // Generate creates initdata based on the CoCo configuration
 // imagePullSecrets is optional - pass nil if no imagePullSecrets need to be added
 func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (string, error) {
+	if cfg.TrusteeServer == "" {
+		return "", fmt.Errorf("trustee server URL is required for initdata generation")
+	}
+
 	// Generate aa.toml (Attestation Agent configuration)
 	aaToml, err := generateAAToml(cfg)
 	if err != nil {
