@@ -291,7 +291,6 @@ func getDefaultConfig() *config.CocoConfig {
 		TrusteeServer: "http://trustee-kbs.default.svc.cluster.local:8080",
 		RuntimeClass:  "kata-cc",
 		Sidecar: config.SidecarConfig{
-			Enabled:   false,
 			HTTPSPort: 8443,
 			Image:     "ghcr.io/confidential-containers/sidecar:latest",
 		},

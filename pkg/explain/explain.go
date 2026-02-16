@@ -69,7 +69,7 @@ func Analyze(manifestPath string, cfg *config.CocoConfig, enableSidecar bool, si
 	analysis.Transformations = append(analysis.Transformations, secretTransformations...)
 
 	// 3. Sidecar transformation
-	if enableSidecar || cfg.Sidecar.Enabled {
+	if enableSidecar {
 		analysis.SidecarEnabled = true
 		sidecarTransform := analyzeSidecar(cfg, analysis.ServicePort, sidecarPortForward)
 		if sidecarTransform != nil {
@@ -123,7 +123,7 @@ func analyzeRuntimeClass(m *manifest.Manifest, cfg *config.CocoConfig) Transform
 
 func analyzeSecrets(m *manifest.Manifest) ([]Transformation, int) {
 	// Detect secrets
-	allSecretRefs, err := secrets.DetectSecrets(m.GetData())
+	allSecretRefs, err := secrets.DetectSecrets(m.GetData(), m.GetNamespace())
 	if err != nil || len(allSecretRefs) == 0 {
 		return nil, 0
 	}
