@@ -183,19 +183,19 @@ func TestGetTrusteeNamespace(t *testing.T) {
 			wantNamespace: "custom-ns",
 		},
 		{
-			name:          "external URL - should default to default",
-			trusteeServer: "https://trustee.example.com:8080",
+			name:          "external URL - should default to trustee-operator-system",
+			trusteeServer: "trustee-operator-system://trustee.example.com:8080",
 			wantNamespace: "default",
 		},
 		{
-			name:          "IP address - should default to default",
+			name:          "IP address - should default to trustee-operator-system",
 			trusteeServer: "http://192.168.1.100:8080",
-			wantNamespace: "default",
+			wantNamespace: "trustee-operator-system",
 		},
 		{
-			name:          "localhost - should default to default",
+			name:          "localhost - should default to trustee-operator-system",
 			trusteeServer: "http://localhost:8080",
-			wantNamespace: "default",
+			wantNamespace: "trustee-operator-system",
 		},
 	}
 
