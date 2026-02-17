@@ -57,7 +57,7 @@ var (
 	addInitContainer    bool
 	initContainerImg    string
 	initContainerCmd    string
-	skipApply           bool
+	doApply             bool
 	configPath          string
 	convertSecrets      bool
 	enableSidecar       bool
@@ -80,7 +80,7 @@ func init() {
 	applyCmd.Flags().BoolVar(&addInitContainer, "init-container", false, "Add default attestation initContainer")
 	applyCmd.Flags().StringVar(&initContainerImg, "init-container-img", "", "Custom init container image (requires --init-container)")
 	applyCmd.Flags().StringVar(&initContainerCmd, "init-container-cmd", "", "Custom init container command (requires --init-container)")
-	applyCmd.Flags().BoolVar(&skipApply, "skip-apply", false, "Skip kubectl apply, only transform the manifest")
+	applyCmd.Flags().BoolVar(&doApply, "apply", false, "Perform kubectl apply to push the secrets into trustee")
 	applyCmd.Flags().StringVar(&configPath, "config", "", "Path to CoCo config file (default: ~/.kube/coco-config.toml)")
 	applyCmd.Flags().BoolVar(&convertSecrets, "convert-secrets", true, "Automatically convert K8s secrets to sealed secrets")
 	applyCmd.Flags().BoolVar(&enableSidecar, "sidecar", false, "Enable secure access sidecar container")
@@ -98,7 +98,7 @@ func init() {
 func runApply(cmd *cobra.Command, _ []string) error {
 	var ctx context.Context
 
-	if skipApply {
+	if !doApply {
 		// Skip-apply mode: kubectl is optional, only needed for informational message
 		_, err := exec.LookPath("kubectl")
 		if err != nil {
@@ -135,6 +135,10 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	if trusteeURL == "" {
 		fmt.Printf("Using the Trustee server URL from the config: %s\n", cfg.TrusteeServer)
 		trusteeURL = cfg.TrusteeServer
+	}
+
+	if doApply && trusteeURL == "" {
+		return fmt.Errorf("--apply requires --trustee-url to be set in the config or on the command line")
 	}
 
 	if enableInitData && trusteeURL == "" {
@@ -223,7 +227,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	if err := transformManifest(ctx, m, cfg, rc, skipApply, resolvedNamespace, enableInitData, trusteeURL); err != nil {
+	if err := transformManifest(ctx, m, cfg, rc, !doApply, resolvedNamespace, enableInitData, trusteeURL); err != nil {
 		return fmt.Errorf("failed to transform manifest: %w", err)
 	}
 
@@ -263,7 +267,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Apply manifests if not skipped
-	if !skipApply {
+	if doApply {
 		fmt.Println("Applying manifest with kubectl...")
 		if err := applyWithKubectl(ctx, backupPath); err != nil {
 			return fmt.Errorf("failed to apply manifest: %w", err)
@@ -279,7 +283,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 
 		fmt.Println("Successfully applied!")
 	} else {
-		fmt.Println("Skipping kubectl apply (use --skip-apply=false to apply)")
+		fmt.Println("Skipping kubectl apply (use --apply=true to apply)")
 	}
 
 	return nil
