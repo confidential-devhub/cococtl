@@ -46,7 +46,7 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	initCmd.Flags().StringP("output", "o", "", "Output path for config file (default: ~/.kube/coco-config.toml)")
 	initCmd.Flags().BoolP("interactive", "i", false, "Enable interactive prompts for configuration values")
-	initCmd.Flags().Bool("skip-trustee-deploy", false, "Skip Trustee deployment")
+	initCmd.Flags().Bool("trustee-deploy", false, "Deploy Trustee")
 	initCmd.Flags().String("trustee-namespace", "", "Namespace for Trustee deployment (default: current namespace)")
 	initCmd.Flags().String("trustee-url", "", "Trustee server URL")
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
@@ -57,7 +57,7 @@ func init() {
 func runInit(cmd *cobra.Command, _ []string) error {
 	outputPath, _ := cmd.Flags().GetString("output")
 	interactive, _ := cmd.Flags().GetBool("interactive")
-	skipTrusteeDeploy, _ := cmd.Flags().GetBool("skip-trustee-deploy")
+	trusteeDeploy, _ := cmd.Flags().GetBool("trustee-deploy")
 	trusteeNamespace, _ := cmd.Flags().GetString("trustee-namespace")
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
 	runtimeClass, _ := cmd.Flags().GetString("runtime-class")
@@ -98,7 +98,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	cfg.Sidecar.CertDir = resolvedCertDir
 
 	// Handle Trustee setup
-	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cmd, cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
+	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cmd, cfg, interactive, !trusteeDeploy, trusteeNamespace, trusteeURL)
 	if err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	// Validate config
 	if err := cfg.Validate(); err != nil {
-		if !interactive && skipTrusteeDeploy && trusteeURL == "" {
+		if !interactive && !trusteeDeploy && trusteeURL == "" {
 			fmt.Printf("Warning: %v\n", err)
 			fmt.Println("Config file created but needs to be edited before use")
 		} else if !interactive {
@@ -226,7 +226,6 @@ func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive,
 		// Non-interactive mode
 		if skipDeploy {
 			fmt.Println("Skipping Trustee deployment")
-			fmt.Println("Warning: You must set trustee_server in the config file before use")
 			return false, "", nil
 		}
 
