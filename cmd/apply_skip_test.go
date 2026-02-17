@@ -15,9 +15,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestSkipApply_NamespaceResolution_Flag tests that the --namespace flag takes
+// TestApply_NamespaceResolution_Flag tests that the --namespace flag takes
 // highest priority in resolveNamespace() and validates conflict detection.
-func TestSkipApply_NamespaceResolution_Flag(t *testing.T) {
+func TestApply_NamespaceResolution_Flag(t *testing.T) {
 	t.Run("flag value returned when only flag is set", func(t *testing.T) {
 		ns, err := resolveNamespace("my-namespace", "")
 		if err != nil {
@@ -60,9 +60,9 @@ func TestSkipApply_NamespaceResolution_Flag(t *testing.T) {
 	})
 }
 
-// TestSkipApply_NamespaceResolution_ManifestOnly tests that the manifest
+// TestApply_NamespaceResolution_ManifestOnly tests that the manifest
 // metadata.namespace is used when no flag is provided.
-func TestSkipApply_NamespaceResolution_ManifestOnly(t *testing.T) {
+func TestApply_NamespaceResolution_ManifestOnly(t *testing.T) {
 	ns, err := resolveNamespace("", "manifest-namespace")
 	if err != nil {
 		t.Fatalf("resolveNamespace returned unexpected error: %v", err)
@@ -72,9 +72,9 @@ func TestSkipApply_NamespaceResolution_ManifestOnly(t *testing.T) {
 	}
 }
 
-// TestSkipApply_NamespaceResolution_KubeconfigFallback tests that the namespace
+// TestApply_NamespaceResolution_KubeconfigFallback tests that the namespace
 // from kubeconfig context is used when no flag and no manifest namespace exist.
-func TestSkipApply_NamespaceResolution_KubeconfigFallback(t *testing.T) {
+func TestApply_NamespaceResolution_KubeconfigFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a minimal valid kubeconfig with a namespace set in the context
@@ -120,9 +120,9 @@ users:
 	}
 }
 
-// TestSkipApply_NamespaceResolution_DefaultFallback tests that "default" is
+// TestApply_NamespaceResolution_DefaultFallback tests that "default" is
 // returned when no flag, no manifest namespace, and no kubeconfig namespace exist.
-func TestSkipApply_NamespaceResolution_DefaultFallback(t *testing.T) {
+func TestApply_NamespaceResolution_DefaultFallback(t *testing.T) {
 	// Point KUBECONFIG to a non-existent path so kubeconfig reading fails
 	// (t.Setenv restores original value on cleanup)
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "nonexistent-kubeconfig"))
@@ -136,9 +136,9 @@ func TestSkipApply_NamespaceResolution_DefaultFallback(t *testing.T) {
 	}
 }
 
-// TestSkipApply_SidecarCertFileSaving tests that saveSidecarCertsToYAML creates
+// TestApply_SidecarCertFileSaving tests that saveSidecarCertsToYAML creates
 // a properly formatted Kubernetes TLS Secret YAML file with correct permissions.
-func TestSkipApply_SidecarCertFileSaving(t *testing.T) {
+func TestApply_SidecarCertFileSaving(t *testing.T) {
 	// Generate a CA for signing the server cert
 	ca, err := certs.GenerateCA("test-ca")
 	if err != nil {
@@ -262,7 +262,7 @@ func TestSkipApply_SidecarCertFileSaving(t *testing.T) {
 	}
 }
 
-func TestSkipApply_SecretsClusterUnreachableError_Format(t *testing.T) {
+func TestApply_SecretsClusterUnreachableError_Format(t *testing.T) {
 	refs := []secrets.SecretReference{
 		{
 			Name: "app-config",
@@ -312,7 +312,7 @@ func TestSkipApply_SecretsClusterUnreachableError_Format(t *testing.T) {
 	}
 }
 
-func TestSkipApply_SecretsClusterQueryError_Format(t *testing.T) {
+func TestApply_SecretsClusterQueryError_Format(t *testing.T) {
 	refs := []secrets.SecretReference{
 		{Name: "missing-secret"},
 	}
@@ -332,7 +332,7 @@ func TestSkipApply_SecretsClusterQueryError_Format(t *testing.T) {
 	}
 }
 
-func TestSkipApply_SecretRefSplitting(t *testing.T) {
+func TestApply_SecretRefSplitting(t *testing.T) {
 	// Simulate mixed refs
 	allRefs := []secrets.SecretReference{
 		{Name: "explicit-secret", NeedsLookup: false, Keys: []string{"key1"}},
