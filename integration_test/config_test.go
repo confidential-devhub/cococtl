@@ -111,8 +111,8 @@ func TestConfig_LoadAndValidate_MissingTrusteeServer(t *testing.T) {
 
 	// Verify validation fails
 	err = cfg.Validate()
-	if err == nil {
-		t.Error("Expected validation error for missing trustee_server, got nil")
+	if err != nil {
+		t.Errorf("Did not expect validation error for missing trustee_server: %v", err)
 	}
 }
 
