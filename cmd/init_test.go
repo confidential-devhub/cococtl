@@ -20,8 +20,8 @@ func TestInitCommand_WithRuntimeClassFlag(t *testing.T) {
 	if err := cmd.Flags().Set("output", configPath); err != nil {
 		t.Fatalf("Failed to set output flag: %v", err)
 	}
-	if err := cmd.Flags().Set("skip-trustee-deploy", "true"); err != nil {
-		t.Fatalf("Failed to set skip-trustee-deploy flag: %v", err)
+	if err := cmd.Flags().Set("trustee-deploy", "false"); err != nil {
+		t.Fatalf("Failed to set trustee-deploy flag: %v", err)
 	}
 	if err := cmd.Flags().Set("runtime-class", "kata-remote"); err != nil {
 		t.Fatalf("Failed to set runtime-class flag: %v", err)
@@ -60,8 +60,8 @@ func TestInitCommand_WithoutRuntimeClassFlag(t *testing.T) {
 	if err := cmd.Flags().Set("output", configPath); err != nil {
 		t.Fatalf("Failed to set output flag: %v", err)
 	}
-	if err := cmd.Flags().Set("skip-trustee-deploy", "true"); err != nil {
-		t.Fatalf("Failed to set skip-trustee-deploy flag: %v", err)
+	if err := cmd.Flags().Set("trustee-deploy", "false"); err != nil {
+		t.Fatalf("Failed to set trustee-deploy flag: %v", err)
 	}
 	if err := cmd.Flags().Set("runtime-class", ""); err != nil { // Explicitly clear the flag
 		t.Fatalf("Failed to set runtime-class flag: %v", err)
@@ -106,6 +106,9 @@ func TestInitCommand_RuntimeClassWithTrusteeURL(t *testing.T) {
 	cmd := initCmd
 	if err := cmd.Flags().Set("output", configPath); err != nil {
 		t.Fatalf("Failed to set output flag: %v", err)
+	}
+	if err := cmd.Flags().Set("trustee-deploy", "true"); err != nil {
+		t.Fatalf("Failed to set trustee-deploy flag: %v", err)
 	}
 	if err := cmd.Flags().Set("trustee-url", "https://trustee.example.com:8080"); err != nil {
 		t.Fatalf("Failed to set trustee-url flag: %v", err)
