@@ -242,7 +242,7 @@ runtime_class = "kata-cc"
 	}
 
 	// Generate initdata using the real initdata package
-	encoded, err := initdata.Generate(cfg, nil)
+	encoded, err := initdata.Generate(cfg, nil, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Failed to generate initdata: %v", err)
 	}

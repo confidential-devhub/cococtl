@@ -20,7 +20,7 @@ func TestInitData_Generate_MinimalConfig(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	initdataValue, err := initdata.Generate(cfg, nil)
+	initdataValue, err := initdata.Generate(cfg, nil, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestInitData_Generate_WithCACert(t *testing.T) {
 		cfg.TrusteeCACert = "integration_test/testdata/certs/test-ca.crt"
 	}
 
-	initdataValue, err := initdata.Generate(cfg, nil)
+	initdataValue, err := initdata.Generate(cfg, nil, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestInitData_Generate_WithCustomPolicy(t *testing.T) {
 		cfg.KataAgentPolicy = "integration_test/testdata/policies/custom-policy.rego"
 	}
 
-	initdataValue, err := initdata.Generate(cfg, nil)
+	initdataValue, err := initdata.Generate(cfg, nil, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestInitData_Generate_DefaultPolicy(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	initdataValue, err := initdata.Generate(cfg, nil)
+	initdataValue, err := initdata.Generate(cfg, nil, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestInitData_Encoding_GzipAndBase64(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	initdataValue, err := initdata.Generate(cfg, nil)
+	initdataValue, err := initdata.Generate(cfg, nil, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestInitData_AAToml_Structure(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	initdataValue, err := initdata.Generate(cfg, nil)
+	initdataValue, err := initdata.Generate(cfg, nil, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestInitData_CDHToml_Structure(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	initdataValue, err := initdata.Generate(cfg, nil)
+	initdataValue, err := initdata.Generate(cfg, nil, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestInitData_Generate_WithImagePullSecrets(t *testing.T) {
 		},
 	}
 
-	initdataValue, err := initdata.Generate(cfg, imagePullSecrets)
+	initdataValue, err := initdata.Generate(cfg, imagePullSecrets, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -517,7 +517,7 @@ func TestInitData_Generate_WithoutImagePullSecrets(t *testing.T) {
 	}
 
 	// Generate without imagePullSecrets
-	initdataValue, err := initdata.Generate(cfg, nil)
+	initdataValue, err := initdata.Generate(cfg, nil, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -605,7 +605,7 @@ func TestInitData_Generate_WithMultipleImagePullSecrets(t *testing.T) {
 		},
 	}
 
-	initdataValue, err := initdata.Generate(cfg, imagePullSecrets)
+	initdataValue, err := initdata.Generate(cfg, imagePullSecrets, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
@@ -699,7 +699,7 @@ func TestInitData_Generate_ImagePullSecrets_StripLeadingDot(t *testing.T) {
 		},
 	}
 
-	initdataValue, err := initdata.Generate(cfg, imagePullSecrets)
+	initdataValue, err := initdata.Generate(cfg, imagePullSecrets, cfg.TrusteeServer)
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
