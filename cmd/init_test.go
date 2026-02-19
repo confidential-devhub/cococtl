@@ -133,3 +133,50 @@ func TestInitCommand_RuntimeClassWithTrusteeURL(t *testing.T) {
 		t.Errorf("TrusteeServer = %q, want %q", cfg.TrusteeServer, "https://trustee.example.com:8080")
 	}
 }
+
+// TestInitCommand_CertDirWithEnableSidecar tests that --cert-dir is correctly applied
+// together with --enable-sidecar, and that config has the expected certDir after validation.
+// For each (enable-sidecar, cert-dir) combination we build config using the same logic as
+// runInit (resolveCertDir), set required fields so Validate() passes, then assert certDir.
+func TestInitCommand_CertDirWithEnableSidecar(t *testing.T) {
+	defaultCertDir := config.GetDefaultCertDir()
+	if defaultCertDir == "" {
+		t.Fatalf("GetDefaultCertDir: failed to get default cert directory")
+	}
+	customPath := "/custom/cert/path"
+
+	tests := []struct {
+		name          string
+		enableSidecar bool
+		certDir       string
+		wantCertDir   string
+	}{
+		{"enable-sidecar=true, cert-dir empty -> default", true, "", defaultCertDir},
+		{"enable-sidecar=true, cert-dir set -> path", true, customPath, customPath},
+		{"enable-sidecar=false, cert-dir set -> path", false, customPath, customPath},
+		{"enable-sidecar=false, cert-dir empty -> default", false, "", defaultCertDir},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Use same cert-dir resolution as runInit
+			resolved, err := resolveCertDir(tt.certDir)
+			if err != nil {
+				t.Fatalf("resolveCertDir: %v", err)
+			}
+			cfg := config.DefaultConfig()
+			cfg.Sidecar.CertDir = resolved
+			cfg.Sidecar.Enabled = tt.enableSidecar
+			// Set minimal fields so Validate() passes
+			cfg.TrusteeServer = "https://trustee.example.com"
+			cfg.RuntimeClass = "kata-cc"
+
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("config.Validate: %v", err)
+			}
+
+			if cfg.Sidecar.CertDir != tt.wantCertDir {
+				t.Errorf("cfg.Sidecar.CertDir = %q, want %q", cfg.Sidecar.CertDir, tt.wantCertDir)
+			}
+		})
+	}
+}
