@@ -370,7 +370,8 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 		}
 
 		fmt.Println("  - Injecting secure access sidecar container")
-		if err := sidecar.Inject(m, cfg, appName, namespace); err != nil {
+		// default the namespace to "default" as Trustee operator currently only supports that
+		if err := sidecar.Inject(m, cfg, appName, "default"); err != nil {
 			return fmt.Errorf("failed to inject sidecar: %w", err)
 		}
 	}
@@ -865,8 +866,9 @@ func handleSidecarServerCert(ctx context.Context, cfg *config.CocoConfig, appNam
 	}
 
 	// Build KBS resource paths for certificate storage
-	serverCertPath := namespace + "/sidecar-tls-" + appName + "/server-cert"
-	serverKeyPath := namespace + "/sidecar-tls-" + appName + "/server-key"
+	// default the namespace to "default" as Trustee operator currently only supports that
+	serverCertPath := "default/sidecar-tls-" + appName + "/server-cert"
+	serverKeyPath := "default/sidecar-tls-" + appName + "/server-key"
 
 	if !skipApply {
 		// Normal mode: upload to Trustee KBS
@@ -884,7 +886,7 @@ func handleSidecarServerCert(ctx context.Context, cfg *config.CocoConfig, appNam
 		fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
 	} else {
 		// Skip-apply mode: save certs to file instead of uploading
-		certFilePath, err := saveSidecarCertsToYAML(manifestPath, serverCert, appName, namespace)
+		certFilePath, err := saveSidecarCertsToYAML(manifestPath, serverCert, appName, trusteeNamespace)
 		if err != nil {
 			return err
 		}

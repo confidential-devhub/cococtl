@@ -24,8 +24,9 @@ func ConvertToSealed(namespace, secretName, key string) (*SealedSecretData, erro
 	cleanKey := strings.TrimPrefix(key, ".")
 
 	// Build KBS resource URI
-	// Format: kbs:///namespace/secretName/key
-	resourceURI := fmt.Sprintf("kbs:///%s/%s/%s", namespace, secretName, cleanKey)
+	// default namespace as Trustee operator currently only supports that
+	// Format: kbs:///default/secretName/key
+	resourceURI := fmt.Sprintf("kbs:///%s/%s/%s", "default", secretName, cleanKey)
 
 	// Generate sealed secret using existing sealed package
 	sealedSecret, err := sealed.GenerateSealedSecret(resourceURI)
