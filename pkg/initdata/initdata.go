@@ -4,7 +4,9 @@ package initdata
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,38 +38,25 @@ type ImagePullSecretInfo struct {
 	Key        string
 }
 
-// Generate creates initdata based on the CoCo configuration
-// imagePullSecrets is optional - pass nil if no imagePullSecrets need to be added
-func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo, trusteeURL string) (string, error) {
-	if trusteeURL == "" {
-		return "", fmt.Errorf("trustee server URL is required for initdata generation")
-	}
-
-	// Generate aa.toml (Attestation Agent configuration)
+// buildInitdataTOML returns the raw initdata TOML bytes (before gzip+base64).
+func buildInitdataTOML(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo, trusteeURL string) ([]byte, error) {
 	aaToml, err := generateAAToml(cfg, trusteeURL)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate aa.toml: %w", err)
+		return nil, fmt.Errorf("failed to generate aa.toml: %w", err)
 	}
-
-	// Generate cdh.toml (Confidential Data Hub configuration)
 	cdhToml, err := generateCDHToml(cfg, imagePullSecrets)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate cdh.toml: %w", err)
+		return nil, fmt.Errorf("failed to generate cdh.toml: %w", err)
 	}
-
-	// Get policy.rego
 	var policy string
 	if cfg.KataAgentPolicy != "" {
 		policy, err = loadPolicyFile(cfg.KataAgentPolicy)
 		if err != nil {
-			return "", fmt.Errorf("failed to load policy file: %w", err)
+			return nil, fmt.Errorf("failed to load policy file: %w", err)
 		}
 	} else {
-		// Use default restrictive policy (exec disabled, logs enabled)
 		policy = getDefaultPolicy()
 	}
-
-	// Manually construct TOML with multiline strings for proper formatting
 	var tomlBuilder strings.Builder
 	tomlBuilder.WriteString(fmt.Sprintf("algorithm = \"%s\"\n", InitDataAlgorithm))
 	tomlBuilder.WriteString(fmt.Sprintf("version = \"%s\"\n", InitDataVersion))
@@ -81,16 +70,48 @@ func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo, tr
 	tomlBuilder.WriteString("\"policy.rego\" = '''\n")
 	tomlBuilder.WriteString(policy)
 	tomlBuilder.WriteString("'''\n")
+	return []byte(tomlBuilder.String()), nil
+}
 
-	tomlData := []byte(tomlBuilder.String())
-
-	// Compress with gzip and encode to base64
+// Generate creates initdata based on the CoCo configuration
+// imagePullSecrets is optional - pass nil if no imagePullSecrets need to be added
+func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo, trusteeURL string) (string, error) {
+	if trusteeURL == "" {
+		return "", fmt.Errorf("trustee server URL is required for initdata generation")
+	}
+	tomlData, err := buildInitdataTOML(cfg, imagePullSecrets, trusteeURL)
+	if err != nil {
+		return "", err
+	}
 	encoded, err := compressAndEncode(tomlData)
 	if err != nil {
 		return "", fmt.Errorf("failed to compress and encode initdata: %w", err)
 	}
-
 	return encoded, nil
+}
+
+// GenerateWithArtifacts returns the encoded initdata, the raw initdata TOML string (before gzip+base64),
+// and the PCR8 reference value (SHA256(initial_pcr_32zeros || SHA256(toml))) used for attestation.
+func GenerateWithArtifacts(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo, trusteeURL string) (encoded string, rawTOML string, pcr8Hex string, err error) {
+	if trusteeURL == "" {
+		return "", "", "", fmt.Errorf("trustee server URL is required for initdata generation")
+	}
+	tomlData, err := buildInitdataTOML(cfg, imagePullSecrets, trusteeURL)
+	if err != nil {
+		return "", "", "", err
+	}
+	rawTOML = string(tomlData)
+	encoded, err = compressAndEncode(tomlData)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to compress and encode initdata: %w", err)
+	}
+	// PCR8 = SHA256(initial_pcr_32_zero_bytes || SHA256(tomlData))
+	hash := sha256.Sum256(tomlData)
+	var pcr8Input [64]byte
+	copy(pcr8Input[32:], hash[:])
+	pcr8 := sha256.Sum256(pcr8Input[:])
+	pcr8Hex = hex.EncodeToString(pcr8[:])
+	return encoded, rawTOML, pcr8Hex, nil
 }
 
 // aaKBSConfig is used so the cert field is marshaled as TOML literal multi-line (”'...”').
