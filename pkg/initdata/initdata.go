@@ -179,13 +179,9 @@ func generateCDHToml(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretI
 			imageConfig["registry_configuration_uri"] = cfg.RegistryConfigURI
 		}
 
-		// If we have a custom CA cert, add it to extra_root_certificates
-		if cfg.TrusteeCACert != "" {
-			cert, err := os.ReadFile(cfg.TrusteeCACert)
-			if err != nil {
-				return "", fmt.Errorf("failed to read CA cert for image config: %w", err)
-			}
-			imageConfig["extra_root_certificates"] = []string{string(cert)}
+		// Add extra_root_certificates (placeholder for marshal; we rewrite to multiline below)
+		if trusteeCACertPEM != "" {
+			imageConfig["extra_root_certificates"] = []string{trusteeCACertPEM}
 		}
 
 		if len(imageConfig) > 0 {
@@ -198,7 +194,72 @@ func generateCDHToml(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretI
 		return "", fmt.Errorf("failed to marshal cdh.toml: %w", err)
 	}
 
-	return string(tomlData), nil
+	tomlStr := string(tomlData)
+	// Rewrite extra_root_certificates so each cert is TOML literal multi-line ("""..."""),
+	// so newlines are preserved instead of escaped \n (CDH expects valid PEM).
+	if trusteeCACertPEM != "" {
+		tomlStr = replaceExtraRootCertificatesWithMultiline(tomlStr, trusteeCACertPEM)
+	}
+
+	return tomlStr, nil
+}
+
+// replaceExtraRootCertificatesWithMultiline finds the extra_root_certificates = ["..."]
+// (or = ['...']) in the TOML and replaces it with literal multi-line form so newlines are preserved.
+func replaceExtraRootCertificatesWithMultiline(tomlStr, certPEM string) string {
+	idx := strings.Index(tomlStr, "extra_root_certificates")
+	if idx == -1 {
+		return tomlStr
+	}
+	// Skip to the opening bracket and then the opening quote (allow whitespace/newlines)
+	searchStart := idx + len("extra_root_certificates")
+	bracket := strings.Index(tomlStr[searchStart:], "[")
+	if bracket == -1 {
+		return tomlStr
+	}
+	afterBracket := searchStart + bracket + 1
+	// Skip whitespace and newlines between [ and the quote
+	for afterBracket < len(tomlStr) && (tomlStr[afterBracket] == ' ' || tomlStr[afterBracket] == '\t' || tomlStr[afterBracket] == '\n' || tomlStr[afterBracket] == '\r') {
+		afterBracket++
+	}
+	if afterBracket >= len(tomlStr) {
+		return tomlStr
+	}
+	quote := tomlStr[afterBracket]
+	if quote != '"' && quote != '\'' {
+		return tomlStr
+	}
+	start := afterBracket + 1 // first char of string content
+	// Find closing quote (account for \" or \' and \\ inside)
+	end := start
+	for end < len(tomlStr) {
+		if tomlStr[end] == '\\' && end+1 < len(tomlStr) {
+			end += 2
+			continue
+		}
+		if tomlStr[end] == quote {
+			break
+		}
+		end++
+	}
+	if end >= len(tomlStr) || tomlStr[end] != quote {
+		return tomlStr
+	}
+	// Find the closing "]" (may have whitespace/newline between quote and ])
+	tail := end + 1
+	for tail < len(tomlStr) && (tomlStr[tail] == ' ' || tomlStr[tail] == '\t' || tomlStr[tail] == '\n' || tomlStr[tail] == '\r') {
+		tail++
+	}
+	if tail < len(tomlStr) && tomlStr[tail] == ']' {
+		tail++ // skip ']' so rest of string starts after it
+	} else {
+		tail = end + 2 // fallback: assume "]"
+	}
+	// Replace with literal multi-line: extra_root_certificates = ["""\n<cert>\n"""]
+	newVal := tomlStr[idx:searchStart] + ` = ["""
+` + certPEM + `
+"""]`
+	return tomlStr[:idx] + newVal + tomlStr[tail:]
 }
 
 // loadPolicyFile reads a policy file from disk
