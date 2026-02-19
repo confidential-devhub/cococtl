@@ -67,6 +67,7 @@ var (
 	sidecarSkipAutoSANs bool
 	sidecarPortForward  int
 	namespaceFlag       string
+	overrideCertDir     string
 )
 
 func init() {
@@ -87,6 +88,7 @@ func init() {
 	applyCmd.Flags().BoolVar(&sidecarSkipAutoSANs, "sidecar-skip-auto-sans", false, "Skip auto-detection of SANs (node IPs and service DNS)")
 	applyCmd.Flags().IntVar(&sidecarPortForward, "sidecar-port-forward", 0, "Port to forward from primary container (requires --sidecar)")
 	applyCmd.Flags().StringVarP(&namespaceFlag, "namespace", "n", "", "Namespace for operations (overrides manifest and kubeconfig)")
+	applyCmd.Flags().StringVar(&overrideCertDir, "cert-dir", "", "Override the cert directory used to load/store sidecar certificates and keys")
 }
 
 func runApply(cmd *cobra.Command, _ []string) error {
@@ -747,6 +749,15 @@ func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 	return trustee.AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
 }
 
+// effectiveSidecarCertDir returns the cert directory to use for sidecar certs:
+// the apply --cert-dir override if set, otherwise the config's Sidecar.CertDir.
+func effectiveSidecarCertDir(cfg *config.CocoConfig, override string) string {
+	if override != "" {
+		return override
+	}
+	return cfg.Sidecar.CertDir
+}
+
 // handleSidecarServerCert generates and uploads a server certificate for the sidecar.
 // It loads the Client CA, auto-detects or uses provided SANs, generates the server cert,
 // and either uploads it to Trustee KBS or saves it to a file (when skipApply is true).
@@ -760,7 +771,7 @@ func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 //   - manifestPath: path to the original manifest file (for cert file naming)
 func handleSidecarServerCert(ctx context.Context, cfg *config.CocoConfig, appName, namespace, trusteeNamespace string, skipApply bool, manifestPath string, clientset kubernetes.Interface, clientErr error) error {
 	// Load Client CA
-	certDir := cfg.Sidecar.CertDir
+	certDir := effectiveSidecarCertDir(cfg, overrideCertDir)
 	caCertPath := filepath.Join(certDir, "ca-cert.pem")
 	caKeyPath := filepath.Join(certDir, "ca-key.pem")
 
