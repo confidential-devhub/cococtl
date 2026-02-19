@@ -3,8 +3,10 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/cluster"
@@ -364,6 +366,26 @@ func handleSidecarCertSetup(ctx context.Context, cfg *config.CocoConfig, trustee
 		return fmt.Errorf("failed to save client certificate: %w", err)
 	}
 
+	// Export client cert to PKCS#12 for mTLS client use
+	clientCertPath := filepath.Join(certDir, "client-cert.pem")
+	clientKeyPath := filepath.Join(certDir, "client-key.pem")
+	clientP12Path := filepath.Join(certDir, "client.p12")
+	if err := certs.SaveToPKCS12(clientCertPath, clientKeyPath, clientP12Path, "coco mTLS client", ""); err != nil {
+		if errors.Is(err, certs.ErrOpenSSLNotFound) {
+			fmt.Println("Warning: openssl not found in PATH; cannot create PKCS#12 bundle")
+			fmt.Println("Install openssl to create a client.p12 bundle for mTLS client access")
+			fmt.Println("and then run:")
+			fmt.Println("'openssl pkcs12 -export")
+			fmt.Printf(" -inkey %s/client-key.pem\n", clientKeyPath)
+			fmt.Printf("-in %s/client-cert.pem\n", clientCertPath)
+			fmt.Printf("-out %s/client.p12\n", clientP12Path)
+			fmt.Printf("-name 'coco mTLS client'\n")
+			fmt.Printf("-passout pass:<password or empty string>'\n")
+		} else {
+			return fmt.Errorf("failed to create client.p12: %w", err)
+		}
+	}
+
 	fmt.Println("\nSidecar certificates configured successfully!")
 	if clientCAPath != "" {
 		fmt.Printf("  - Client CA uploaded to: kbs:///%s\n", clientCAPath)
@@ -371,6 +393,7 @@ func handleSidecarCertSetup(ctx context.Context, cfg *config.CocoConfig, trustee
 	fmt.Printf("  - Client CA saved to: %s/ca-cert.pem (for signing server certs)\n", certDir)
 	fmt.Printf("  - Client certificate saved to: %s/client-cert.pem\n", certDir)
 	fmt.Printf("  - Client key saved to: %s/client-key.pem\n", certDir)
+	fmt.Printf("  - Client PKCS#12 bundle saved to: %s/client.p12 (coco mTLS client)\n", certDir)
 
 	return nil
 }
