@@ -379,13 +379,17 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 	// 6. Generate and add initdata annotation
 	if enableInitData {
 		fmt.Println("  - Generating initdata annotation")
-		initdataValue, err := initdata.Generate(cfg, imagePullSecretsInfo, trusteeURL)
+		initdataValue, rawTOML, pcr8Hex, err := initdata.GenerateWithArtifacts(cfg, imagePullSecretsInfo, trusteeURL)
 		if err != nil {
 			return fmt.Errorf("failed to generate initdata: %w", err)
 		}
 
 		if err := m.SetAnnotation("io.katacontainers.config.hypervisor.cc_init_data", initdataValue); err != nil {
 			return fmt.Errorf("failed to set initdata annotation: %w", err)
+		}
+
+		if err := saveInitdataReference(m, rawTOML, pcr8Hex, initdataValue); err != nil {
+			return fmt.Errorf("failed to save initdata reference: %w", err)
 		}
 	} else {
 		fmt.Println("  - Skipping initdata annotation generation (--enable-initdata is set to false)")
@@ -405,6 +409,35 @@ func transformManifest(ctx context.Context, m *manifest.Manifest, cfg *config.Co
 		}
 	}
 
+	return nil
+}
+
+// saveInitdataReference saves the initdata reference YAML file to the same directory as the manifest file.
+func saveInitdataReference(m *manifest.Manifest, rawTOML string, pcr8Hex string, initdataValue string) error {
+	ext := filepath.Ext(m.GetName())
+	if ext == "" {
+		ext = ".yaml"
+	}
+	baseName := strings.TrimSuffix(manifestFile, ext)
+	initdataReferencePath := baseName + "-initdata-reference.yaml"
+	reference := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"description": "Initdata TOML (before gzip+base64) and PCR8 reference for cc_init_data attestation. PCR8 = SHA256(initial_pcr_32zeros || SHA256(initdata_toml)).",
+			"algorithm":   initdata.InitDataAlgorithm,
+		},
+		"pcr8_reference":     pcr8Hex,
+		"initdata_toml":      rawTOML,
+		"encoded_annotation": initdataValue,
+	}
+
+	yamlData, err := yaml.Marshal(reference)
+	if err != nil {
+		return fmt.Errorf("failed to marshal initdata reference YAML: %w", err)
+	}
+	if err := os.WriteFile(initdataReferencePath, yamlData, 0644); err != nil {
+		return fmt.Errorf("failed to write initdata reference YAML: %w", err)
+	}
+	fmt.Printf("  - Wrote initdata reference YAML to %s\n", initdataReferencePath)
 	return nil
 }
 
