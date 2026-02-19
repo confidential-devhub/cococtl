@@ -49,6 +49,7 @@ func init() {
 	initCmd.Flags().Bool("trustee-deploy", false, "Deploy Trustee")
 	initCmd.Flags().String("trustee-namespace", "", "Namespace for Trustee deployment (default: current namespace)")
 	initCmd.Flags().String("trustee-url", "", "Trustee server URL")
+	initCmd.Flags().String("trustee-ca-cert", "", "Trustee CA certificate file path")
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
 	initCmd.Flags().String("cert-dir", "", "Default directory to store/load sidecar certificates and keys (default: ~/.kube/coco-sidecar)")
 	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates in the default directory")
@@ -60,6 +61,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	trusteeDeploy, _ := cmd.Flags().GetBool("trustee-deploy")
 	trusteeNamespace, _ := cmd.Flags().GetString("trustee-namespace")
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
+	trusteeCACert, _ := cmd.Flags().GetString("trustee-ca-cert")
 	runtimeClass, _ := cmd.Flags().GetString("runtime-class")
 	enableSidecar, _ := cmd.Flags().GetBool("enable-sidecar")
 	certDir, _ := cmd.Flags().GetString("cert-dir")
@@ -96,6 +98,11 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to get cert directory: %w", err)
 	}
 	cfg.Sidecar.CertDir = resolvedCertDir
+
+	if trusteeDeploy && trusteeCACert != "" {
+		return fmt.Errorf("trustee CA certificate file path is not being useed if Trustee is deployed")
+	}
+	cfg.TrusteeCACert = trusteeCACert
 
 	// Handle Trustee setup
 	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cmd, cfg, interactive, !trusteeDeploy, trusteeNamespace, trusteeURL)
