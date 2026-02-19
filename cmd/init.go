@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"k8s.io/client-go/kubernetes"
-
 	"github.com/confidential-devhub/cococtl/pkg/cluster"
 	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/confidential-devhub/cococtl/pkg/k8s"
@@ -54,6 +52,7 @@ func init() {
 	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
 	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates")
+	initCmd.Flags().Bool("upload-client-ca", false, "Upload client CA to Trustee KBS")
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
@@ -64,6 +63,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
 	runtimeClass, _ := cmd.Flags().GetString("runtime-class")
 	enableSidecar, _ := cmd.Flags().GetBool("enable-sidecar")
+	uploadClientCA, _ := cmd.Flags().GetBool("upload-client-ca")
 
 	// Get default config path if not specified
 	if outputPath == "" {
@@ -110,11 +110,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	// Handle sidecar certificate setup if enabled
 	if enableSidecar {
-		sidecarClient, err := k8s.NewClient(k8s.ClientOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to create Kubernetes client for sidecar cert setup: %w", err)
-		}
-		if err := handleSidecarCertSetup(cmd.Context(), sidecarClient.Clientset, sidecarNamespace); err != nil {
+		if err := handleSidecarCertSetup(cmd.Context(), cfg, sidecarNamespace, uploadClientCA); err != nil {
 			return err
 		}
 	}
@@ -289,7 +285,7 @@ func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive,
 // uploads the Client CA to Trustee KBS, and saves both the CA and client certificate locally.
 // The CA is needed during 'apply' to sign per-app server certificates.
 // The trusteeNamespace parameter specifies where the Trustee KBS pod is deployed.
-func handleSidecarCertSetup(ctx context.Context, clientset kubernetes.Interface, trusteeNamespace string) error {
+func handleSidecarCertSetup(ctx context.Context, cfg *config.CocoConfig, trusteeNamespace string, uploadClientCA bool) error {
 	fmt.Println("\nSetting up sidecar certificates...")
 
 	// Generate Client CA
@@ -306,15 +302,32 @@ func handleSidecarCertSetup(ctx context.Context, clientset kubernetes.Interface,
 		return fmt.Errorf("failed to generate client certificate: %w", err)
 	}
 
-	// Upload Client CA to Trustee KBS
-	// Note: We always use "default" namespace in the KBS path for consistency,
-	// regardless of where Trustee is deployed. This ensures all apps reference
-	// the same client CA location.
-	const kbsResourceNamespace = "default"
-	fmt.Printf("  - Uploading Client CA to Trustee KBS (Trustee namespace: %s, resource path: default)...\n", trusteeNamespace)
-	clientCAPath := kbsResourceNamespace + "/sidecar-tls/client-ca"
-	if err := trustee.UploadResource(ctx, clientset, trusteeNamespace, clientCAPath, clientCA.CertPEM); err != nil {
-		return fmt.Errorf("failed to upload client CA to KBS: %w", err)
+	var clientCAPath string
+	if cfg.TrusteeServer != "" && uploadClientCA {
+		sidecarClient, sidecarClientErr := k8s.NewClient(k8s.ClientOptions{})
+		if sidecarClientErr != nil {
+			return fmt.Errorf("failed to create Kubernetes client for sidecar cert setup: %w", sidecarClientErr)
+		}
+
+		// Upload Client CA to Trustee KBS
+		// Note: We always use "default" namespace in the KBS path for consistency,
+		// regardless of where Trustee is deployed. This ensures all apps reference
+		// the same client CA location.
+		const kbsResourceNamespace = "default"
+		fmt.Printf("  - Uploading Client CA to Trustee KBS (Trustee namespace: %s, resource path: default)...\n", trusteeNamespace)
+		clientCAPath = kbsResourceNamespace + "/sidecar-tls/client-ca"
+		clientset := sidecarClient.Clientset
+		if err := trustee.UploadResource(ctx, clientset, trusteeNamespace, clientCAPath, clientCA.CertPEM); err != nil {
+			return fmt.Errorf("failed to upload client CA to KBS: %w", err)
+		}
+	} else {
+		if cfg.TrusteeServer == "" {
+			fmt.Println("  - Skipping Client CA upload (Trustee server URL not provided)")
+		}
+
+		if !uploadClientCA {
+			fmt.Println("  - Skipping Client CA upload (--upload-client-ca flag not set)")
+		}
 	}
 
 	// Save certificates locally to ~/.kube/coco-sidecar/
@@ -337,7 +350,9 @@ func handleSidecarCertSetup(ctx context.Context, clientset kubernetes.Interface,
 	}
 
 	fmt.Println("\nSidecar certificates configured successfully!")
-	fmt.Printf("  - Client CA uploaded to: kbs:///%s\n", clientCAPath)
+	if clientCAPath != "" {
+		fmt.Printf("  - Client CA uploaded to: kbs:///%s\n", clientCAPath)
+	}
 	fmt.Printf("  - Client CA saved to: %s/ca-cert.pem (for signing server certs)\n", certDir)
 	fmt.Printf("  - Client certificate saved to: %s/client-cert.pem\n", certDir)
 	fmt.Printf("  - Client key saved to: %s/client-key.pem\n", certDir)
