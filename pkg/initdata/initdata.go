@@ -93,24 +93,27 @@ func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo, tr
 	return encoded, nil
 }
 
+// aaKBSConfig is used so the cert field is marshaled as TOML literal multi-line (”'...”').
+// That keeps real newlines in the output instead of escaped \n.
+type aaKBSConfig struct {
+	URL  string `toml:"url"`
+	Cert string `toml:"cert,omitempty,multiline"`
+}
+
 // generateAAToml creates the Attestation Agent configuration
 func generateAAToml(cfg *config.CocoConfig, trusteeURL string) (string, error) {
-	aaConfig := map[string]interface{}{
-		"token_configs": map[string]interface{}{
-			"kbs": map[string]interface{}{
-				"url": trusteeURL,
-			},
-		},
-	}
-
-	// Add CA cert if provided
+	kbs := aaKBSConfig{URL: trusteeURL}
 	if cfg.TrusteeCACert != "" {
 		cert, err := os.ReadFile(cfg.TrusteeCACert)
 		if err != nil {
 			return "", fmt.Errorf("failed to read CA cert: %w", err)
 		}
-		kbsConfig := aaConfig["token_configs"].(map[string]interface{})["kbs"].(map[string]interface{})
-		kbsConfig["cert"] = string(cert)
+		kbs.Cert = string(cert)
+	}
+	aaConfig := map[string]interface{}{
+		"token_configs": map[string]interface{}{
+			"kbs": kbs,
+		},
 	}
 
 	tomlData, err := toml.Marshal(aaConfig)
@@ -121,23 +124,31 @@ func generateAAToml(cfg *config.CocoConfig, trusteeURL string) (string, error) {
 	return string(tomlData), nil
 }
 
+// cdhKBCConfig is used so kbs_cert is marshaled as TOML literal multi-line (”'...”').
+// That keeps real newlines in the output instead of escaped \n.
+type cdhKBCConfig struct {
+	Name    string `toml:"name"`
+	URL     string `toml:"url"`
+	KbsCert string `toml:"kbs_cert,omitempty,multiline"`
+}
+
 // generateCDHToml creates the Confidential Data Hub configuration
 func generateCDHToml(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (string, error) {
-	cdhConfig := map[string]interface{}{
-		"kbc": map[string]interface{}{
-			"name": "cc_kbc",
-			"url":  cfg.TrusteeServer,
-		},
-	}
-
-	// Add KBS cert if provided
+	var trusteeCACertPEM string
 	if cfg.TrusteeCACert != "" {
 		cert, err := os.ReadFile(cfg.TrusteeCACert)
 		if err != nil {
 			return "", fmt.Errorf("failed to read CA cert: %w", err)
 		}
-		kbcConfig := cdhConfig["kbc"].(map[string]interface{})
-		kbcConfig["kbs_cert"] = string(cert)
+		trusteeCACertPEM = string(cert)
+	}
+
+	kbc := cdhKBCConfig{Name: "cc_kbc", URL: cfg.TrusteeServer}
+	if trusteeCACertPEM != "" {
+		kbc.KbsCert = trusteeCACertPEM
+	}
+	cdhConfig := map[string]interface{}{
+		"kbc": kbc,
 	}
 
 	// Add image registry configuration if provided or if imagePullSecrets exist
