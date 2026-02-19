@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/confidential-devhub/cococtl/pkg/k8s"
 	"github.com/confidential-devhub/cococtl/pkg/secrets"
 	"github.com/confidential-devhub/cococtl/pkg/sidecar/certs"
@@ -362,5 +363,42 @@ func TestSkipApply_SecretRefSplitting(t *testing.T) {
 	}
 	if clusterRefs[0].Name != "envfrom-secret" {
 		t.Errorf("First cluster ref should be 'envfrom-secret', got %q", clusterRefs[0].Name)
+	}
+}
+
+// TestApply_CertDirOverride tests that apply --cert-dir overrides config's Sidecar.CertDir
+// when loading/storing sidecar certificates (effective cert dir after validation).
+func TestApply_CertDirOverride(t *testing.T) {
+	defaultCertDir, err := config.GetDefaultCertDir()
+	if err != nil {
+		t.Fatalf("GetDefaultCertDir: %v", err)
+	}
+	customPath := "/custom/apply/cert/path"
+
+	tests := []struct {
+		name             string
+		configCertDir    string
+		overrideCertDir  string
+		wantEffectiveDir string
+	}{
+		{"no override -> use config default", defaultCertDir, "", defaultCertDir},
+		{"no override -> use config custom", customPath, "", customPath},
+		{"override set -> use override", defaultCertDir, "/override/path", "/override/path"},
+		{"override set, config has custom -> use override", customPath, "/override/path", "/override/path"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.Sidecar.CertDir = tt.configCertDir
+			cfg.TrusteeServer = "https://trustee.example.com"
+			cfg.RuntimeClass = "kata-cc"
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("config.Validate: %v", err)
+			}
+			got := effectiveSidecarCertDir(cfg, tt.overrideCertDir)
+			if got != tt.wantEffectiveDir {
+				t.Errorf("effectiveSidecarCertDir(cfg, %q) = %q, want %q", tt.overrideCertDir, got, tt.wantEffectiveDir)
+			}
+		})
 	}
 }
