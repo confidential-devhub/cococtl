@@ -292,7 +292,7 @@ data:
     policy_path = "/opt/confidential-containers/opa/policy.rego"
 
     [admin]
-    insecure_api = true
+    type = "InsecureAllowAll"
 
     [[plugins]]
     name = "resource"
