@@ -173,6 +173,7 @@ func CreateSealedSecret(secretName, namespace string, sealedData map[string]stri
 	// Now apply the secret
 	applyCmd := exec.Command("kubectl", "apply", "-f", "-")
 	if namespace != "" {
+		// #nosec G204 -- namespace is from trusted config, not user input
 		applyCmd = exec.Command("kubectl", "apply", "-f", "-", "-n", namespace)
 	}
 	applyCmd.Stdin = strings.NewReader(yamlContent)

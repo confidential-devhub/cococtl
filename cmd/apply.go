@@ -590,6 +590,7 @@ func updateManifestSecretNames(m *manifest.Manifest, sealedSecretNames map[strin
 }
 
 func applyWithKubectl(ctx context.Context, manifestPath string) error {
+	// #nosec G204 -- manifestPath is from trusted config/caller, not arbitrary user input
 	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", manifestPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
