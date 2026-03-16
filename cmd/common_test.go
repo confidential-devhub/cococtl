@@ -343,7 +343,7 @@ func TestDownloadRemoteFile_TooManyDocuments(t *testing.T) {
 	// Create YAML with more than 10 documents
 	var yaml strings.Builder
 	for i := 0; i < 15; i++ {
-		yaml.WriteString(fmt.Sprintf("---\napiVersion: v1\nkind: Pod\nmetadata:\n  name: pod-%d\n", i))
+		fmt.Fprintf(&yaml, "---\napiVersion: v1\nkind: Pod\nmetadata:\n  name: pod-%d\n", i)
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

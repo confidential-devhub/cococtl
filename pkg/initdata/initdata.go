@@ -65,8 +65,8 @@ func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (s
 
 	// Manually construct TOML with multiline strings for proper formatting
 	var tomlBuilder strings.Builder
-	tomlBuilder.WriteString(fmt.Sprintf("algorithm = \"%s\"\n", InitDataAlgorithm))
-	tomlBuilder.WriteString(fmt.Sprintf("version = \"%s\"\n", InitDataVersion))
+	fmt.Fprintf(&tomlBuilder, "algorithm = \"%s\"\n", InitDataAlgorithm)
+	fmt.Fprintf(&tomlBuilder, "version = \"%s\"\n", InitDataVersion)
 	tomlBuilder.WriteString("\n[data]\n")
 	tomlBuilder.WriteString("\"aa.toml\" = '''\n")
 	tomlBuilder.WriteString(aaToml)
