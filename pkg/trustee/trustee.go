@@ -534,6 +534,7 @@ func ConvertDockercfgToDockerConfigJSON(dockercfgData []byte) ([]byte, error) {
 // /opt/confidential-containers/kbs/repository/coco/reg-cred/dockerconfigjson
 func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
 	// Get the KBS pod name
+	// #nosec G204 -- namespace/secret names are from trusted config, not user input
 	cmd := exec.Command("kubectl", "get", "pod", "-n", trusteeNamespace,
 		"-l", "app=kbs", "-o", "jsonpath={.items[0].metadata.name}")
 	output, err := cmd.CombinedOutput()
@@ -555,6 +556,7 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 	}
 
 	// Get the secret data from Kubernetes
+	// #nosec G204 -- namespace/secret names are from trusted config, not user input
 	cmd = exec.Command("kubectl", "get", "secret", secretName, "-n", secretNamespace,
 		"-o", "jsonpath={.data}")
 	output, err = cmd.CombinedOutput()
@@ -655,6 +657,7 @@ func AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 // This is used by the default init container command to check attestation status
 func createDefaultAttestationStatus(namespace string) error {
 	// Get the KBS pod name
+	// #nosec G204 -- namespace is from trusted config, not user input
 	cmd := exec.Command("kubectl", "get", "pod", "-n", namespace,
 		"-l", "app=kbs", "-o", "jsonpath={.items[0].metadata.name}")
 	output, err := cmd.CombinedOutput()

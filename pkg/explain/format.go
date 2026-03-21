@@ -12,15 +12,15 @@ func FormatText(analysis *Analysis) string {
 	// Header
 	out.WriteString("📋 Analyzing manifest")
 	if analysis.ManifestPath != "" {
-		out.WriteString(fmt.Sprintf(": %s", analysis.ManifestPath))
+		fmt.Fprintf(&out, ": %s", analysis.ManifestPath)
 	}
 	out.WriteString("\n\n")
 
 	// Resource info
 	out.WriteString("🔍 Detected Resources:\n")
-	out.WriteString(fmt.Sprintf("  - %s: %s\n", analysis.ResourceKind, analysis.ResourceName))
+	fmt.Fprintf(&out, "  - %s: %s\n", analysis.ResourceKind, analysis.ResourceName)
 	if analysis.HasService {
-		out.WriteString(fmt.Sprintf("  - Service (port %d)\n", analysis.ServicePort))
+		fmt.Fprintf(&out, "  - Service (port %d)\n", analysis.ServicePort)
 	}
 	out.WriteString("\n")
 
@@ -28,7 +28,7 @@ func FormatText(analysis *Analysis) string {
 	out.WriteString("📝 Transformations Required:\n\n")
 
 	for i, t := range analysis.Transformations {
-		out.WriteString(fmt.Sprintf("%d. %s\n", i+1, t.Name))
+		fmt.Fprintf(&out, "%d. %s\n", i+1, t.Name)
 		out.WriteString(strings.Repeat("━", 60))
 		out.WriteString("\n")
 
@@ -47,13 +47,13 @@ func FormatText(analysis *Analysis) string {
 
 		// Why
 		if t.Reason != "" {
-			out.WriteString(fmt.Sprintf("ℹ️  Why: %s\n", t.Reason))
+			fmt.Fprintf(&out, "ℹ️  Why: %s\n", t.Reason)
 		}
 
 		// Details
 		if len(t.Details) > 0 {
 			for _, detail := range t.Details {
-				out.WriteString(fmt.Sprintf("ℹ️  %s\n", detail))
+				fmt.Fprintf(&out, "ℹ️  %s\n", detail)
 			}
 		}
 
@@ -62,9 +62,9 @@ func FormatText(analysis *Analysis) string {
 
 	// Summary
 	out.WriteString("✅ Summary:\n")
-	out.WriteString(fmt.Sprintf("   - %d transformation(s) applied\n", len(analysis.Transformations)))
+	fmt.Fprintf(&out, "   - %d transformation(s) applied\n", len(analysis.Transformations))
 	if analysis.SecretCount > 0 {
-		out.WriteString(fmt.Sprintf("   - %d secret(s) converted to sealed format\n", analysis.SecretCount))
+		fmt.Fprintf(&out, "   - %d secret(s) converted to sealed format\n", analysis.SecretCount)
 	}
 	if analysis.SidecarEnabled {
 		out.WriteString("   - Sidecar container injected for secure access\n")
@@ -78,15 +78,15 @@ func FormatText(analysis *Analysis) string {
 func FormatDiff(analysis *Analysis) string {
 	var out strings.Builder
 
-	out.WriteString(fmt.Sprintf("Manifest: %s → %s (CoCo-enabled)\n\n",
-		analysis.ManifestPath, strings.TrimSuffix(analysis.ManifestPath, ".yaml")+"-coco.yaml"))
+	fmt.Fprintf(&out, "Manifest: %s → %s (CoCo-enabled)\n\n",
+		analysis.ManifestPath, strings.TrimSuffix(analysis.ManifestPath, ".yaml")+"-coco.yaml")
 
 	for _, t := range analysis.Transformations {
-		out.WriteString(fmt.Sprintf("━━━ %s ━━━\n", t.Name))
+		fmt.Fprintf(&out, "━━━ %s ━━━\n", t.Name)
 		out.WriteString(formatSideBySide(t.Before, t.After))
 		out.WriteString("\n")
 		if t.Reason != "" {
-			out.WriteString(fmt.Sprintf("💡 %s\n\n", t.Reason))
+			fmt.Fprintf(&out, "💡 %s\n\n", t.Reason)
 		}
 	}
 
@@ -97,14 +97,14 @@ func FormatDiff(analysis *Analysis) string {
 func FormatMarkdown(analysis *Analysis) string {
 	var out strings.Builder
 
-	out.WriteString(fmt.Sprintf("# CoCo Transformation Analysis: %s\n\n", analysis.ResourceName))
+	fmt.Fprintf(&out, "# CoCo Transformation Analysis: %s\n\n", analysis.ResourceName)
 
 	// Resource info
 	out.WriteString("## 📋 Resources\n\n")
-	out.WriteString(fmt.Sprintf("- **Kind**: %s\n", analysis.ResourceKind))
-	out.WriteString(fmt.Sprintf("- **Name**: %s\n", analysis.ResourceName))
+	fmt.Fprintf(&out, "- **Kind**: %s\n", analysis.ResourceKind)
+	fmt.Fprintf(&out, "- **Name**: %s\n", analysis.ResourceName)
 	if analysis.HasService {
-		out.WriteString(fmt.Sprintf("- **Service Port**: %d\n", analysis.ServicePort))
+		fmt.Fprintf(&out, "- **Service Port**: %d\n", analysis.ServicePort)
 	}
 	out.WriteString("\n")
 
@@ -112,11 +112,11 @@ func FormatMarkdown(analysis *Analysis) string {
 	out.WriteString("## 📝 Transformations\n\n")
 
 	for i, t := range analysis.Transformations {
-		out.WriteString(fmt.Sprintf("### %d. %s\n\n", i+1, t.Name))
-		out.WriteString(fmt.Sprintf("**Description**: %s\n\n", t.Description))
+		fmt.Fprintf(&out, "### %d. %s\n\n", i+1, t.Name)
+		fmt.Fprintf(&out, "**Description**: %s\n\n", t.Description)
 
 		if t.Reason != "" {
-			out.WriteString(fmt.Sprintf("**Why**: %s\n\n", t.Reason))
+			fmt.Fprintf(&out, "**Why**: %s\n\n", t.Reason)
 		}
 
 		if t.Before != "" {
@@ -134,7 +134,7 @@ func FormatMarkdown(analysis *Analysis) string {
 		if len(t.Details) > 0 {
 			out.WriteString("**Details**:\n")
 			for _, detail := range t.Details {
-				out.WriteString(fmt.Sprintf("- %s\n", detail))
+				fmt.Fprintf(&out, "- %s\n", detail)
 			}
 			out.WriteString("\n")
 		}
@@ -142,9 +142,9 @@ func FormatMarkdown(analysis *Analysis) string {
 
 	// Summary
 	out.WriteString("## ✅ Summary\n\n")
-	out.WriteString(fmt.Sprintf("- **Total Transformations**: %d\n", len(analysis.Transformations)))
+	fmt.Fprintf(&out, "- **Total Transformations**: %d\n", len(analysis.Transformations))
 	if analysis.SecretCount > 0 {
-		out.WriteString(fmt.Sprintf("- **Secrets Converted**: %d\n", analysis.SecretCount))
+		fmt.Fprintf(&out, "- **Secrets Converted**: %d\n", analysis.SecretCount)
 	}
 	if analysis.SidecarEnabled {
 		out.WriteString("- **Sidecar**: Enabled\n")
@@ -195,7 +195,7 @@ func formatSideBySide(before, after string) string {
 		}
 		beforeLine = fmt.Sprintf("%-35s", beforeLine)
 
-		out.WriteString(fmt.Sprintf("%s │ %s\n", beforeLine, afterLine))
+		fmt.Fprintf(&out, "%s │ %s\n", beforeLine, afterLine)
 	}
 
 	return out.String()

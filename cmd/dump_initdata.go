@@ -71,6 +71,10 @@ func runDumpInitdata(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to load config from %s: %w", configPath, err)
 	}
 
+	if cfg.TrusteeServer == "" {
+		return fmt.Errorf("trustee_server is empty, initdata cannot be generated")
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}

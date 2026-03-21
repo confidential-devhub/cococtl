@@ -5,10 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
-
-	"k8s.io/client-go/kubernetes"
 
 	"github.com/confidential-devhub/cococtl/pkg/cluster"
 	"github.com/confidential-devhub/cococtl/pkg/config"
@@ -54,6 +51,8 @@ func init() {
 	initCmd.Flags().String("trustee-url", "", "Trustee server URL (skip deployment if provided)")
 	initCmd.Flags().String("runtime-class", "", "RuntimeClass to use (default: kata-cc)")
 	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates")
+	initCmd.Flags().Bool("upload-client-ca", false, "Upload client CA to Trustee KBS")
+	initCmd.Flags().String("cert-dir", "", "Default directory to store/load sidecar certificates and keys (default: $HOME/.kube/coco-sidecar)")
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
@@ -64,6 +63,8 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	trusteeURL, _ := cmd.Flags().GetString("trustee-url")
 	runtimeClass, _ := cmd.Flags().GetString("runtime-class")
 	enableSidecar, _ := cmd.Flags().GetBool("enable-sidecar")
+	uploadClientCA, _ := cmd.Flags().GetBool("upload-client-ca")
+	certDir, _ := cmd.Flags().GetString("cert-dir")
 
 	// Get default config path if not specified
 	if outputPath == "" {
@@ -91,6 +92,13 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	cfg := config.DefaultConfig()
 
+	// If --cert-dir is not provided, use the default directory
+	certDir, err := resolveCertDir(certDir)
+	if err != nil {
+		return fmt.Errorf("failed to get cert directory: %w", err)
+	}
+	cfg.Sidecar.CertDir = certDir
+
 	// Handle Trustee setup
 	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cmd, cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
 	if err != nil {
@@ -110,41 +118,15 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	// Handle sidecar certificate setup if enabled
 	if enableSidecar {
-		sidecarClient, err := k8s.NewClient(k8s.ClientOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to create Kubernetes client for sidecar cert setup: %w", err)
-		}
-		if err := handleSidecarCertSetup(cmd.Context(), sidecarClient.Clientset, sidecarNamespace); err != nil {
+		if err := handleSidecarCertSetup(cmd.Context(), cfg, sidecarNamespace, uploadClientCA); err != nil {
 			return err
 		}
 	}
 
-	// Set runtime class from flag if provided, otherwise auto-detect
-	if runtimeClass != "" {
-		cfg.RuntimeClass = runtimeClass
-	} else {
-		// Auto-detect RuntimeClass with SNP or TDX support
-		// Create Kubernetes client for runtime class detection
-		client, err := k8s.NewClient(k8s.ClientOptions{})
-		if err != nil {
-			// Log warning but don't fail - use default runtime class
-			fmt.Printf("Warning: unable to create Kubernetes client: %v\n", err)
-			cfg.RuntimeClass = config.DefaultRuntimeClass
-		} else {
-			ctx := cmd.Context()
-			cfg.RuntimeClass = cluster.DetectRuntimeClass(ctx, client.Clientset, config.DefaultRuntimeClass)
-		}
-	}
-
-	// In non-interactive mode, show the RuntimeClass being used
-	if !interactive {
-		fmt.Printf("RuntimeClass: %s\n", cfg.RuntimeClass)
-	}
+	handleRuntimeClassSetup(cmd, cfg, runtimeClass, interactive)
 
 	// Continue with other configuration prompts if interactive
 	if interactive {
-		fmt.Println()
-		cfg.RuntimeClass = promptString("Default RuntimeClass", cfg.RuntimeClass, false)
 		// Only ask for CA cert if user provided their own Trustee URL
 		if !trusteeDeployed {
 			cfg.TrusteeCACert = promptString("Trustee CA cert location (optional)", cfg.TrusteeCACert, false)
@@ -205,6 +187,19 @@ func promptString(prompt, defaultValue string, required bool) string {
 	}
 
 	return input
+}
+
+// resolveCertDir returns the directory to use for sidecar certs: the given path if non-empty, otherwise the default.
+func resolveCertDir(certDir string) (string, error) {
+	if certDir != "" {
+		return certDir, nil
+	}
+
+	certDir = config.GetDefaultCertDir()
+	if certDir == "" {
+		return "", fmt.Errorf("failed to get default cert directory")
+	}
+	return certDir, nil
 }
 
 func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive, skipDeploy bool, namespace, url string) (bool, string, error) {
@@ -311,7 +306,7 @@ func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive,
 // uploads the Client CA to Trustee KBS, and saves both the CA and client certificate locally.
 // The CA is needed during 'apply' to sign per-app server certificates.
 // The trusteeNamespace parameter specifies where the Trustee KBS pod is deployed.
-func handleSidecarCertSetup(ctx context.Context, clientset kubernetes.Interface, trusteeNamespace string) error {
+func handleSidecarCertSetup(ctx context.Context, cfg *config.CocoConfig, trusteeNamespace string, uploadClientCA bool) error {
 	fmt.Println("\nSetting up sidecar certificates...")
 
 	// Generate Client CA
@@ -328,24 +323,35 @@ func handleSidecarCertSetup(ctx context.Context, clientset kubernetes.Interface,
 		return fmt.Errorf("failed to generate client certificate: %w", err)
 	}
 
-	// Upload Client CA to Trustee KBS
-	// Note: We always use "default" namespace in the KBS path for consistency,
-	// regardless of where Trustee is deployed. This ensures all apps reference
-	// the same client CA location.
-	const kbsResourceNamespace = "default"
-	fmt.Printf("  - Uploading Client CA to Trustee KBS (Trustee namespace: %s, resource path: default)...\n", trusteeNamespace)
-	clientCAPath := kbsResourceNamespace + "/sidecar-tls/client-ca"
-	if err := trustee.UploadResource(ctx, clientset, trusteeNamespace, clientCAPath, clientCA.CertPEM); err != nil {
-		return fmt.Errorf("failed to upload client CA to KBS: %w", err)
+	var clientCAPath string
+	if cfg.TrusteeServer != "" && uploadClientCA {
+		sidecarClient, sidecarClientErr := k8s.NewClient(k8s.ClientOptions{})
+		if sidecarClientErr != nil {
+			return fmt.Errorf("failed to create Kubernetes client for sidecar cert setup: %w", sidecarClientErr)
+		}
+
+		// Upload Client CA to Trustee KBS
+		// Note: We always use "default" namespace in the KBS path for consistency,
+		// regardless of where Trustee is deployed. This ensures all apps reference
+		// the same client CA location.
+		const kbsResourceNamespace = "default"
+		fmt.Printf("  - Uploading Client CA to Trustee KBS (Trustee namespace: %s, resource path: default)...\n", trusteeNamespace)
+		clientCAPath = kbsResourceNamespace + "/sidecar-tls/client-ca"
+		clientset := sidecarClient.Clientset
+		if err := trustee.UploadResource(ctx, clientset, trusteeNamespace, clientCAPath, clientCA.CertPEM); err != nil {
+			return fmt.Errorf("failed to upload client CA to KBS: %w", err)
+		}
+	} else {
+		if cfg.TrusteeServer == "" {
+			fmt.Println("  - Skipping Client CA upload (Trustee server URL not provided)")
+		}
+
+		if !uploadClientCA {
+			fmt.Println("  - Skipping Client CA upload (--upload-client-ca flag not set)")
+		}
 	}
 
-	// Save certificates locally to ~/.kube/coco-sidecar/
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-	certDir := filepath.Join(homeDir, ".kube", "coco-sidecar")
-
+	certDir := cfg.Sidecar.CertDir
 	fmt.Printf("  - Saving certificates to %s...\n", certDir)
 
 	// Save Client CA (needed to sign server certificates during apply)
@@ -359,10 +365,37 @@ func handleSidecarCertSetup(ctx context.Context, clientset kubernetes.Interface,
 	}
 
 	fmt.Println("\nSidecar certificates configured successfully!")
-	fmt.Printf("  - Client CA uploaded to: kbs:///%s\n", clientCAPath)
+	if clientCAPath != "" {
+		fmt.Printf("  - Client CA uploaded to: kbs:///%s\n", clientCAPath)
+	}
 	fmt.Printf("  - Client CA saved to: %s/ca-cert.pem (for signing server certs)\n", certDir)
 	fmt.Printf("  - Client certificate saved to: %s/client-cert.pem\n", certDir)
 	fmt.Printf("  - Client key saved to: %s/client-key.pem\n", certDir)
 
 	return nil
+}
+
+func handleRuntimeClassSetup(cmd *cobra.Command, cfg *config.CocoConfig, runtimeClass string, interactive bool) {
+	// Set runtime class from flag if provided, otherwise auto-detect
+	if runtimeClass != "" {
+		cfg.RuntimeClass = runtimeClass
+	} else {
+		// Auto-detect RuntimeClass with SNP or TDX support
+		// Create Kubernetes client for runtime class detection
+		client, err := k8s.NewClient(k8s.ClientOptions{})
+		if err != nil {
+			// Log warning but don't fail - use default runtime class
+			fmt.Printf("Warning: unable to create Kubernetes client: %v\n", err)
+			cfg.RuntimeClass = config.DefaultRuntimeClass
+		} else {
+			ctx := cmd.Context()
+			cfg.RuntimeClass = cluster.DetectRuntimeClass(ctx, client.Clientset, config.DefaultRuntimeClass)
+		}
+	}
+	if interactive {
+		cfg.RuntimeClass = promptString("Default RuntimeClass", cfg.RuntimeClass, false)
+	}
+
+	fmt.Println()
+	fmt.Printf("Using RuntimeClass: %s\n", cfg.RuntimeClass)
 }
