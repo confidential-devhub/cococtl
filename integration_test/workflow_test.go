@@ -408,12 +408,18 @@ func TestWorkflow_CompleteWithAllFeatures(t *testing.T) {
 		t.Fatalf("Failed to parse initdata TOML: %v", err)
 	}
 
-	// Verify initdata has required sections
-	if initdataContent["aa.toml"] == "" {
-		t.Error("aa.toml missing in initdata")
+	// Verify initdata has required sections.
+	// The TOML structure is: algorithm, version at top level, then [data] section
+	// containing "aa.toml", "cdh.toml", "policy.rego" as keys.
+	dataSection, ok := initdataContent["data"].(map[string]interface{})
+	if !ok {
+		t.Fatal("initdata missing [data] section")
 	}
-	if initdataContent["cdh.toml"] == "" {
-		t.Error("cdh.toml missing in initdata")
+	if v, ok := dataSection["aa.toml"]; !ok || v == "" {
+		t.Error("aa.toml missing or empty in initdata [data] section")
+	}
+	if v, ok := dataSection["cdh.toml"]; !ok || v == "" {
+		t.Error("cdh.toml missing or empty in initdata [data] section")
 	}
 
 	// Verify backup was created
