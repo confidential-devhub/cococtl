@@ -42,14 +42,25 @@ func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (s
 		return "", fmt.Errorf("trustee server URL is required for initdata generation")
 	}
 
+	// Read the CA cert once so that both aa.toml and cdh.toml are guaranteed
+	// to embed identical content (avoids a TOCTOU window from multiple reads).
+	var caCert string
+	if cfg.TrusteeCACert != "" {
+		raw, err := os.ReadFile(cfg.TrusteeCACert)
+		if err != nil {
+			return "", fmt.Errorf("failed to read CA cert from %q: %w", cfg.TrusteeCACert, err)
+		}
+		caCert = string(raw)
+	}
+
 	// Generate aa.toml (Attestation Agent configuration)
-	aaToml, err := generateAAToml(cfg)
+	aaToml, err := generateAAToml(cfg, caCert)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate aa.toml: %w", err)
 	}
 
 	// Generate cdh.toml (Confidential Data Hub configuration)
-	cdhToml, err := generateCDHToml(cfg, imagePullSecrets)
+	cdhToml, err := generateCDHToml(cfg, caCert, imagePullSecrets)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate cdh.toml: %w", err)
 	}
@@ -90,8 +101,9 @@ func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (s
 	return encoded, nil
 }
 
-// generateAAToml creates the Attestation Agent configuration
-func generateAAToml(cfg *config.CocoConfig) (string, error) {
+// generateAAToml creates the Attestation Agent configuration.
+// caCert is the PEM content of the CA certificate (empty string if not configured).
+func generateAAToml(cfg *config.CocoConfig, caCert string) (string, error) {
 	aaConfig := map[string]interface{}{
 		"token_configs": map[string]interface{}{
 			"kbs": map[string]interface{}{
@@ -100,14 +112,9 @@ func generateAAToml(cfg *config.CocoConfig) (string, error) {
 		},
 	}
 
-	// Add CA cert if provided
-	if cfg.TrusteeCACert != "" {
-		cert, err := os.ReadFile(cfg.TrusteeCACert)
-		if err != nil {
-			return "", fmt.Errorf("failed to read CA cert: %w", err)
-		}
+	if caCert != "" {
 		kbsConfig := aaConfig["token_configs"].(map[string]interface{})["kbs"].(map[string]interface{})
-		kbsConfig["cert"] = string(cert)
+		kbsConfig["cert"] = caCert
 	}
 
 	tomlData, err := toml.Marshal(aaConfig)
@@ -118,8 +125,9 @@ func generateAAToml(cfg *config.CocoConfig) (string, error) {
 	return string(tomlData), nil
 }
 
-// generateCDHToml creates the Confidential Data Hub configuration
-func generateCDHToml(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (string, error) {
+// generateCDHToml creates the Confidential Data Hub configuration.
+// caCert is the PEM content of the CA certificate (empty string if not configured).
+func generateCDHToml(cfg *config.CocoConfig, caCert string, imagePullSecrets []ImagePullSecretInfo) (string, error) {
 	cdhConfig := map[string]interface{}{
 		"kbc": map[string]interface{}{
 			"name": "cc_kbc",
@@ -127,18 +135,13 @@ func generateCDHToml(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretI
 		},
 	}
 
-	// Add KBS cert if provided
-	if cfg.TrusteeCACert != "" {
-		cert, err := os.ReadFile(cfg.TrusteeCACert)
-		if err != nil {
-			return "", fmt.Errorf("failed to read CA cert: %w", err)
-		}
+	if caCert != "" {
 		kbcConfig := cdhConfig["kbc"].(map[string]interface{})
-		kbcConfig["kbs_cert"] = string(cert)
+		kbcConfig["kbs_cert"] = caCert
 	}
 
 	// Add image registry configuration if provided or if imagePullSecrets exist
-	if cfg.RegistryConfigURI != "" || cfg.RegistryCredURI != "" || cfg.ContainerPolicyURI != "" || cfg.TrusteeCACert != "" || len(imagePullSecrets) > 0 {
+	if cfg.RegistryConfigURI != "" || cfg.RegistryCredURI != "" || cfg.ContainerPolicyURI != "" || caCert != "" || len(imagePullSecrets) > 0 {
 		imageConfig := make(map[string]interface{})
 
 		// Add image security policy URI if provided
@@ -165,13 +168,8 @@ func generateCDHToml(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretI
 			imageConfig["registry_configuration_uri"] = cfg.RegistryConfigURI
 		}
 
-		// If we have a custom CA cert, add it to extra_root_certificates
-		if cfg.TrusteeCACert != "" {
-			cert, err := os.ReadFile(cfg.TrusteeCACert)
-			if err != nil {
-				return "", fmt.Errorf("failed to read CA cert for image config: %w", err)
-			}
-			imageConfig["extra_root_certificates"] = []string{string(cert)}
+		if caCert != "" {
+			imageConfig["extra_root_certificates"] = []string{caCert}
 		}
 
 		if len(imageConfig) > 0 {
