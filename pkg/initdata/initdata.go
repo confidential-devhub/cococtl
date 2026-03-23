@@ -20,12 +20,11 @@ const (
 	InitDataAlgorithm = "sha256"
 )
 
-// InitData represents the structure of initdata TOML
+// InitData represents the structure of initdata TOML.
+// The [data] section holds the embedded configuration files keyed by filename.
 type InitData struct {
-	Version   string            `toml:"version"`
 	Algorithm string            `toml:"algorithm"`
-	AAToml    string            `toml:"aa.toml"`
-	CDHToml   string            `toml:"cdh.toml"`
+	Version   string            `toml:"version"`
 	Data      map[string]string `toml:"data"`
 }
 
@@ -67,22 +66,20 @@ func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (s
 		policy = getDefaultPolicy()
 	}
 
-	// Manually construct TOML with multiline strings for proper formatting
-	var tomlBuilder strings.Builder
-	fmt.Fprintf(&tomlBuilder, "algorithm = \"%s\"\n", InitDataAlgorithm)
-	fmt.Fprintf(&tomlBuilder, "version = \"%s\"\n", InitDataVersion)
-	tomlBuilder.WriteString("\n[data]\n")
-	tomlBuilder.WriteString("\"aa.toml\" = '''\n")
-	tomlBuilder.WriteString(aaToml)
-	tomlBuilder.WriteString("'''\n")
-	tomlBuilder.WriteString("\"cdh.toml\" = '''\n")
-	tomlBuilder.WriteString(cdhToml)
-	tomlBuilder.WriteString("'''\n")
-	tomlBuilder.WriteString("\"policy.rego\" = '''\n")
-	tomlBuilder.WriteString(policy)
-	tomlBuilder.WriteString("'''\n")
+	id := InitData{
+		Algorithm: InitDataAlgorithm,
+		Version:   InitDataVersion,
+		Data: map[string]string{
+			"aa.toml":     aaToml,
+			"cdh.toml":    cdhToml,
+			"policy.rego": policy,
+		},
+	}
 
-	tomlData := []byte(tomlBuilder.String())
+	tomlData, err := toml.Marshal(id)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal initdata: %w", err)
+	}
 
 	// Compress with gzip and encode to base64
 	encoded, err := compressAndEncode(tomlData)
