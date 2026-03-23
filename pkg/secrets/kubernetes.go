@@ -185,79 +185,64 @@ func CreateSealedSecret(secretName, namespace string, sealedData map[string]stri
 	return sealedSecretName, nil
 }
 
+// groupedSecret holds the per-key sealed values and the namespace for one secret.
+type groupedSecret struct {
+	namespace  string
+	sealedData map[string]string // key -> sealedValue
+}
+
+// groupSealedSecrets groups a flat []*SealedSecretData slice by secret name.
+// The namespace is taken from the first entry seen for each secret name.
+// If two entries share the same SecretName and Key, the later entry wins;
+// callers are expected to supply at most one entry per (SecretName, Key) pair.
+func groupSealedSecrets(sealedSecrets []*SealedSecretData) map[string]groupedSecret {
+	groups := make(map[string]groupedSecret, len(sealedSecrets))
+	for _, s := range sealedSecrets {
+		g, exists := groups[s.SecretName]
+		if !exists {
+			g = groupedSecret{
+				namespace:  s.Namespace,
+				sealedData: make(map[string]string),
+			}
+		}
+		g.sealedData[s.Key] = s.SealedSecret
+		groups[s.SecretName] = g
+	}
+	return groups
+}
+
 // GenerateSealedSecretsYAML generates YAML manifests for sealed secrets
 // Returns a map of original secret name -> sealed secret name, and a combined YAML string
 func GenerateSealedSecretsYAML(sealedSecrets []*SealedSecretData) (map[string]string, string, error) {
-	// Group by secret name
-	secretMap := make(map[string]map[string]string) // secretName -> key -> sealedValue
+	groups := groupSealedSecrets(sealedSecrets)
 
-	for _, sealed := range sealedSecrets {
-		if secretMap[sealed.SecretName] == nil {
-			secretMap[sealed.SecretName] = make(map[string]string)
-		}
-		secretMap[sealed.SecretName][sealed.Key] = sealed.SealedSecret
-	}
+	result := make(map[string]string, len(groups))
+	yamlParts := make([]string, 0, len(groups))
 
-	// Generate YAML for each sealed secret
-	result := make(map[string]string)
-	yamlParts := make([]string, 0, len(secretMap))
-
-	for secretName, sealedData := range secretMap {
-		// Use namespace from first sealed secret entry
-		var namespace string
-		for _, sealed := range sealedSecrets {
-			if sealed.SecretName == secretName {
-				namespace = sealed.Namespace
-				break
-			}
-		}
-
-		sealedSecretName, yamlContent, err := GenerateSealedSecretYAML(secretName, namespace, sealedData)
+	for secretName, g := range groups {
+		sealedSecretName, yamlContent, err := GenerateSealedSecretYAML(secretName, g.namespace, g.sealedData)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to generate sealed secret YAML for %s: %w", secretName, err)
 		}
-
 		result[secretName] = sealedSecretName
 		yamlParts = append(yamlParts, yamlContent)
 	}
 
-	// Combine all YAMLs with --- separator
-	combinedYAML := strings.Join(yamlParts, "---\n")
-
-	return result, combinedYAML, nil
+	return result, strings.Join(yamlParts, "---\n"), nil
 }
 
 // CreateSealedSecrets creates K8s sealed secrets for all provided sealed secret data
 // Returns a map of original secret name -> sealed secret name
 func CreateSealedSecrets(sealedSecrets []*SealedSecretData) (map[string]string, error) {
-	// Group by secret name
-	secretMap := make(map[string]map[string]string) // secretName -> key -> sealedValue
+	groups := groupSealedSecrets(sealedSecrets)
 
-	for _, sealed := range sealedSecrets {
-		if secretMap[sealed.SecretName] == nil {
-			secretMap[sealed.SecretName] = make(map[string]string)
-		}
-		secretMap[sealed.SecretName][sealed.Key] = sealed.SealedSecret
-	}
+	result := make(map[string]string, len(groups))
 
-	// Create sealed secrets
-	result := make(map[string]string)
-
-	for secretName, sealedData := range secretMap {
-		// Use namespace from first sealed secret entry
-		var namespace string
-		for _, sealed := range sealedSecrets {
-			if sealed.SecretName == secretName {
-				namespace = sealed.Namespace
-				break
-			}
-		}
-
-		sealedSecretName, err := CreateSealedSecret(secretName, namespace, sealedData)
+	for secretName, g := range groups {
+		sealedSecretName, err := CreateSealedSecret(secretName, g.namespace, g.sealedData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create sealed secret for %s: %w", secretName, err)
 		}
-
 		result[secretName] = sealedSecretName
 	}
 

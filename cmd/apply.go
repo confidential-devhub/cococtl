@@ -621,18 +621,12 @@ func addSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeNamespace 
 		}
 
 		// Add the secret to Trustee
-		if err := addK8sSecretToTrustee(trusteeNamespace, ref.Name, secretNamespace); err != nil {
+		if err := trustee.AddK8sSecretToTrustee(trusteeNamespace, ref.Name, secretNamespace); err != nil {
 			return fmt.Errorf("failed to add secret %s: %w", ref.Name, err)
 		}
 	}
 
 	return nil
-}
-
-// addK8sSecretToTrustee is a wrapper that calls the trustee package function
-// This is kept separate to maintain the isolation of the temporary functionality
-func addK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
-	return trustee.AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
 }
 
 // handleImagePullSecrets processes imagePullSecrets from the manifest
@@ -740,18 +734,12 @@ func addImagePullSecretsToTrustee(secretRefs []secrets.SecretReference, trusteeN
 		}
 
 		// Add the imagePullSecret to Trustee
-		if err := addImagePullSecretToTrustee(trusteeNamespace, ref.Name, secretNamespace); err != nil {
+		if err := trustee.AddImagePullSecretToTrustee(trusteeNamespace, ref.Name, secretNamespace); err != nil {
 			return fmt.Errorf("failed to add imagePullSecret %s: %w", ref.Name, err)
 		}
 	}
 
 	return nil
-}
-
-// addImagePullSecretToTrustee is a wrapper that calls the trustee package function
-// This is kept separate to maintain the isolation of the temporary functionality
-func addImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace string) error {
-	return trustee.AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
 }
 
 // handleSidecarServerCert generates and uploads a server certificate for the sidecar.

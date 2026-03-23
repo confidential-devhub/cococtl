@@ -10,6 +10,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// workloadKinds is the canonical set of Kubernetes workload resource kinds
+// that wrap a pod template spec. CronJob is intentionally excluded because
+// its pod template is nested one level deeper (spec.jobTemplate.spec.template).
+// Pod is also excluded: it is a direct pod, not a wrapper, so call sites that
+// need to handle Pod do so explicitly alongside a workloadKinds lookup.
+var workloadKinds = map[string]bool{
+	"Deployment":  true,
+	"StatefulSet": true,
+	"DaemonSet":   true,
+	"ReplicaSet":  true,
+	"Job":         true,
+}
+
 // Manifest represents a Kubernetes manifest.
 type Manifest struct {
 	data map[string]interface{}
@@ -22,33 +35,39 @@ type Set struct {
 	path      string
 }
 
-// Load reads and parses a Kubernetes manifest from a file.
-func Load(path string) (*Manifest, error) {
-	// Validate and sanitize the path to prevent directory traversal
-	// Source - https://stackoverflow.com/a/57534618
-	// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
-	// Retrieved 2025-11-14, License - CC BY-SA 4.0
+// validateAndCleanPath sanitizes a manifest path to prevent directory traversal.
+// It returns the absolute, cleaned path on success.
+// Source - https://stackoverflow.com/a/57534618
+// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
+// Retrieved 2025-11-14, License - CC BY-SA 4.0
+func validateAndCleanPath(path string) (string, error) {
 	cleanPath := filepath.Clean(path)
 
-	// For absolute paths, validate they don't escape the filesystem root
-	// For relative paths, ensure they're relative to current directory
 	if filepath.IsAbs(cleanPath) {
-		// Absolute paths are allowed for manifest files
-		// but ensure path doesn't contain traversal attempts
 		if strings.Contains(path, "..") {
-			return nil, fmt.Errorf("invalid manifest path: contains directory traversal")
+			return "", fmt.Errorf("invalid manifest path: contains directory traversal")
 		}
 	} else {
-		// For relative paths, ensure they resolve within current directory
 		cwd, err := os.Getwd()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get current directory: %w", err)
+			return "", fmt.Errorf("failed to get current directory: %w", err)
 		}
 		absPath := filepath.Join(cwd, cleanPath)
-		if !strings.HasPrefix(absPath, cwd) {
-			return nil, fmt.Errorf("invalid manifest path: escapes current directory")
+		rel, err := filepath.Rel(cwd, absPath)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return "", fmt.Errorf("invalid manifest path: escapes current directory")
 		}
 		cleanPath = absPath
+	}
+
+	return cleanPath, nil
+}
+
+// Load reads and parses a Kubernetes manifest from a file.
+func Load(path string) (*Manifest, error) {
+	cleanPath, err := validateAndCleanPath(path)
+	if err != nil {
+		return nil, err
 	}
 
 	// #nosec G304 - Path is validated above
@@ -73,31 +92,9 @@ func Load(path string) (*Manifest, error) {
 // Returns a Set containing all documents. If only one document is found,
 // it still returns a Set with a single Manifest for consistency.
 func LoadMultiDocument(path string) (*Set, error) {
-	// Validate and sanitize the path to prevent directory traversal
-	// Source - https://stackoverflow.com/a/57534618
-	// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
-	// Retrieved 2025-11-14, License - CC BY-SA 4.0
-	cleanPath := filepath.Clean(path)
-
-	// For absolute paths, validate they don't escape the filesystem root
-	// For relative paths, ensure they're relative to current directory
-	if filepath.IsAbs(cleanPath) {
-		// Absolute paths are allowed for manifest files
-		// but ensure path doesn't contain traversal attempts
-		if strings.Contains(path, "..") {
-			return nil, fmt.Errorf("invalid manifest path: contains directory traversal")
-		}
-	} else {
-		// For relative paths, ensure they resolve within current directory
-		cwd, err := os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get current directory: %w", err)
-		}
-		absPath := filepath.Join(cwd, cleanPath)
-		if !strings.HasPrefix(absPath, cwd) {
-			return nil, fmt.Errorf("invalid manifest path: escapes current directory")
-		}
-		cleanPath = absPath
+	cleanPath, err := validateAndCleanPath(path)
+	if err != nil {
+		return nil, err
 	}
 
 	// #nosec G304 - Path is validated above
@@ -163,13 +160,9 @@ func (ms *Set) GetManifests() []*Manifest {
 // GetPrimaryManifest returns the first workload manifest (Pod, Deployment, etc.).
 // Returns nil if no workload manifest is found.
 func (ms *Set) GetPrimaryManifest() *Manifest {
-	workloadKinds := map[string]bool{
-		"Pod": true, "Deployment": true, "StatefulSet": true,
-		"DaemonSet": true, "ReplicaSet": true, "Job": true,
-	}
-
 	for _, m := range ms.manifests {
-		if workloadKinds[m.GetKind()] {
+		kind := m.GetKind()
+		if kind == "Pod" || workloadKinds[kind] {
 			return m
 		}
 	}
@@ -400,7 +393,7 @@ func (m *Manifest) SetAnnotation(key, value string) error {
 	kind := m.GetKind()
 
 	// For workload resources, set annotation on pod template
-	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+	if workloadKinds[kind] {
 		return m.setPodTemplateAnnotation(key, value)
 	}
 
@@ -457,7 +450,7 @@ func (m *Manifest) GetAnnotation(key string) string {
 	kind := m.GetKind()
 
 	// For workload resources, get annotation from pod template
-	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+	if workloadKinds[kind] {
 		return m.getPodTemplateAnnotation(key)
 	}
 
@@ -523,7 +516,7 @@ func (m *Manifest) GetPodSpec() (map[string]interface{}, error) {
 	}
 
 	// For Deployment, StatefulSet, DaemonSet, ReplicaSet, Job
-	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+	if workloadKinds[kind] {
 		template, ok := spec["template"].(map[string]interface{})
 		if !ok {
 			return nil, fmt.Errorf("template field not found in %s spec", kind)
@@ -544,7 +537,7 @@ func (m *Manifest) GetPodLabels() (map[string]interface{}, error) {
 	kind := m.GetKind()
 
 	// For workload resources, get labels from pod template
-	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+	if workloadKinds[kind] {
 		spec, err := m.GetSpec()
 		if err != nil {
 			return nil, err
