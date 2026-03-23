@@ -30,25 +30,31 @@ type SecretReference struct {
 	Usages      []SecretUsage // How the secret is used
 }
 
-// DetectSecrets scans a manifest for all secret references
-func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, error) {
-	// Create manifest wrapper to reuse existing manifest methods
+// manifestPreamble extracts the resolved namespace and pod spec from raw manifest data.
+// Both DetectSecrets and DetectImagePullSecretsWithServiceAccount share this logic.
+func manifestPreamble(manifestData map[string]interface{}) (string, map[string]interface{}, error) {
 	m := manifest.GetFromData(manifestData)
 
-	// Extract namespace using manifest method
 	namespace := m.GetNamespace()
-
-	// If manifest doesn't specify namespace, get current kubectl context namespace
 	if namespace == "" {
 		var err error
 		namespace, err = k8s.GetCurrentNamespace()
 		if err != nil {
-			return nil, fmt.Errorf("manifest has no namespace and failed to get current namespace: %w", err)
+			return "", nil, fmt.Errorf("manifest has no namespace and failed to get current namespace: %w", err)
 		}
 	}
 
-	// Get pod spec using manifest method (works for both Pod and Deployment!)
 	podSpec, err := m.GetPodSpec()
+	if err != nil {
+		return "", nil, err
+	}
+
+	return namespace, podSpec, nil
+}
+
+// DetectSecrets scans a manifest for all secret references
+func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, error) {
+	namespace, podSpec, err := manifestPreamble(manifestData)
 	if err != nil {
 		return nil, err
 	}
@@ -304,22 +310,7 @@ func detectImagePullSecrets(spec map[string]interface{}, namespace string, secre
 // The clientset parameter is used for the service account fallback lookup;
 // pass nil to skip the fallback.
 func DetectImagePullSecretsWithServiceAccount(ctx context.Context, clientset kubernetes.Interface, manifestData map[string]interface{}) ([]SecretReference, error) {
-	// Create manifest wrapper to reuse existing manifest methods
-	m := manifest.GetFromData(manifestData)
-
-	namespace := m.GetNamespace()
-
-	// If manifest doesn't specify namespace, get current kubectl context namespace
-	if namespace == "" {
-		var err error
-		namespace, err = k8s.GetCurrentNamespace()
-		if err != nil {
-			return nil, fmt.Errorf("manifest has no namespace and failed to get current namespace: %w", err)
-		}
-	}
-
-	// Get pod spec using manifest method (works for both Pod and Deployment!)
-	podSpec, err := m.GetPodSpec()
+	namespace, podSpec, err := manifestPreamble(manifestData)
 	if err != nil {
 		return nil, err
 	}
