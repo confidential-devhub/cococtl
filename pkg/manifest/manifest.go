@@ -10,6 +10,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// workloadKinds is the canonical set of Kubernetes workload resource kinds
+// that wrap a pod template spec. CronJob is intentionally excluded because
+// its pod template is nested one level deeper (spec.jobTemplate.spec.template).
+// Pod is also excluded: it is a direct pod, not a wrapper, so call sites that
+// need to handle Pod do so explicitly alongside a workloadKinds lookup.
+var workloadKinds = map[string]bool{
+	"Deployment":  true,
+	"StatefulSet": true,
+	"DaemonSet":   true,
+	"ReplicaSet":  true,
+	"Job":         true,
+}
+
 // Manifest represents a Kubernetes manifest.
 type Manifest struct {
 	data map[string]interface{}
@@ -147,13 +160,9 @@ func (ms *Set) GetManifests() []*Manifest {
 // GetPrimaryManifest returns the first workload manifest (Pod, Deployment, etc.).
 // Returns nil if no workload manifest is found.
 func (ms *Set) GetPrimaryManifest() *Manifest {
-	workloadKinds := map[string]bool{
-		"Pod": true, "Deployment": true, "StatefulSet": true,
-		"DaemonSet": true, "ReplicaSet": true, "Job": true,
-	}
-
 	for _, m := range ms.manifests {
-		if workloadKinds[m.GetKind()] {
+		kind := m.GetKind()
+		if kind == "Pod" || workloadKinds[kind] {
 			return m
 		}
 	}
@@ -384,7 +393,7 @@ func (m *Manifest) SetAnnotation(key, value string) error {
 	kind := m.GetKind()
 
 	// For workload resources, set annotation on pod template
-	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+	if workloadKinds[kind] {
 		return m.setPodTemplateAnnotation(key, value)
 	}
 
@@ -441,7 +450,7 @@ func (m *Manifest) GetAnnotation(key string) string {
 	kind := m.GetKind()
 
 	// For workload resources, get annotation from pod template
-	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+	if workloadKinds[kind] {
 		return m.getPodTemplateAnnotation(key)
 	}
 
@@ -507,7 +516,7 @@ func (m *Manifest) GetPodSpec() (map[string]interface{}, error) {
 	}
 
 	// For Deployment, StatefulSet, DaemonSet, ReplicaSet, Job
-	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+	if workloadKinds[kind] {
 		template, ok := spec["template"].(map[string]interface{})
 		if !ok {
 			return nil, fmt.Errorf("template field not found in %s spec", kind)
@@ -528,7 +537,7 @@ func (m *Manifest) GetPodLabels() (map[string]interface{}, error) {
 	kind := m.GetKind()
 
 	// For workload resources, get labels from pod template
-	if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "ReplicaSet" || kind == "Job" {
+	if workloadKinds[kind] {
 		spec, err := m.GetSpec()
 		if err != nil {
 			return nil, err
