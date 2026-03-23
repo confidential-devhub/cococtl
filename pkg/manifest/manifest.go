@@ -22,33 +22,39 @@ type Set struct {
 	path      string
 }
 
-// Load reads and parses a Kubernetes manifest from a file.
-func Load(path string) (*Manifest, error) {
-	// Validate and sanitize the path to prevent directory traversal
-	// Source - https://stackoverflow.com/a/57534618
-	// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
-	// Retrieved 2025-11-14, License - CC BY-SA 4.0
+// validateAndCleanPath sanitizes a manifest path to prevent directory traversal.
+// It returns the absolute, cleaned path on success.
+// Source - https://stackoverflow.com/a/57534618
+// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
+// Retrieved 2025-11-14, License - CC BY-SA 4.0
+func validateAndCleanPath(path string) (string, error) {
 	cleanPath := filepath.Clean(path)
 
-	// For absolute paths, validate they don't escape the filesystem root
-	// For relative paths, ensure they're relative to current directory
 	if filepath.IsAbs(cleanPath) {
-		// Absolute paths are allowed for manifest files
-		// but ensure path doesn't contain traversal attempts
 		if strings.Contains(path, "..") {
-			return nil, fmt.Errorf("invalid manifest path: contains directory traversal")
+			return "", fmt.Errorf("invalid manifest path: contains directory traversal")
 		}
 	} else {
-		// For relative paths, ensure they resolve within current directory
 		cwd, err := os.Getwd()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get current directory: %w", err)
+			return "", fmt.Errorf("failed to get current directory: %w", err)
 		}
 		absPath := filepath.Join(cwd, cleanPath)
-		if !strings.HasPrefix(absPath, cwd) {
-			return nil, fmt.Errorf("invalid manifest path: escapes current directory")
+		rel, err := filepath.Rel(cwd, absPath)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return "", fmt.Errorf("invalid manifest path: escapes current directory")
 		}
 		cleanPath = absPath
+	}
+
+	return cleanPath, nil
+}
+
+// Load reads and parses a Kubernetes manifest from a file.
+func Load(path string) (*Manifest, error) {
+	cleanPath, err := validateAndCleanPath(path)
+	if err != nil {
+		return nil, err
 	}
 
 	// #nosec G304 - Path is validated above
@@ -73,31 +79,9 @@ func Load(path string) (*Manifest, error) {
 // Returns a Set containing all documents. If only one document is found,
 // it still returns a Set with a single Manifest for consistency.
 func LoadMultiDocument(path string) (*Set, error) {
-	// Validate and sanitize the path to prevent directory traversal
-	// Source - https://stackoverflow.com/a/57534618
-	// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
-	// Retrieved 2025-11-14, License - CC BY-SA 4.0
-	cleanPath := filepath.Clean(path)
-
-	// For absolute paths, validate they don't escape the filesystem root
-	// For relative paths, ensure they're relative to current directory
-	if filepath.IsAbs(cleanPath) {
-		// Absolute paths are allowed for manifest files
-		// but ensure path doesn't contain traversal attempts
-		if strings.Contains(path, "..") {
-			return nil, fmt.Errorf("invalid manifest path: contains directory traversal")
-		}
-	} else {
-		// For relative paths, ensure they resolve within current directory
-		cwd, err := os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get current directory: %w", err)
-		}
-		absPath := filepath.Join(cwd, cleanPath)
-		if !strings.HasPrefix(absPath, cwd) {
-			return nil, fmt.Errorf("invalid manifest path: escapes current directory")
-		}
-		cleanPath = absPath
+	cleanPath, err := validateAndCleanPath(path)
+	if err != nil {
+		return nil, err
 	}
 
 	// #nosec G304 - Path is validated above
