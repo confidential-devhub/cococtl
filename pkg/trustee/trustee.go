@@ -214,8 +214,8 @@ func createAuthSecretFromKeys(ctx context.Context, namespace string) error {
 	return applyManifest(ctx, string(secretYAML))
 }
 
-func deployConfigMaps(ctx context.Context, namespace string) error {
-	manifest := fmt.Sprintf(`
+func buildConfigMapsManifest(namespace string) string {
+	return fmt.Sprintf(`
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -274,8 +274,10 @@ data:
   reference-values.json: |
     {}
 `, namespace, namespace, namespace)
+}
 
-	return applyManifest(ctx, manifest)
+func deployConfigMaps(ctx context.Context, namespace string) error {
+	return applyManifest(ctx, buildConfigMapsManifest(namespace))
 }
 
 func deployPCCSConfigMap(ctx context.Context, namespace, pccsURL string) error {
@@ -294,7 +296,7 @@ data:
 	return applyManifest(ctx, manifest)
 }
 
-func deployKBS(ctx context.Context, cfg *Config) error {
+func buildKBSManifest(cfg *Config) string {
 	// Build volumeMounts - base mounts
 	volumeMounts := `        - name: confidential-containers
           mountPath: /opt/confidential-containers
@@ -343,7 +345,7 @@ func deployKBS(ctx context.Context, cfg *Config) error {
             path: sgx_default_qcnl.conf`
 	}
 
-	manifest := fmt.Sprintf(`
+	return fmt.Sprintf(`
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -404,8 +406,10 @@ spec:
     targetPort: 8080
     protocol: TCP
 `, cfg.Namespace, cfg.KBSImage, volumeMounts, volumes, cfg.ServiceName, cfg.Namespace)
+}
 
-	return applyManifest(ctx, manifest)
+func deployKBS(ctx context.Context, cfg *Config) error {
+	return applyManifest(ctx, buildKBSManifest(cfg))
 }
 
 // ParseSecretSpec parses a secret specification and reads the file

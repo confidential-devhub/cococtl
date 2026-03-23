@@ -133,9 +133,7 @@ func TestDeployKBS_ResourceLimits(t *testing.T) {
 		KBSImage:    "test-image:latest",
 	}
 
-	// We can't directly call deployKBS because it tries to apply the manifest via kubectl
-	// Instead, we'll construct the expected manifest and verify it has the right structure
-	manifest := constructDeploymentManifest(cfg)
+	manifest := buildKBSManifest(cfg)
 
 	// Parse the YAML to verify resource limits are present
 	documents := strings.Split(manifest, "\n---\n")
@@ -214,7 +212,7 @@ func TestDeployKBS_ResourceLimits(t *testing.T) {
 // TestConfigMap_SocketsConfiguration tests that the KBS ConfigMap includes sockets configuration
 func TestConfigMap_SocketsConfiguration(t *testing.T) {
 	namespace := "test-namespace"
-	manifest := constructConfigMapManifest(namespace)
+	manifest := buildConfigMapsManifest(namespace)
 
 	// Parse the YAML documents
 	documents := strings.Split(manifest, "\n---\n")
@@ -258,136 +256,3 @@ func TestConfigMap_SocketsConfiguration(t *testing.T) {
 	}
 }
 
-// constructConfigMapManifest is a helper that constructs the ConfigMap manifest
-// This is essentially the same logic as deployConfigMaps but returns the manifest instead of applying it
-func constructConfigMapManifest(namespace string) string {
-	manifest := `
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: kbs-config-cm
-  namespace: ` + namespace + `
-data:
-  kbs-config.toml: |
-    [http_server]
-    sockets = ["0.0.0.0:8080"]
-    insecure_http = true
-
-    [attestation_token]
-    insecure_key = true
-
-    [attestation_service]
-    type = "coco_as_builtin"
-    work_dir = "/opt/confidential-containers/attestation-service"
-    policy_engine = "opa"
-
-    [attestation_service.attestation_token_broker]
-    type = "Ear"
-    duration_min = 5
-
-    [attestation_service.rvps_config]
-    type = "BuiltIn"
-
-    [policy_engine]
-    policy_path = "/opt/confidential-containers/opa/policy.rego"
-
-    [admin]
-    type = "InsecureAllowAll"
-
-    [[plugins]]
-    name = "resource"
-    type = "LocalFs"
-    dir_path = "/opt/confidential-containers/kbs/repository"
-`
-	return manifest
-}
-
-// constructDeploymentManifest is a helper that constructs the deployment manifest
-// This is essentially the same logic as deployKBS but returns the manifest instead of applying it
-func constructDeploymentManifest(cfg *Config) string {
-	manifest := `
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: trustee-deployment
-  namespace: ` + cfg.Namespace + `
-  labels:
-    app: kbs
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: kbs
-  template:
-    metadata:
-      labels:
-        app: kbs
-    spec:
-      containers:
-      - name: kbs
-        image: ` + cfg.KBSImage + `
-        imagePullPolicy: IfNotPresent
-        command:
-        - /usr/local/bin/kbs
-        - --config-file
-        - /etc/kbs-config/kbs-config.toml
-        ports:
-        - containerPort: 8080
-          name: kbs
-          protocol: TCP
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - ALL
-          seccompProfile:
-            type: RuntimeDefault
-        resources:
-          requests:
-            cpu: "1"
-          limits:
-            cpu: "2"
-        volumeMounts:
-        - name: confidential-containers
-          mountPath: /opt/confidential-containers
-        - name: kbs-config
-          mountPath: /etc/kbs-config
-        - name: opa
-          mountPath: /opt/confidential-containers/opa
-        - name: auth-secret
-          mountPath: /etc/auth-secret
-        - name: reference-values
-          mountPath: /opt/confidential-containers/rvps/reference-values
-      restartPolicy: Always
-      volumes:
-      - name: confidential-containers
-        emptyDir:
-          medium: Memory
-      - name: kbs-config
-        configMap:
-          name: kbs-config-cm
-      - name: opa
-        configMap:
-          name: resource-policy
-      - name: auth-secret
-        secret:
-          secretName: kbs-auth-public-key
-      - name: reference-values
-        configMap:
-          name: rvps-reference-values
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ` + cfg.ServiceName + `
-  namespace: ` + cfg.Namespace + `
-spec:
-  selector:
-    app: kbs
-  ports:
-  - port: 8080
-    targetPort: 8080
-    protocol: TCP
-`
-	return manifest
-}
