@@ -15,7 +15,7 @@ const (
 	DefaultRuntimeClass       = "kata-cc"
 	DefaultInitContainerImage = "quay.io/fedora/fedora:44"
 	DefaultInitContainerCmd   = "curl http://localhost:8006/cdh/resource/default/attestation-status/status"
-	DefaultKBSImage           = "ghcr.io/confidential-containers/key-broker-service:built-in-as-v0.15.0"
+	DefaultKBSImage           = "ghcr.io/confidential-containers/key-broker-service:built-in-as-v0.17.0"
 	DefaultPCCSURL            = "https://api.trustedservices.intel.com/sgx/certification/v4/"
 	// Sidecar defaults
 	DefaultSidecarImage       = "quay.io/confidential-devhub/coco-secure-access:latest"
@@ -53,7 +53,7 @@ type CocoConfig struct {
 	KataAgentPolicy    string            `toml:"kata_agent_policy" comment:"Kata-agent policy file path (optional)"`
 	InitContainerImage string            `toml:"init_container_image" comment:"Default init container image (optional, default: quay.io/fedora/fedora:44)"`
 	InitContainerCmd   string            `toml:"init_container_cmd" comment:"Default init container command (optional, default: attestation check)"`
-	KBSImage           string            `toml:"kbs_image" comment:"KBS all-in-one image for Trustee deployment (optional, default: ghcr.io/confidential-containers/key-broker-service:built-in-as-v0.15.0)"`
+	KBSImage           string            `toml:"kbs_image" comment:"KBS all-in-one image for Trustee deployment (optional, default: ghcr.io/confidential-containers/key-broker-service:built-in-as-v0.17.0)"`
 	PCCSURL            string            `toml:"pccs_url" comment:"PCCS URL for SGX attestation (optional, default: https://api.trustedservices.intel.com/sgx/certification/v4/)"`
 	ContainerPolicyURI string            `toml:"container_policy_uri" comment:"Container policy URI (optional)"`
 	RegistryCredURI    string            `toml:"registry_cred_uri" comment:"Container registry credentials URI (optional)"`
