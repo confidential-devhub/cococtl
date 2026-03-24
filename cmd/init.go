@@ -15,6 +15,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// stdinReader is the shared reader for all interactive prompts.
+// It is a package-level variable so tests can substitute a strings.Reader.
+var stdinReader = bufio.NewReader(os.Stdin)
+
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize CoCo configuration and infrastructure",
@@ -80,8 +84,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		if interactive {
 			fmt.Printf("Config file already exists at %s\n", outputPath)
 			fmt.Print("Overwrite? (y/N): ")
-			reader := bufio.NewReader(os.Stdin)
-			response, _ := reader.ReadString('\n')
+			response, _ := stdinReader.ReadString('\n')
 			response = strings.TrimSpace(strings.ToLower(response))
 			if response != "y" && response != "yes" {
 				fmt.Println("Aborted.")
@@ -129,15 +132,15 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	if interactive {
 		// Only ask for CA cert if user provided their own Trustee URL
 		if !trusteeDeployed {
-			cfg.TrusteeCACert = promptString("Trustee CA cert location (optional)", cfg.TrusteeCACert, false)
+			cfg.TrusteeCACert = promptString("Trustee CA cert location (optional)", cfg.TrusteeCACert)
 		}
-		cfg.KataAgentPolicy = promptString("Kata-agent policy file path (optional)", cfg.KataAgentPolicy, false)
-		cfg.InitContainerImage = promptString("Default init container image (optional)", cfg.InitContainerImage, false)
-		cfg.InitContainerCmd = promptString("Default init container command (optional)", cfg.InitContainerCmd, false)
-		cfg.PCCSURL = promptString("PCCS URL for SGX attestation (optional)", cfg.PCCSURL, false)
-		cfg.ContainerPolicyURI = promptString("Container policy URI (optional)", cfg.ContainerPolicyURI, false)
-		cfg.RegistryCredURI = promptString("Container registry credentials URI (optional)", cfg.RegistryCredURI, false)
-		cfg.RegistryConfigURI = promptString("Container registry config URI (optional)", cfg.RegistryConfigURI, false)
+		cfg.KataAgentPolicy = promptString("Kata-agent policy file path (optional)", cfg.KataAgentPolicy)
+		cfg.InitContainerImage = promptString("Default init container image (optional)", cfg.InitContainerImage)
+		cfg.InitContainerCmd = promptString("Default init container command (optional)", cfg.InitContainerCmd)
+		cfg.PCCSURL = promptString("PCCS URL for SGX attestation (optional)", cfg.PCCSURL)
+		cfg.ContainerPolicyURI = promptString("Container policy URI (optional)", cfg.ContainerPolicyURI)
+		cfg.RegistryCredURI = promptString("Container registry credentials URI (optional)", cfg.RegistryCredURI)
+		cfg.RegistryConfigURI = promptString("Container registry config URI (optional)", cfg.RegistryConfigURI)
 	}
 
 	// Validate config
@@ -161,32 +164,22 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func promptString(prompt, defaultValue string, required bool) string {
-	reader := bufio.NewReader(os.Stdin)
-
-	requiredStr := ""
-	if required {
-		requiredStr = " (required)"
-	}
-
+func promptString(prompt, defaultValue string) string {
 	if defaultValue != "" {
-		fmt.Printf("%s%s [%s]: ", prompt, requiredStr, defaultValue)
+		fmt.Printf("%s [%s]: ", prompt, defaultValue)
 	} else {
-		fmt.Printf("%s%s: ", prompt, requiredStr)
+		fmt.Printf("%s: ", prompt)
 	}
 
-	input, _ := reader.ReadString('\n')
+	input, _ := stdinReader.ReadString('\n')
 	input = strings.TrimSpace(input)
 
-	if input == "" {
-		if required && defaultValue == "" {
-			fmt.Println("This field is required. Please provide a value.")
-			return promptString(prompt, defaultValue, required)
-		}
-		return defaultValue
+	// Return user input if non-empty, even when ReadString returns EOF
+	// alongside the final line (no trailing newline in the stream).
+	if input != "" {
+		return input
 	}
-
-	return input
+	return defaultValue
 }
 
 // resolveCertDir returns the directory to use for sidecar certs: the given path if non-empty, otherwise the default.
@@ -218,7 +211,7 @@ func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive,
 		fmt.Println()
 
 		// Prompt for Trustee URL
-		url := promptString("Trustee server URL (leave empty to deploy)", "", false)
+		url := promptString("Trustee server URL (leave empty to deploy)", "")
 		if url != "" {
 			cfg.TrusteeServer = url
 			return false, "", nil
@@ -227,7 +220,7 @@ func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive,
 		// If empty, auto-deploy
 		// Prompt for namespace if not provided
 		if namespace == "" {
-			namespace = promptString("Trustee namespace (press Enter for current)", "", false)
+			namespace = promptString("Trustee namespace (press Enter for current)", "")
 		}
 	} else {
 		// Non-interactive mode
@@ -393,7 +386,7 @@ func handleRuntimeClassSetup(cmd *cobra.Command, cfg *config.CocoConfig, runtime
 		}
 	}
 	if interactive {
-		cfg.RuntimeClass = promptString("Default RuntimeClass", cfg.RuntimeClass, false)
+		cfg.RuntimeClass = promptString("Default RuntimeClass", cfg.RuntimeClass)
 	}
 
 	fmt.Println()

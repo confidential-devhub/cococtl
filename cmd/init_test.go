@@ -1,13 +1,85 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/confidential-devhub/cococtl/pkg/config"
 )
+
+func withStdin(t *testing.T, input string, fn func()) {
+	t.Helper()
+	orig := stdinReader
+	stdinReader = bufio.NewReader(strings.NewReader(input))
+	t.Cleanup(func() { stdinReader = orig })
+	fn()
+}
+
+func TestPromptString_UserInput(t *testing.T) {
+	withStdin(t, "myvalue\n", func() {
+		got := promptString("Enter value", "default")
+		if got != "myvalue" {
+			t.Errorf("got %q, want %q", got, "myvalue")
+		}
+	})
+}
+
+func TestPromptString_EmptyInputReturnsDefault(t *testing.T) {
+	withStdin(t, "\n", func() {
+		got := promptString("Enter value", "default")
+		if got != "default" {
+			t.Errorf("got %q, want %q", got, "default")
+		}
+	})
+}
+
+func TestPromptString_EmptyInputNoDefault(t *testing.T) {
+	withStdin(t, "\n", func() {
+		got := promptString("Enter value", "")
+		if got != "" {
+			t.Errorf("got %q, want empty string", got)
+		}
+	})
+}
+
+func TestPromptString_EOFReturnsDefault(t *testing.T) {
+	// Empty reader simulates a closed pipe (immediate EOF, no data).
+	withStdin(t, "", func() {
+		got := promptString("Enter value", "fallback")
+		if got != "fallback" {
+			t.Errorf("got %q, want %q", got, "fallback")
+		}
+	})
+}
+
+func TestPromptString_FinalLineWithoutNewlineUsesInput(t *testing.T) {
+	// ReadString('\n') returns data + io.EOF when the stream ends without a
+	// trailing newline. The non-empty input must be returned, not the default.
+	withStdin(t, "myvalue", func() {
+		got := promptString("Enter value", "default")
+		if got != "myvalue" {
+			t.Errorf("got %q, want %q", got, "myvalue")
+		}
+	})
+}
+
+func TestPromptString_MultipleCallsShareReader(t *testing.T) {
+	// Two values on separate lines; each call should consume one line.
+	withStdin(t, "first\nsecond\n", func() {
+		got1 := promptString("First", "")
+		got2 := promptString("Second", "")
+		if got1 != "first" {
+			t.Errorf("first call: got %q, want %q", got1, "first")
+		}
+		if got2 != "second" {
+			t.Errorf("second call: got %q, want %q", got2, "second")
+		}
+	})
+}
 
 // TestInitCommand_WithRuntimeClassFlag tests the init command with --runtime-class flag
 func TestInitCommand_WithRuntimeClassFlag(t *testing.T) {
