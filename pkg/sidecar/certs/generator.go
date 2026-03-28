@@ -7,10 +7,12 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 )
@@ -20,6 +22,10 @@ const (
 	caValidityYears   = 2
 	certValidityYears = 1
 )
+
+// ErrOpenSSLNotFound is returned when the openssl executable is not on PATH.
+// Callers can use [errors.Is] to detect it and prompt the user to install OpenSSL.
+var ErrOpenSSLNotFound = errors.New("openssl not found in PATH; install openssl to export PKCS#12 bundles")
 
 // CertificateSet holds a certificate and its private key in PEM format.
 type CertificateSet struct {
@@ -240,6 +246,32 @@ func (cs *CertificateSet) SaveToFile(dir, baseName string) error {
 		return fmt.Errorf("failed to write private key to %s: %w", keyPath, err)
 	}
 
+	return nil
+}
+
+// SaveToPKCS12 exports existing PEM certificate/key files to a PKCS#12 (.p12) file.
+// certPath and keyPath must point to readable PEM files; outputPath is created with 0600 permissions.
+// If openssl is not installed, it returns [ErrOpenSSLNotFound].
+func SaveToPKCS12(certPath, keyPath, outputPath, friendlyName, passphrase string) error {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return ErrOpenSSLNotFound
+		}
+		return fmt.Errorf("locate openssl: %w", err)
+	}
+
+	passout := "pass:" + passphrase
+	// #nosec G204 -- Command name is constant ("openssl"), args are passed directly without shell expansion.
+	cmd := exec.Command("openssl", "pkcs12", "-export",
+		"-inkey", keyPath,
+		"-in", certPath,
+		"-out", outputPath,
+		"-name", friendlyName,
+		"-passout", passout,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("openssl pkcs12 -export failed: %w (output: %s)", err, string(out))
+	}
 	return nil
 }
 

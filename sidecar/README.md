@@ -155,6 +155,7 @@ This command:
 4. Saves certificates locally to `~/.kube/coco-sidecar/`:
    - `ca-cert.pem` and `ca-key.pem` (Client CA)
    - `client-cert.pem` and `client-key.pem` (for accessing sidecars)
+5. Exports a PKCS#12 bundle `client.p12` (friendly name `coco mTLS client`, no export password) using OpenSSL, so browsers can import a single file for mTLS. OpenSSL must be installed and the `openssl` binary must be on your `PATH`. If OpenSSL is missing, `kubectl coco init` still saves the PEM files and prints a warning with a command you can run after installing OpenSSL.
 
 ### Per-Application Server Certificates
 
@@ -184,11 +185,16 @@ Each application gets a unique server certificate with:
 **Certificate Storage Summary:**
 - Client CA: `~/.kube/coco-sidecar/ca-*.pem` (used to sign server certs)
 - Client cert: `~/.kube/coco-sidecar/client-*.pem` (for accessing sidecars via mTLS)
+- Client PKCS#12: `~/.kube/coco-sidecar/client.p12` (optional convenience for browsers; created only when OpenSSL is available)
 - Server certs: Generated per-app, uploaded to KBS (not stored locally)
 
 ### Browser Access Setup
 
-To access the sidecar via browser (with mTLS), create a PKCS12 bundle from the client certificate:
+To access the sidecar via browser (with mTLS), import the client identity as a PKCS#12 bundle.
+
+If `kubectl coco init --enable-sidecar` completed with OpenSSL available, `client.p12` is already created next to the PEM files (alias `coco mTLS client`, **no export password**). Skip the manual export below unless you need a new bundle or `client.p12` was not generated.
+
+To build or rebuild `client.p12` yourself (for example after installing OpenSSL, or to set a password on the bundle):
 
 ```bash
 # Create PKCS12 bundle for browser import
@@ -199,6 +205,7 @@ openssl pkcs12 -export \
   -out client.p12 \
   -name "CoCo Sidecar Client - developer" \
   -passout pass:coco123
+# Or use e.g. -passout pass:coco123 if you want a password on the bundle
 ```
 
 **macOS:**
@@ -210,7 +217,7 @@ openssl pkcs12 -export \
    ```
 
 2. Get the NodePort service endpoint:
-  
+
    ```bash
    NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
    HTTPS_PORT=$(kubectl get svc myapp-sidecar -o jsonpath='{.spec.ports[?(@.name=="https")].nodePort}')
