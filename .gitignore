@@ -34,3 +34,10 @@ Thumbs.db
 dist/
 bin/
 release/
+
+# Test-generated manifests (produced by running cococtl locally against testdata)
+integration_test/testdata/manifests/*-coco.yaml
+examples/hello-world-*.yaml
+
+# Review and scratch files
+review_report.md
