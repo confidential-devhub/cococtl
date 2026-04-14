@@ -283,12 +283,16 @@ func handleTrusteeSetup(cmd *cobra.Command, cfg *config.CocoConfig, interactive,
 		ServiceName: "trustee-kbs",
 		KBSImage:    kbsImage,
 		PCCSURL:     cfg.PCCSURL,
+		RESTConfig:  client.Config,
+		AuthDir:     cfg.KBSAuthDir, // may be empty or ~ prefix; Deploy resolves it
 	}
 
 	if err := trustee.Deploy(ctx, client.Clientset, trusteeCfg); err != nil {
 		return false, "", fmt.Errorf("failed to deploy Trustee: %w", err)
 	}
 
+	// Deploy wrote the resolved path back to trusteeCfg.AuthDir; persist it.
+	cfg.KBSAuthDir = trusteeCfg.AuthDir
 	cfg.TrusteeServer = trustee.GetServiceURL(namespace, "trustee-kbs")
 	fmt.Printf("Trustee deployed successfully\n")
 	fmt.Printf("Trustee URL: %s\n", cfg.TrusteeServer)

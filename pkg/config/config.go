@@ -55,6 +55,7 @@ type CocoConfig struct {
 	InitContainerCmd   string            `toml:"init_container_cmd" comment:"Default init container command (optional, default: attestation check)"`
 	KBSImage           string            `toml:"kbs_image" comment:"KBS all-in-one image for Trustee deployment (optional, default: ghcr.io/confidential-containers/key-broker-service:built-in-as-v0.17.0)"`
 	PCCSURL            string            `toml:"pccs_url" comment:"PCCS URL for SGX attestation (optional, default: https://api.trustedservices.intel.com/sgx/certification/v4/)"`
+	KBSAuthDir         string            `toml:"kbs_auth_dir" comment:"Directory containing KBS admin keys for 'kbs populate'; set automatically during init (default: ~/.kube/coco-kbs-auth)"`
 	ContainerPolicyURI string            `toml:"container_policy_uri" comment:"Container policy URI (optional)"`
 	RegistryCredURI    string            `toml:"registry_cred_uri" comment:"Container registry credentials URI (optional)"`
 	RegistryConfigURI  string            `toml:"registry_config_uri" comment:"Container registry config URI (optional)"`

@@ -4,29 +4,49 @@ package trustee
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/portforward"
+	"k8s.io/client-go/transport/spdy"
+
+	"github.com/confidential-devhub/cococtl/pkg/kbsclient"
 )
 
 const (
 	trusteeLabel = "app=kbs"
 
-	// Default attestation status secret path and content
-	// This is used by the default init container to check attestation status
-	defaultAttestationStatusPath    = "/opt/confidential-containers/kbs/repository/default/attestation-status/status"
+	// defaultAttestationStatusContent is uploaded to KBS during deploy so the
+	// init container can verify attestation succeeded.
 	defaultAttestationStatusContent = "success"
+
+	// defaultKBSPort is the port the KBS pod listens on.
+	defaultKBSPort = 8080
+
+	// kbsReadyTimeout is the maximum time Deploy waits for the KBS pod to
+	// become Ready before giving up.
+	kbsReadyTimeout = 2 * time.Minute
+
+	// kbsAdminTimeout bounds the port-forward handshake and the subsequent
+	// SetResource HTTP call so a network hang cannot block Deploy indefinitely.
+	kbsAdminTimeout = 30 * time.Second
 )
 
 // DockerConfig represents the new .dockerconfigjson format
@@ -47,6 +67,14 @@ type Config struct {
 	KBSImage    string
 	PCCSURL     string
 	Secrets     []SecretResource
+
+	// RESTConfig is required for port-forwarding to the KBS pod during Deploy.
+	RESTConfig *rest.Config
+
+	// AuthDir is the directory where the generated KBS admin private key is
+	// persisted for later use by 'kbs populate'.  If empty, defaults to
+	// ~/.kube/coco-kbs-auth (resolved via DefaultAuthDir).
+	AuthDir string
 }
 
 // SecretResource represents a secret to be stored in KBS
@@ -74,13 +102,29 @@ func IsDeployed(ctx context.Context, clientset kubernetes.Interface, namespace s
 	return len(deployments.Items) > 0, nil
 }
 
-// Deploy deploys Trustee all-in-one KBS to the specified namespace
+// Deploy deploys Trustee all-in-one KBS to the specified namespace.
+// cfg.RESTConfig must be set; it is used to port-forward to the KBS pod
+// so that the admin HTTP API can be called without requiring an externally
+// reachable service URL.
 func Deploy(ctx context.Context, clientset kubernetes.Interface, cfg *Config) error {
+	if cfg.RESTConfig == nil {
+		return fmt.Errorf("cfg.RESTConfig is required for KBS deployment")
+	}
+
+	// Resolve the auth directory once and write it back so the caller can read
+	// the concrete path without calling DefaultAuthDir themselves.
+	authDir, err := DefaultAuthDir(cfg.AuthDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve auth directory: %w", err)
+	}
+	cfg.AuthDir = authDir
+
 	if err := ensureNamespace(ctx, clientset, cfg.Namespace); err != nil {
 		return fmt.Errorf("failed to create namespace: %w", err)
 	}
 
-	if err := createAuthSecretFromKeys(ctx, cfg.Namespace); err != nil {
+	privateKey, err := createAuthSecretFromKeys(ctx, cfg.Namespace, authDir)
+	if err != nil {
 		return fmt.Errorf("failed to create auth secret: %w", err)
 	}
 
@@ -88,7 +132,6 @@ func Deploy(ctx context.Context, clientset kubernetes.Interface, cfg *Config) er
 		return fmt.Errorf("failed to deploy ConfigMaps: %w", err)
 	}
 
-	// Deploy PCCS ConfigMap if PCCSURL is configured
 	if cfg.PCCSURL != "" {
 		if err := deployPCCSConfigMap(ctx, cfg.Namespace, cfg.PCCSURL); err != nil {
 			return fmt.Errorf("failed to deploy PCCS ConfigMap: %w", err)
@@ -99,9 +142,41 @@ func Deploy(ctx context.Context, clientset kubernetes.Interface, cfg *Config) er
 		return fmt.Errorf("failed to deploy KBS: %w", err)
 	}
 
-	// Create default attestation status secret for init container
-	if err := createDefaultAttestationStatus(cfg.Namespace); err != nil {
-		return fmt.Errorf("failed to create default attestation status: %w", err)
+	// Wait for the KBS pod to be ready, bounded by kbsReadyTimeout.
+	waitCtx, waitCancel := context.WithTimeout(ctx, kbsReadyTimeout)
+	defer waitCancel()
+	if err := WaitForKBSReady(waitCtx, clientset, cfg.Namespace); err != nil {
+		return fmt.Errorf("KBS pod not ready: %w", err)
+	}
+
+	// Select an explicitly ready pod to port-forward to, guarding against
+	// rollouts where a Terminating pod might be listed first.
+	podName, err := getReadyKBSPodName(waitCtx, clientset, cfg.Namespace)
+	if err != nil {
+		return fmt.Errorf("failed to find ready KBS pod: %w", err)
+	}
+
+	// Both the port-forward handshake and the SetResource HTTP call share a
+	// single bounded context.  30 s is sufficient for both operations together.
+	adminCtx, adminCancel := context.WithTimeout(ctx, kbsAdminTimeout)
+	defer adminCancel()
+
+	localPort, stopForward, err := portForwardKBSPod(adminCtx, cfg.RESTConfig, clientset, cfg.Namespace, podName)
+	if err != nil {
+		return fmt.Errorf("failed to port-forward to KBS pod: %w", err)
+	}
+	defer stopForward()
+
+	kbsURL := fmt.Sprintf("http://127.0.0.1:%d", localPort)
+	kbsClient, err := kbsclient.New(kbsURL, privateKey, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create KBS client: %w", err)
+	}
+
+	// Upload the default attestation status via the KBS admin HTTP API.
+	// This replaces the former kubectl exec approach.
+	if err := kbsClient.SetResource(adminCtx, "default/attestation-status/status", []byte(defaultAttestationStatusContent)); err != nil {
+		return fmt.Errorf("failed to set default attestation status: %w", err)
 	}
 
 	if len(cfg.Secrets) > 0 {
@@ -115,7 +190,87 @@ func Deploy(ctx context.Context, clientset kubernetes.Interface, cfg *Config) er
 
 // GetServiceURL returns the URL of the deployed Trustee KBS service
 func GetServiceURL(namespace, serviceName string) string {
-	return fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", serviceName, namespace)
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", serviceName, namespace, defaultKBSPort)
+}
+
+// DefaultAuthDir returns the resolved, cleaned KBS auth directory.
+// If override is empty it defaults to ~/.kube/coco-kbs-auth.
+// A leading ~ in override is expanded to the user's home directory.
+func DefaultAuthDir(override string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	if override == "" {
+		return filepath.Join(home, ".kube", "coco-kbs-auth"), nil
+	}
+	// Expand a leading ~ so callers can pass "~/custom-dir" safely.
+	// TrimPrefix strips the leading "~/" leaving a relative segment that
+	// filepath.Join correctly appends under home (override[1:] would leave
+	// a leading "/" that silently drops the home prefix).
+	if override == "~" {
+		override = home
+	} else if strings.HasPrefix(override, "~/") {
+		override = filepath.Join(home, strings.TrimPrefix(override, "~/"))
+	}
+	return filepath.Clean(override), nil
+}
+
+// portForwardKBSPod opens a port-forward from a random local port to port
+// defaultKBSPort on the named pod.  It returns the local port number and a
+// stop function the caller must invoke when done.
+func portForwardKBSPod(ctx context.Context, restConfig *rest.Config, clientset kubernetes.Interface, namespace, podName string) (localPort uint16, stop func(), err error) {
+	url := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Namespace(namespace).
+		Name(podName).
+		SubResource("portforward").
+		URL()
+
+	transport, upgrader, err := spdy.RoundTripperFor(restConfig)
+	if err != nil {
+		return 0, nil, fmt.Errorf("create port-forward transport: %w", err)
+	}
+
+	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, url)
+
+	stopCh := make(chan struct{})
+	readyCh := make(chan struct{})
+
+	fw, err := portforward.New(dialer, []string{fmt.Sprintf("0:%d", defaultKBSPort)}, stopCh, readyCh, io.Discard, io.Discard)
+	if err != nil {
+		return 0, nil, fmt.Errorf("create port forwarder: %w", err)
+	}
+
+	forwardErr := make(chan error, 1)
+	go func() {
+		forwardErr <- fw.ForwardPorts()
+	}()
+
+	select {
+	case <-ctx.Done():
+		close(stopCh)
+		return 0, nil, fmt.Errorf("context cancelled before port-forward ready: %w", ctx.Err())
+	case fwErr := <-forwardErr:
+		return 0, nil, fmt.Errorf("port-forward failed to start: %w", fwErr)
+	case <-readyCh:
+		// forward is ready
+	}
+
+	ports, err := fw.GetPorts()
+	if err != nil {
+		close(stopCh)
+		return 0, nil, fmt.Errorf("get forwarded ports: %w", err)
+	}
+	if len(ports) == 0 {
+		close(stopCh)
+		return 0, nil, fmt.Errorf("port forwarder returned no ports")
+	}
+
+	var once sync.Once
+	stopFn := func() { once.Do(func() { close(stopCh) }) }
+
+	return ports[0].Local, stopFn, nil
 }
 
 func ensureNamespace(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
@@ -148,37 +303,39 @@ func applyManifest(ctx context.Context, yaml string) error {
 	return nil
 }
 
-func createAuthSecretFromKeys(ctx context.Context, namespace string) error {
-	// Generate ED25519 key pair locally
-	publicKey, privateKey, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		return fmt.Errorf("failed to generate key pair: %w", err)
+// createAuthSecretFromKeys loads or generates an Ed25519 private key, persists
+// it to authDir/private.key, creates a Kubernetes Secret containing only the
+// public key (for KBS JWT verification), and returns the private key so Deploy
+// can call the KBS admin API immediately.
+//
+// If a valid key already exists at authDir/private.key it is reused, making
+// the function idempotent across Deploy retries after partial failures.
+func createAuthSecretFromKeys(ctx context.Context, namespace, authDir string) (ed25519.PrivateKey, error) {
+	if err := os.MkdirAll(authDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create auth directory %s: %w", authDir, err)
 	}
 
-	// Encode private key to PKCS8 PEM format
-	privateKeyBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	privateKey, err := loadOrGeneratePrivateKey(filepath.Join(authDir, "private.key"))
 	if err != nil {
-		return fmt.Errorf("failed to marshal private key: %w", err)
+		return nil, err
 	}
-	privateKeyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: privateKeyBytes,
-	})
 
-	// Encode public key to PKIX PEM format
-	publicKeyBytes, err := x509.MarshalPKIXPublicKey(publicKey)
+	// Derive the public key to put in the K8s Secret.
+	pubKey, ok := privateKey.Public().(ed25519.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("unexpected public key type from Ed25519 private key")
+	}
+	publicKeyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
 	if err != nil {
-		return fmt.Errorf("failed to marshal public key: %w", err)
+		return nil, fmt.Errorf("failed to marshal public key: %w", err)
 	}
-	publicKeyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: publicKeyBytes,
-	})
+	publicKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicKeyBytes})
 
-	// Create temporary directory for keys
+	// Write only the public key to a temporary directory for the secret.
+	// The private key must never be stored in the cluster.
 	tmpDir, err := os.MkdirTemp("", "trustee-keys-*")
 	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	defer func() {
 		if err := os.RemoveAll(tmpDir); err != nil {
@@ -186,32 +343,108 @@ func createAuthSecretFromKeys(ctx context.Context, namespace string) error {
 		}
 	}()
 
-	// Write keys to temporary files
-	privateKeyPath := filepath.Join(tmpDir, "private.key")
-	publicKeyPath := filepath.Join(tmpDir, "public.pub")
-
-	if err := os.WriteFile(privateKeyPath, privateKeyPEM, 0600); err != nil {
-		return fmt.Errorf("failed to write private key: %w", err)
+	tmpPubPath := filepath.Join(tmpDir, "public.pub")
+	if err := os.WriteFile(tmpPubPath, publicKeyPEM, 0600); err != nil {
+		return nil, fmt.Errorf("failed to write public key to temp dir: %w", err)
 	}
 
-	if err := os.WriteFile(publicKeyPath, publicKeyPEM, 0600); err != nil {
-		return fmt.Errorf("failed to write public key: %w", err)
-	}
-
-	// Create secret from files
-	// #nosec G204 - namespace is from function parameter (application-controlled), paths are from os.MkdirTemp
-	cmd := exec.Command("kubectl", "create", "secret", "generic",
+	// #nosec G204 - namespace is from function parameter (application-controlled), path is from os.MkdirTemp
+	cmd := exec.CommandContext(ctx, "kubectl", "create", "secret", "generic",
 		"kbs-auth-public-key", "-n", namespace,
-		fmt.Sprintf("--from-file=%s", publicKeyPath),
-		fmt.Sprintf("--from-file=%s", privateKeyPath),
+		fmt.Sprintf("--from-file=%s", tmpPubPath),
 		"--dry-run=client", "-o", "yaml")
 	secretYAML, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to create secret YAML: %w\n%s", err, secretYAML)
+		return nil, fmt.Errorf("failed to create secret YAML: %w\n%s", err, secretYAML)
 	}
 
-	// Apply the secret
-	return applyManifest(ctx, string(secretYAML))
+	if err := applyManifest(ctx, string(secretYAML)); err != nil {
+		return nil, err
+	}
+
+	return privateKey, nil
+}
+
+// loadOrGeneratePrivateKey returns the Ed25519 private key at keyPath.
+// If the file already exists it is parsed and returned — enabling Deploy to be
+// retried after a partial failure without manual cleanup.
+// If the file does not exist a new key pair is generated and persisted
+// atomically (temp-file + rename) so a partial write never corrupts an
+// existing key.
+// Any file-system error other than ErrNotExist is returned immediately.
+func loadOrGeneratePrivateKey(keyPath string) (ed25519.PrivateKey, error) {
+	// #nosec G304 -- keyPath is constructed from the user-controlled authDir, resolved and cleaned by DefaultAuthDir
+	pemData, readErr := os.ReadFile(keyPath)
+	if readErr == nil {
+		// File exists — check permissions before using it.
+		// A world- or group-readable private key is a credential leak.
+		info, err := os.Stat(keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to stat existing key at %s: %w", keyPath, err)
+		}
+		if info.Mode().Perm()&0077 != 0 {
+			return nil, fmt.Errorf("existing key at %s has overly permissive mode %04o; group/other permissions must not be set", keyPath, info.Mode().Perm())
+		}
+
+		// Parse and return the existing key.
+		block, _ := pem.Decode(pemData)
+		if block == nil {
+			return nil, fmt.Errorf("existing key at %s is not valid PEM", keyPath)
+		}
+		raw, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse existing key at %s: %w", keyPath, err)
+		}
+		key, ok := raw.(ed25519.PrivateKey)
+		if !ok {
+			return nil, fmt.Errorf("existing key at %s is not an Ed25519 private key (got %T)", keyPath, raw)
+		}
+		return key, nil
+	}
+	if !errors.Is(readErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("failed to read key at %s: %w", keyPath, readErr)
+	}
+
+	// File does not exist — generate a new key and persist it.
+	_, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate key pair: %w", err)
+	}
+
+	privateKeyBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal private key: %w", err)
+	}
+	privateKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateKeyBytes})
+
+	// Write via temp file in the same directory, then rename for atomicity.
+	tmpKey, err := os.CreateTemp(filepath.Dir(keyPath), ".private.key.*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to stage private key: %w", err)
+	}
+	staged := true
+	defer func() {
+		if staged {
+			_ = os.Remove(tmpKey.Name())
+		}
+	}()
+	if err := tmpKey.Chmod(0600); err != nil {
+		_ = tmpKey.Close()
+		return nil, fmt.Errorf("failed to set key file permissions: %w", err)
+	}
+	if _, err := tmpKey.Write(privateKeyPEM); err != nil {
+		_ = tmpKey.Close()
+		return nil, fmt.Errorf("failed to write private key: %w", err)
+	}
+	if err := tmpKey.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close staged key file: %w", err)
+	}
+	if err := os.Rename(tmpKey.Name(), keyPath); err != nil {
+		return nil, fmt.Errorf("failed to install private key at %s: %w", keyPath, err)
+	}
+	staged = false
+
+	return privateKey, nil
 }
 
 func buildConfigMapsManifest(namespace string) string {
@@ -224,7 +457,7 @@ metadata:
 data:
   kbs-config.toml: |
     [http_server]
-    sockets = ["0.0.0.0:8080"]
+    sockets = ["0.0.0.0:%d"]
     insecure_http = true
 
     [attestation_token]
@@ -273,7 +506,7 @@ metadata:
 data:
   reference-values.json: |
     {}
-`, namespace, namespace, namespace)
+`, namespace, defaultKBSPort, namespace, namespace)
 }
 
 func deployConfigMaps(ctx context.Context, namespace string) error {
@@ -372,7 +605,7 @@ spec:
         - --config-file
         - /etc/kbs-config/kbs-config.toml
         ports:
-        - containerPort: 8080
+        - containerPort: %d
           name: kbs
           protocol: TCP
         securityContext:
@@ -402,10 +635,10 @@ spec:
   selector:
     app: kbs
   ports:
-  - port: 8080
-    targetPort: 8080
+  - port: %d
+    targetPort: %d
     protocol: TCP
-`, cfg.Namespace, cfg.KBSImage, volumeMounts, volumes, cfg.ServiceName, cfg.Namespace)
+`, cfg.Namespace, cfg.KBSImage, defaultKBSPort, volumeMounts, volumes, cfg.ServiceName, cfg.Namespace, defaultKBSPort, defaultKBSPort)
 }
 
 func deployKBS(ctx context.Context, cfg *Config) error {
@@ -540,7 +773,7 @@ func AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace string)
 	// Get the KBS pod name
 	// #nosec G204 -- namespace/secret names are from trusted config, not user input
 	cmd := exec.Command("kubectl", "get", "pod", "-n", trusteeNamespace,
-		"-l", "app=kbs", "-o", "jsonpath={.items[0].metadata.name}")
+		"-l", trusteeLabel, "-o", "jsonpath={.items[0].metadata.name}")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to get KBS pod: %w\n%s", err, output)
@@ -657,49 +890,3 @@ func AddImagePullSecretToTrustee(trusteeNamespace, secretName, secretNamespace s
 	return AddK8sSecretToTrustee(trusteeNamespace, secretName, secretNamespace)
 }
 
-// createDefaultAttestationStatus creates a default attestation-status secret in Trustee
-// This is used by the default init container command to check attestation status
-func createDefaultAttestationStatus(namespace string) error {
-	// Get the KBS pod name
-	// #nosec G204 -- namespace is from trusted config, not user input
-	cmd := exec.Command("kubectl", "get", "pod", "-n", namespace,
-		"-l", "app=kbs", "-o", "jsonpath={.items[0].metadata.name}")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to get KBS pod: %w\n%s", err, output)
-	}
-	podName := strings.TrimSpace(string(output))
-
-	if podName == "" {
-		return fmt.Errorf("no KBS pod found in namespace %s", namespace)
-	}
-
-	// Wait for pod to be ready
-	// #nosec G204 - namespace is from function parameter, podName is from kubectl get output
-	cmd = exec.Command("kubectl", "wait", "--for=condition=ready", "--timeout=120s",
-		"-n", namespace, fmt.Sprintf("pod/%s", podName))
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("pod not ready: %w\n%s", err, output)
-	}
-
-	// Create the directory structure and file using kubectl exec
-	// Path: /opt/confidential-containers/kbs/repository/default/attestation-status/status
-	mkdirCmd := "mkdir -p /opt/confidential-containers/kbs/repository/default/attestation-status"
-	// #nosec G204 - namespace is from function parameter, podName is from kubectl get, mkdirCmd is a constant string
-	cmd = exec.Command("kubectl", "exec", "-n", namespace, podName, "--", "sh", "-c", mkdirCmd)
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to create directory in KBS pod: %w\n%s", err, output)
-	}
-
-	// Write the content to the file
-	writeCmd := fmt.Sprintf("echo -n '%s' > %s", defaultAttestationStatusContent, defaultAttestationStatusPath)
-	// #nosec G204 - namespace is from function parameter, podName is from kubectl get, writeCmd uses constants
-	cmd = exec.Command("kubectl", "exec", "-n", namespace, podName, "--", "sh", "-c", writeCmd)
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to write attestation status file: %w\n%s", err, output)
-	}
-
-	return nil
-}
