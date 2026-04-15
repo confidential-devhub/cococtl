@@ -57,9 +57,8 @@ func GenerateTrusteeConfig(sealedSecrets []*SealedSecretData, outputPath string)
 	return nil
 }
 
-// PrintTrusteeInstructions prints console instructions for setting up Trustee
-// autoUploadSuccess indicates whether secrets were automatically uploaded to Trustee
-func PrintTrusteeInstructions(sealedSecrets []*SealedSecretData, configPath string, autoUploadSuccess bool) {
+// PrintTrusteeInstructions prints console instructions for uploading secrets to Trustee KBS.
+func PrintTrusteeInstructions(sealedSecrets []*SealedSecretData, configPath string) {
 	if len(sealedSecrets) == 0 {
 		return
 	}
@@ -67,15 +66,7 @@ func PrintTrusteeInstructions(sealedSecrets []*SealedSecretData, configPath stri
 	fmt.Println()
 	fmt.Println("Trustee KBS Configuration")
 	fmt.Println("═════════════════════════════════════════════════════════")
-
-	if autoUploadSuccess {
-		fmt.Printf("✓ Successfully added %d secret(s) to Trustee KBS\n\n", len(sealedSecrets))
-		fmt.Println("The following sealed secrets are configured:")
-	} else {
-		fmt.Printf("The following %d sealed secret(s) need to be added to your Trustee KBS:\n\n", len(sealedSecrets))
-	}
-
-	fmt.Println()
+	fmt.Printf("The following %d sealed secret(s) must be uploaded to your Trustee KBS:\n\n", len(sealedSecrets))
 
 	for i, sealed := range sealedSecrets {
 		fmt.Printf("%d. %s\n", i+1, sealed.ResourceURI)
@@ -97,17 +88,10 @@ func PrintTrusteeInstructions(sealedSecrets []*SealedSecretData, configPath stri
 		fmt.Println()
 	}
 
-	fmt.Printf("Full configuration saved to: %s\n", configPath)
+	fmt.Printf("Secrets file: %s\n", configPath)
 	fmt.Println()
-
-	if autoUploadSuccess {
-		fmt.Println("Note: Secrets have been automatically uploaded to Trustee KBS.")
-		fmt.Println("      The configuration file above is saved for your reference.")
-	} else {
-		fmt.Println("Note: Automatic Trustee upload failed or was skipped.")
-		fmt.Println("      Please manually configure these secrets in your Trustee KBS")
-		fmt.Println("      using the configuration file above.")
-	}
+	fmt.Printf("Upload to KBS:\n")
+	fmt.Printf("  cococtl kbs populate -f %s\n", configPath)
 	fmt.Println()
 }
 
