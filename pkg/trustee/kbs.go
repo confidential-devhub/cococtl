@@ -53,6 +53,22 @@ func NewClientWithPortForward(ctx context.Context, restConfig *rest.Config, clie
 		return nil, nil, fmt.Errorf("failed to resolve auth directory: %w", err)
 	}
 
+	keyPath := filepath.Join(resolvedAuthDir, "private.key")
+	// #nosec G304 -- keyPath is constructed from DefaultAuthDir, an application-controlled path
+	pemData, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read KBS private key from %s (run 'cococtl init' first): %w", keyPath, err)
+	}
+
+	return NewClientWithPortForwardFromPEM(ctx, restConfig, clientset, namespace, pemData)
+}
+
+// NewClientWithPortForwardFromPEM creates a kbsclient.Client connected to the KBS pod via a
+// temporary port-forward, using a caller-supplied PEM-encoded Ed25519 private key instead of
+// reading it from an auth directory. Use this when the key has already been loaded from an
+// explicit path (e.g. via --auth-key). The caller must invoke the returned stop function when
+// done. ctx bounds only the port-forward handshake.
+func NewClientWithPortForwardFromPEM(ctx context.Context, restConfig *rest.Config, clientset kubernetes.Interface, namespace string, privateKeyPEM []byte) (*kbsclient.Client, func(), error) {
 	// Wait for a KBS pod to be ready before attempting the port-forward.
 	// Bound by kbsReadyTimeout so the caller does not need to set a deadline.
 	waitCtx, waitCancel := context.WithTimeout(ctx, kbsReadyTimeout)
@@ -74,17 +90,8 @@ func NewClientWithPortForward(ctx context.Context, restConfig *rest.Config, clie
 		return nil, nil, fmt.Errorf("failed to port-forward to KBS pod: %w", err)
 	}
 
-	// Load the Ed25519 private key written by Deploy/init.
-	keyPath := filepath.Join(resolvedAuthDir, "private.key")
-	// #nosec G304 -- keyPath is constructed from DefaultAuthDir, an application-controlled path
-	pemData, err := os.ReadFile(keyPath)
-	if err != nil {
-		stopForward()
-		return nil, nil, fmt.Errorf("failed to read KBS private key from %s (run 'cococtl init' first): %w", keyPath, err)
-	}
-
 	kbsURL := fmt.Sprintf("http://127.0.0.1:%d", localPort)
-	kbsClient, err := kbsclient.NewFromPEM(kbsURL, pemData, nil)
+	kbsClient, err := kbsclient.NewFromPEM(kbsURL, privateKeyPEM, nil)
 	if err != nil {
 		stopForward()
 		return nil, nil, fmt.Errorf("failed to create KBS client: %w", err)
