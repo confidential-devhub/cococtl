@@ -324,20 +324,24 @@ func handleSidecarCertSetup(ctx context.Context, cfg *config.CocoConfig, trustee
 
 	var clientCAPath string
 	if cfg.TrusteeServer != "" && uploadClientCA {
-		sidecarClient, sidecarClientErr := k8s.NewClient(k8s.ClientOptions{})
+		sidecarK8sClient, sidecarClientErr := k8s.NewClient(k8s.ClientOptions{})
 		if sidecarClientErr != nil {
 			return fmt.Errorf("failed to create Kubernetes client for sidecar cert setup: %w", sidecarClientErr)
 		}
 
-		// Upload Client CA to Trustee KBS
+		// Upload Client CA to Trustee KBS via port-forward.
 		// Note: We always use "default" namespace in the KBS path for consistency,
 		// regardless of where Trustee is deployed. This ensures all apps reference
 		// the same client CA location.
 		const kbsResourceNamespace = "default"
 		fmt.Printf("  - Uploading Client CA to Trustee KBS (Trustee namespace: %s, resource path: default)...\n", trusteeNamespace)
 		clientCAPath = kbsResourceNamespace + "/sidecar-tls/client-ca"
-		clientset := sidecarClient.Clientset
-		if err := trustee.UploadResource(ctx, clientset, trusteeNamespace, clientCAPath, clientCA.CertPEM); err != nil {
+		kbsClient, stopForward, err := trustee.NewClientWithPortForward(ctx, sidecarK8sClient.Config, sidecarK8sClient.Clientset, trusteeNamespace, cfg.KBSAuthDir)
+		if err != nil {
+			return fmt.Errorf("failed to connect to KBS: %w", err)
+		}
+		defer stopForward()
+		if err := trustee.UploadResource(ctx, kbsClient, clientCAPath, clientCA.CertPEM); err != nil {
 			return fmt.Errorf("failed to upload client CA to KBS: %w", err)
 		}
 	} else {
