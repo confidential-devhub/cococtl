@@ -57,7 +57,7 @@ func NewClientWithPortForward(ctx context.Context, restConfig *rest.Config, clie
 	// #nosec G304 -- keyPath is constructed from DefaultAuthDir, an application-controlled path
 	pemData, err := os.ReadFile(keyPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to read KBS private key from %s (run 'cococtl init' first): %w", keyPath, err)
+		return nil, nil, fmt.Errorf("failed to read KBS private key from %s (run 'kubectl coco init' first): %w", keyPath, err)
 	}
 
 	return NewClientWithPortForwardFromPEM(ctx, restConfig, clientset, namespace, pemData)

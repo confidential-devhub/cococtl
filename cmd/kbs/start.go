@@ -1,7 +1,9 @@
 package kbs
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 
@@ -97,13 +99,17 @@ func runStartK8s(cmd *cobra.Command) error {
 
 	ctx := cmd.Context()
 
-	// Load config for defaults (non-fatal if not found)
+	// Load config for defaults. A missing file is non-fatal (errConfigNotFound).
+	// Parse or permission errors are logged as warnings but do not abort.
 	cfg, configErr := loadCocoConfig()
+	if configErr != nil && !errors.Is(configErr, errConfigNotFound) {
+		fmt.Fprintf(os.Stderr, "Warning: failed to load config file: %v\n", configErr)
+	}
 
 	// Determine KBS image
 	image := startImage
 	if image == "" {
-		if configErr == nil && cfg.KBSImage != "" {
+		if cfg != nil && cfg.KBSImage != "" {
 			image = cfg.KBSImage
 		} else {
 			image = config.DefaultKBSImage
@@ -112,13 +118,13 @@ func runStartK8s(cmd *cobra.Command) error {
 
 	// Determine auth dir
 	authDir := startAuthDir
-	if authDir == "" && configErr == nil {
+	if authDir == "" && cfg != nil {
 		authDir = cfg.KBSAuthDir
 	}
 
 	// Determine PCCS URL
 	var pccsURL string
-	if configErr == nil {
+	if cfg != nil {
 		pccsURL = cfg.PCCSURL
 	}
 
@@ -128,8 +134,12 @@ func runStartK8s(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to check KBS deployment status: %w", err)
 	}
 	if deployed {
+		kbsURL := trustee.GetServiceURL(namespace, "trustee-kbs")
 		fmt.Printf("KBS is already deployed in namespace '%s'\n", namespace)
-		fmt.Printf("KBS URL: %s\n", trustee.GetServiceURL(namespace, "trustee-kbs"))
+		fmt.Printf("KBS URL: %s\n", kbsURL)
+		// Persist so that subsequent 'kbs populate' calls can derive namespace/auth-dir
+		// from config without explicit flags, even when no fresh deploy happened.
+		persistStartConfig(cfg, configErr, kbsURL, authDir)
 		return nil
 	}
 
@@ -149,20 +159,7 @@ func runStartK8s(cmd *cobra.Command) error {
 	}
 
 	kbsURL := trustee.GetServiceURL(namespace, "trustee-kbs")
-
-	// Persist the resolved auth dir and KBS URL so subsequent 'kbs populate'
-	// calls work without explicit flags, matching what 'init' does.
-	if configErr != nil {
-		cfg = config.DefaultConfig()
-	}
-	cfg.KBSAuthDir = trusteeCfg.AuthDir
-	cfg.TrusteeServer = kbsURL
-	configPath, pathErr := config.GetConfigPath()
-	if pathErr != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to determine config path, config not saved: %v\n", pathErr)
-	} else if saveErr := cfg.Save(configPath); saveErr != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to update config file: %v\n", saveErr)
-	}
+	persistStartConfig(cfg, configErr, kbsURL, trusteeCfg.AuthDir)
 
 	fmt.Printf("KBS deployed successfully\n")
 	fmt.Printf("KBS URL: %s\n", kbsURL)
@@ -174,11 +171,44 @@ func runStartK8s(cmd *cobra.Command) error {
 	return nil
 }
 
+// persistStartConfig writes the KBS URL and auth dir to the on-disk config so
+// that subsequent 'kbs populate' calls can resolve namespace and auth without
+// requiring explicit flags. Called on both fresh deploy and already-deployed paths.
+func persistStartConfig(cfg *config.CocoConfig, configErr error, kbsURL, authDir string) {
+	// Start from defaults when config is absent (errConfigNotFound) or unreadable.
+	if cfg == nil || (configErr != nil && !errors.Is(configErr, errConfigNotFound)) {
+		cfg = config.DefaultConfig()
+	}
+	cfg.TrusteeServer = kbsURL
+	if authDir != "" {
+		cfg.KBSAuthDir = authDir
+	}
+	configPath, pathErr := config.GetConfigPath()
+	if pathErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to determine config path, config not saved: %v\n", pathErr)
+	} else if saveErr := cfg.Save(configPath); saveErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to update config file: %v\n", saveErr)
+	}
+}
+
+// errConfigNotFound is returned by loadCocoConfig when no config file exists yet.
+// Callers treat this as non-fatal ("no config yet") and use defaults instead.
+var errConfigNotFound = errors.New("config file not found")
+
 // loadCocoConfig loads the CoCo config from the default path.
+// Returns errConfigNotFound when the file does not exist (non-fatal: use defaults).
+// Other errors (parse failures, permission issues) are returned as-is.
 func loadCocoConfig() (*config.CocoConfig, error) {
 	configPath, err := config.GetConfigPath()
 	if err != nil {
 		return nil, err
 	}
-	return config.Load(configPath)
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, errConfigNotFound
+		}
+		return nil, err
+	}
+	return cfg, nil
 }

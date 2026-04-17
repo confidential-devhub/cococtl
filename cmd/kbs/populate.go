@@ -142,22 +142,21 @@ func resolveInputMode() (string, error) {
 func createPopulateKBSClient(ctx context.Context) (*kbsclient.Client, func(), error) {
 	noop := func() {}
 
-	// Optional TLS CA (relevant only for direct-URL mode with HTTPS endpoints).
-	var caCert []byte
-	if populateTLSCA != "" {
-		var err error
-		// #nosec G304 -- path provided by the user via flag
-		caCert, err = os.ReadFile(populateTLSCA)
-		if err != nil {
-			return nil, noop, fmt.Errorf("failed to read TLS CA from %s: %w", populateTLSCA, err)
-		}
-	}
-
-	// Direct URL mode: load key and connect directly to the provided URL.
+	// Direct URL mode: load key, optional TLS CA, and connect directly.
+	// --tls-ca is only read here; it is irrelevant (and not validated) for
+	// port-forward mode, which uses plain HTTP over the kubectl tunnel.
 	if populateKBSURL != "" {
 		pemData, err := loadPrivateKeyPEM(populateAuthKey, populateAuthDir)
 		if err != nil {
 			return nil, noop, err
+		}
+		var caCert []byte
+		if populateTLSCA != "" {
+			// #nosec G304 -- path provided by the user via flag
+			caCert, err = os.ReadFile(populateTLSCA)
+			if err != nil {
+				return nil, noop, fmt.Errorf("failed to read TLS CA from %s: %w", populateTLSCA, err)
+			}
 		}
 		client, err := kbsclient.NewFromPEM(populateKBSURL, pemData, caCert)
 		if err != nil {
@@ -245,6 +244,21 @@ func resolveAuthDir(authDirFlag string) (string, error) {
 	return trustee.DefaultAuthDir("")
 }
 
+// isTrusteeServerInCluster reports whether the given URL matches the Kubernetes
+// in-cluster service URL patterns (*.svc.cluster.local or *.svc), which are the
+// only patterns from which GetTrusteeNamespace can reliably extract a namespace.
+func isTrusteeServerInCluster(serverURL string) bool {
+	host := strings.TrimPrefix(serverURL, "http://")
+	host = strings.TrimPrefix(host, "https://")
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	if idx := strings.Index(host, "/"); idx != -1 {
+		host = host[:idx]
+	}
+	return strings.HasSuffix(host, ".svc.cluster.local") || strings.HasSuffix(host, ".svc")
+}
+
 // resolveKBSNamespace returns the namespace where the KBS pod is deployed.
 // Priority: --namespace flag > config TrusteeServer-derived namespace > current context namespace.
 func resolveKBSNamespace() (string, error) {
@@ -252,10 +266,12 @@ func resolveKBSNamespace() (string, error) {
 		return populateNamespace, nil
 	}
 
-	// Try to derive from config's TrusteeServer URL.
-	// Only skip when GetTrusteeNamespace returns empty (parse failure), not when it
-	// legitimately returns "default" — KBS may be deployed in the default namespace.
-	if cfg, err := loadCocoConfig(); err == nil && cfg.TrusteeServer != "" {
+	// Try to derive the namespace from config's TrusteeServer URL, but only when
+	// it is an in-cluster service URL (*.svc.cluster.local or *.svc).
+	// GetTrusteeNamespace returns "default" as a fallback for external/unparseable
+	// URLs, so using it unconditionally would silently misdirect port-forwards for
+	// any non-cluster TrusteeServer value.
+	if cfg, err := loadCocoConfig(); err == nil && isTrusteeServerInCluster(cfg.TrusteeServer) {
 		if ns := cfg.GetTrusteeNamespace(); ns != "" {
 			return ns, nil
 		}
