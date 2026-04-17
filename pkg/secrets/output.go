@@ -91,7 +91,7 @@ func PrintTrusteeInstructions(sealedSecrets []*SealedSecretData, configPath stri
 	fmt.Printf("Secrets file: %s\n", configPath)
 	fmt.Println()
 	fmt.Printf("Upload to KBS:\n")
-	fmt.Printf("  cococtl kbs populate -f %s\n", configPath)
+	fmt.Printf("  kubectl coco kbs populate -f %s\n", configPath)
 	fmt.Println()
 }
 

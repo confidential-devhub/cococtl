@@ -7,6 +7,8 @@ import (
 	"os/exec"
 
 	"github.com/spf13/cobra"
+
+	"github.com/confidential-devhub/cococtl/cmd/kbs"
 )
 
 // version is set at build time via ldflags
@@ -32,6 +34,7 @@ func Execute() error {
 
 func init() {
 	cobra.OnInitialize()
+	rootCmd.AddCommand(kbs.KbsCmd)
 }
 
 // contextKey is the type for context keys used in cococtl
