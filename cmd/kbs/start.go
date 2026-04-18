@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 
@@ -19,13 +20,18 @@ var startCmd = &cobra.Command{
 	Short: "Deploy or configure a KBS instance",
 	Long: `Deploy or configure a Key Broker Service (KBS) instance.
 
---mode k8s  Deploy KBS to a Kubernetes cluster using the all-in-one Trustee image.
-            The admin private key is written to --auth-dir (default: ~/.kube/coco-kbs-auth).
-            Use 'kubectl coco kbs populate' afterwards to upload resources.
+--mode k8s       Deploy KBS to a Kubernetes cluster using the all-in-one Trustee image.
+                 The admin private key is written to --auth-dir (default: ~/.kube/coco-kbs-auth).
+                 Use 'kubectl coco kbs populate' afterwards to upload resources.
 
-Example:
+--mode external  Register a pre-existing KBS instance. Writes --url and --auth-dir to
+                 config so 'kbs populate' can connect without explicit flags.
+                 No Kubernetes interaction occurs.
+
+Examples:
   kubectl coco kbs start --mode k8s --namespace coco-system
-  kubectl coco kbs start --mode k8s --namespace coco-system --image ghcr.io/confidential-containers/key-broker-service:v0.17.0`,
+  kubectl coco kbs start --mode external --url http://kbs.example.com:8080
+  kubectl coco kbs start --mode external --url http://kbs.example.com:8080 --auth-dir ~/.kube/my-kbs-auth`,
 	RunE: runStart,
 }
 
@@ -35,22 +41,26 @@ var (
 	startNamespace       string
 	startImage           string
 	startAuthDir         string
+	startURL             string
 )
 
 func init() {
-	startCmd.Flags().StringVar(&startMode, "mode", "k8s", "KBS deployment mode: k8s")
+	startCmd.Flags().StringVar(&startMode, "mode", "k8s", "KBS deployment mode: k8s, external")
 	startCmd.Flags().StringVar(&startResourceBackend, "resource-backend", "file", "Resource backend: file (default), vault (not yet implemented)")
 	startCmd.Flags().StringVar(&startNamespace, "namespace", "", "Kubernetes namespace for KBS deployment (default: current context namespace)")
 	startCmd.Flags().StringVar(&startImage, "image", "", "KBS container image (default: from config or built-in)")
 	startCmd.Flags().StringVar(&startAuthDir, "auth-dir", "", "Directory to store the KBS admin private key (default: ~/.kube/coco-kbs-auth)")
+	startCmd.Flags().StringVar(&startURL, "url", "", "URL of the external KBS instance (required for --mode external)")
 }
 
 func runStart(cmd *cobra.Command, _ []string) error {
 	switch startMode {
 	case "k8s":
 		return runStartK8s(cmd)
+	case "external":
+		return runStartExternal(cmd)
 	default:
-		return fmt.Errorf("unknown --mode %q: supported values are: k8s", startMode)
+		return fmt.Errorf("unknown --mode %q: supported values are: k8s, external", startMode)
 	}
 }
 
@@ -139,7 +149,9 @@ func runStartK8s(cmd *cobra.Command) error {
 		fmt.Printf("KBS URL: %s\n", kbsURL)
 		// Persist so that subsequent 'kbs populate' calls can derive namespace/auth-dir
 		// from config without explicit flags, even when no fresh deploy happened.
-		persistStartConfig(cfg, configErr, kbsURL, authDir)
+		if err := persistStartConfig(cfg, kbsURL, authDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		}
 		return nil
 	}
 
@@ -159,7 +171,9 @@ func runStartK8s(cmd *cobra.Command) error {
 	}
 
 	kbsURL := trustee.GetServiceURL(namespace, "trustee-kbs")
-	persistStartConfig(cfg, configErr, kbsURL, trusteeCfg.AuthDir)
+	if err := persistStartConfig(cfg, kbsURL, trusteeCfg.AuthDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
 
 	fmt.Printf("KBS deployed successfully\n")
 	fmt.Printf("KBS URL: %s\n", kbsURL)
@@ -171,24 +185,59 @@ func runStartK8s(cmd *cobra.Command) error {
 	return nil
 }
 
-// persistStartConfig writes the KBS URL and auth dir to the on-disk config so
-// that subsequent 'kbs populate' calls can resolve namespace and auth without
-// requiring explicit flags. Called on both fresh deploy and already-deployed paths.
-func persistStartConfig(cfg *config.CocoConfig, configErr error, kbsURL, authDir string) {
-	// Start from defaults when config is absent (errConfigNotFound) or unreadable.
-	if cfg == nil || (configErr != nil && !errors.Is(configErr, errConfigNotFound)) {
+func persistStartConfig(cfg *config.CocoConfig, kbsURL, authDir string) error {
+	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
 	cfg.TrusteeServer = kbsURL
 	if authDir != "" {
 		cfg.KBSAuthDir = authDir
 	}
-	configPath, pathErr := config.GetConfigPath()
-	if pathErr != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to determine config path, config not saved: %v\n", pathErr)
-	} else if saveErr := cfg.Save(configPath); saveErr != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to update config file: %v\n", saveErr)
+	configPath, err := config.GetConfigPath()
+	if err != nil {
+		return fmt.Errorf("failed to determine config path: %w", err)
 	}
+	if err := cfg.Save(configPath); err != nil {
+		return fmt.Errorf("failed to save config to %q: %w", configPath, err)
+	}
+	return nil
+}
+
+func runStartExternal(_ *cobra.Command) error {
+	if startURL == "" {
+		return fmt.Errorf("--url is required for --mode external")
+	}
+
+	u, err := url.Parse(startURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return fmt.Errorf("--url must be a valid http:// or https:// URL with a host, got %q", startURL)
+	}
+	if (u.Path != "" && u.Path != "/") || u.RawPath != "" {
+		return fmt.Errorf("--url must be a base URL of the form http://host[:port] or https://host[:port], without a path, got %q", startURL)
+	}
+	if u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return fmt.Errorf("--url must not include query, fragment, or userinfo components, got %q", startURL)
+	}
+
+	cfg, configErr := loadCocoConfig()
+	if configErr != nil && !errors.Is(configErr, errConfigNotFound) {
+		fmt.Fprintf(os.Stderr, "Warning: failed to load config file: %v\n", configErr)
+	}
+
+	if err := persistStartConfig(cfg, startURL, startAuthDir); err != nil {
+		return err
+	}
+
+	fmt.Printf("External KBS configured\n")
+	fmt.Printf("KBS URL: %s\n", startURL)
+	if startAuthDir != "" {
+		fmt.Printf("Auth dir: %s\n", startAuthDir)
+	}
+	fmt.Println()
+	fmt.Println("To upload resources to KBS:")
+	fmt.Println("  kubectl coco kbs populate -f <secrets.yaml>")
+
+	return nil
 }
 
 // errConfigNotFound is returned by loadCocoConfig when no config file exists yet.

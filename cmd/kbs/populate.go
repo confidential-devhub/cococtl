@@ -3,6 +3,7 @@ package kbs
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,8 +30,9 @@ Input modes (mutually exclusive):
   --path <kbs-path> --resource-file <f>  Upload a single file to the specified KBS path
   --from-k8s-secret <name>              Fetch a Kubernetes Secret and upload each key
 
-KBS connection:
-  --kbs-url    Direct KBS URL (skips port-forward; for external KBS)
+KBS connection (resolution order):
+  --kbs-url    Explicit direct URL (skips port-forward)
+  (config)     TrusteeServer from config when it is a non-cluster URL (set by 'kbs start --mode external')
   (default)    Port-forward to the in-cluster KBS pod (requires --namespace or current context)
 
 Authentication (resolution order: --auth-key > --auth-dir > config > default dir):
@@ -135,17 +137,20 @@ func resolveInputMode() (string, error) {
 	return mode, nil
 }
 
-// createPopulateKBSClient builds a kbsclient.Client using flag-based auth resolution
-// (explicit --auth-key > --auth-dir > config KBSAuthDir > default dir).
-// If --kbs-url is provided the client connects directly; otherwise a port-forward is set up.
+// createPopulateKBSClient builds a kbsclient.Client using the following URL resolution:
+//
+//  1. --kbs-url flag: connect directly to that URL
+//  2. config TrusteeServer (non-cluster URL): connect directly (set by 'kbs start --mode external')
+//  3. otherwise: port-forward to the in-cluster KBS pod
+//
+// Auth resolution: --auth-key > --auth-dir > config KBSAuthDir > default dir.
 // The caller must invoke the returned stop function when done.
 func createPopulateKBSClient(ctx context.Context) (*kbsclient.Client, func(), error) {
 	noop := func() {}
 
-	// Direct URL mode: load key, optional TLS CA, and connect directly.
-	// --tls-ca is only read here; it is irrelevant (and not validated) for
-	// port-forward mode, which uses plain HTTP over the kubectl tunnel.
-	if populateKBSURL != "" {
+	// directConnect builds a client for a known URL (--kbs-url or config TrusteeServer).
+	// --tls-ca is honoured here; it is irrelevant for port-forward mode (plain HTTP tunnel).
+	directConnect := func(kbsURL string) (*kbsclient.Client, func(), error) {
 		pemData, err := loadPrivateKeyPEM(populateAuthKey, populateAuthDir)
 		if err != nil {
 			return nil, noop, err
@@ -158,11 +163,25 @@ func createPopulateKBSClient(ctx context.Context) (*kbsclient.Client, func(), er
 				return nil, noop, fmt.Errorf("failed to read TLS CA from %s: %w", populateTLSCA, err)
 			}
 		}
-		client, err := kbsclient.NewFromPEM(populateKBSURL, pemData, caCert)
+		client, err := kbsclient.NewFromPEM(kbsURL, pemData, caCert)
 		if err != nil {
 			return nil, noop, fmt.Errorf("failed to create KBS client: %w", err)
 		}
 		return client, noop, nil
+	}
+
+	if populateKBSURL != "" {
+		return directConnect(populateKBSURL)
+	}
+
+	// If config holds a non-cluster TrusteeServer URL (written by 'kbs start --mode external'),
+	// use it directly without a port-forward. Validate the URL before using it so that a
+	// manually edited or otherwise malformed config does not produce confusing HTTP errors.
+	if cfg, err := loadCocoConfig(); err == nil && cfg.TrusteeServer != "" && !isTrusteeServerInCluster(cfg.TrusteeServer) {
+		u, err := url.Parse(cfg.TrusteeServer)
+		if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" {
+			return directConnect(cfg.TrusteeServer)
+		}
 	}
 
 	// Port-forward mode: determine the namespace where KBS is deployed.
