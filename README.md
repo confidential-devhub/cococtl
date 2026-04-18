@@ -10,15 +10,15 @@ Read more about CoCo at [confidentialcontainers.org](https://confidentialcontain
 `kubectl-coco` simplifies the process of transforming regular Kubernetes manifests into CoCo-enabled manifests. It automatically handles:
 
 - **RuntimeClass Configuration**: Sets the appropriate CoCo runtime
-- **Secrets Management**: Converts K8s secrets to sealed secrets and uploads to locally deployed Trustee KBS
+- **Secrets Management**: Converts K8s secrets to sealed secrets for upload to Trustee KBS via `kbs populate`
 - **ImagePullSecrets**: Handles private registry credentials with automatic Trustee KBS integration
 - **InitData Generation**: Creates aa.toml, cdh.toml, and policy.rego configurations
 
 
 ## Features
 
-- ✅ **Trustee deployment**: Deploy a Trustee instance in the cluster for testing
-- ✅ **Automatic Secret Conversion**: Detects and converts K8s secrets to sealed format including updating Trustee KBS with the secrets
+- ✅ **KBS Management**: Deploy in-cluster Trustee KBS or register an external instance; upload resources via `kbs populate`
+- ✅ **Automatic Secret Conversion**: Detects and converts K8s secrets to sealed format; generates a trustee-secrets.yaml for upload via `kbs populate`
 - ✅ **ImagePullSecrets Support**: Handles private registry credentials with Trustee KBS integration
 - ✅ **Secure Access Sidecar**: Optional mTLS-secured sidecar for status reporting and secure port forwarding (see [sidecar/README.md](sidecar/README.md))
 - ✅ **Multi-Resource Support**: Works with Pod, Deployment, StatefulSet, ReplicaSet, Job, DaemonSet
@@ -56,19 +56,31 @@ kubectl coco init
 
 This creates `~/.kube/coco-config.toml` and deploys Trustee to your cluster.
 
-### 3. Transform and Deploy
+### 3. Transform
+
+Use `--skip-apply` to generate the transformed manifest and secrets file without deploying yet:
 
 ```bash
-kubectl coco apply -f your-app.yaml
+kubectl coco apply -f your-app.yaml --skip-apply
 ```
 
-That's it! Your application is now CoCo-enabled with:
-- Secrets converted to sealed format
-- ImagePullSecrets configured for KBS
-- Secrets automatically uploaded to Trustee KBS
-- Proper runtime and initdata configured
+### 4. Upload Secrets to KBS
+
+Secrets must be in KBS before the pods start:
+
+```bash
+kubectl coco kbs populate -f <app>-trustee-secrets.yaml
+```
+
+### 5. Deploy
+
+```bash
+kubectl apply -f your-app-coco.yaml
+```
 
 **Note:** There are some sample manifests under `examples` folder which you can try.
+
+> `kubectl coco apply` runs `kubectl apply` automatically unless `--skip-apply` is set. Use `--skip-apply` when you need to upload secrets to KBS before the workload starts (recommended for first deployments).
 
 ## What Gets Transformed
 
@@ -78,11 +90,11 @@ That's it! Your application is now CoCo-enabled with:
 2. **Converts Secrets**:
    - Detects all secret references (env, envFrom, volumes)
    - Creates sealed secrets with `-sealed` suffix
-   - **Automatically uploads** actual secret values to Trustee KBS
+   - Writes KBS resource references to `<app>-trustee-secrets.yaml` (upload with `kbs populate`)
    - Updates manifest to use sealed secret names
 3. **Handles ImagePullSecrets**:
    - Keeps imagePullSecrets in manifest (for CRI-O)
-   - **Automatically uploads** credentials to Trustee KBS
+   - Writes credentials to `<app>-trustee-secrets.yaml` (upload with `kbs populate`)
    - Adds KBS URI to initdata CDH configuration
    - Falls back to default service account if not specified
 4. **Generates InitData**: Creates aa.toml, cdh.toml, policy.rego
@@ -258,6 +270,52 @@ kubectl coco init --interactive  # or -i
 
 ```bash
 kubectl coco init --trustee-url https://trustee.example.com:8080
+```
+
+### Manage KBS (Key Broker Service)
+
+The `kbs` subcommand manages the Trustee Key Broker Service that stores your secrets.
+
+#### Deploy KBS in Kubernetes
+
+```bash
+kubectl coco kbs start --mode k8s
+```
+
+Deploys Trustee to the current namespace and saves the admin private key to `~/.kube/coco-kbs-auth`. The KBS URL is written to `~/.kube/coco-config.toml` for use by subsequent commands.
+
+```bash
+# With custom namespace
+kubectl coco kbs start --mode k8s --namespace coco-system
+```
+
+#### Register an External KBS
+
+```bash
+kubectl coco kbs start --mode external --url http://kbs.example.com:8080
+```
+
+Records the KBS URL in config without deploying anything. Optionally specify `--auth-dir` to point at an existing admin key directory.
+
+#### Upload Resources to KBS
+
+After `kubectl coco apply` generates a `*-trustee-secrets.yaml`, upload the secrets:
+
+```bash
+kubectl coco kbs populate -f app-trustee-secrets.yaml
+```
+
+**Other input modes:**
+
+```bash
+# From a Kubernetes Secret
+kubectl coco kbs populate --from-k8s-secret my-registry-secret -n my-namespace
+
+# Single file to a specific KBS path
+kubectl coco kbs populate --path default/myapp/password --resource-file /path/to/password.txt
+
+# Direct URL (skips in-cluster port-forward)
+kubectl coco kbs populate --kbs-url http://kbs.example.com:8080 --auth-key /path/to/private.key -f secrets.yaml
 ```
 
 ### Transform and Apply Manifests
