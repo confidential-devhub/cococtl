@@ -248,11 +248,9 @@ Custom policy can be specified in config.
 
 #### Encoding
 
-All three files are:
-1. Combined into a single structure
-2. Compressed with gzip
-3. Base64-encoded
-4. Added as annotation value
+The files are combined into a single TOML structure, gzip-compressed, and base64-encoded. `policy.rego` is optional; `aa.toml` and `cdh.toml` are always present.
+
+Use `kubectl coco initdata dump --raw` to inspect the generated TOML, or `kubectl coco initdata validate` to verify structure and embedded certificates.
 
 #### Annotation Placement
 
