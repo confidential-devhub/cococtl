@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/pelletier/go-toml/v2"
@@ -94,11 +96,31 @@ func GenerateRaw(cfg *config.CocoConfig, certPEM string, imagePullSecrets []Imag
 		},
 	}
 
-	tomlData, err := toml.Marshal(id)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal initdata: %w", err)
+	return marshalInitData(id)
+}
+
+// marshalInitData serialises InitData to TOML using ''' literal multi-line strings
+// for data values so the output is human-readable without escape sequences.
+func marshalInitData(id InitData) ([]byte, error) {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "version = %q\n", id.Version)
+	fmt.Fprintf(&sb, "algorithm = %q\n", id.Algorithm)
+	sb.WriteString("\n[data]\n")
+
+	keys := make([]string, 0, len(id.Data))
+	for k := range id.Data {
+		keys = append(keys, k)
 	}
-	return tomlData, nil
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		v := id.Data[k]
+		if !strings.HasSuffix(v, "\n") {
+			v += "\n"
+		}
+		fmt.Fprintf(&sb, "\n%q = '''\n%s'''\n", k, v)
+	}
+	return []byte(sb.String()), nil
 }
 
 // Decode decodes a base64+gzip encoded initdata string and returns the data map.
