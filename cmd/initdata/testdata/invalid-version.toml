@@ -1,0 +1,25 @@
+version = "9.9.9"
+algorithm = "sha256"
+
+[data]
+"aa.toml" = '''
+[token_configs]
+
+[token_configs.kbs]
+url = "http://kbs.example.svc:8080"
+
+'''
+
+"cdh.toml" = '''
+[kbc]
+name = "cc_kbc"
+url = "http://kbs.example.svc:8080"
+
+'''
+
+"policy.rego" = '''
+package agent_policy
+
+default ExecProcessRequest := false
+
+'''
