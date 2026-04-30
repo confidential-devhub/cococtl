@@ -41,3 +41,6 @@ examples/hello-world-*.yaml
 
 # Review and scratch files
 review_report.md
+
+# AI planning artifacts (local only)
+docs/

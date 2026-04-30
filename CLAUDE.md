@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## AI Planning Artifacts
+
+The `docs/` directory is used exclusively for AI-assisted planning artifacts (specs, plans, design docs). These files are local only and must never be committed. They are listed in `.gitignore`.
+
 ## Project Overview
 
 kubectl-coco is a kubectl plugin that transforms regular Kubernetes manifests into Confidential Containers (CoCo) enabled manifests. It automates RuntimeClass configuration, secret conversion to sealed format, imagePullSecrets handling, initdata generation, and Trustee KBS deployment/management.
