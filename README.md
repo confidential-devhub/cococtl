@@ -22,7 +22,7 @@ Read more about CoCo at [confidentialcontainers.org](https://confidentialcontain
 - ✅ **ImagePullSecrets Support**: Handles private registry credentials with Trustee KBS integration
 - ✅ **Secure Access Sidecar**: Optional mTLS-secured sidecar for status reporting and secure port forwarding (see [sidecar/README.md](sidecar/README.md))
 - ✅ **Multi-Resource Support**: Works with Pod, Deployment, StatefulSet, ReplicaSet, Job, DaemonSet
-- ✅ **InitData Generation**: Creates properly formatted and encoded configurations
+- ✅ **InitData Management**: Create, inspect, and validate initdata via the `initdata` subcommand; automatically generated during `apply`
 - ✅ **Backup Management**: Saves transformed manifests with `-coco` suffix
 
 ## Quick Start
@@ -317,6 +317,59 @@ kubectl coco kbs populate --path default/myapp/password --resource-file /path/to
 # Direct URL (skips in-cluster port-forward)
 kubectl coco kbs populate --kbs-url http://kbs.example.com:8080 --auth-key /path/to/private.key -f secrets.yaml
 ```
+
+### Manage InitData
+
+The `initdata` subcommand lets you create, inspect, and validate initdata independently of `apply`. This is useful for auditing initdata before deployment or generating it for use with external tooling.
+
+#### Create initdata
+
+Generate the raw initdata TOML from your config and save it to disk:
+
+```bash
+# From default config, save to ~/.kube/coco-initdata.toml
+kubectl coco initdata create
+
+# With a custom CA certificate (validates cert before embedding)
+kubectl coco initdata create --cacert /path/to/ca.crt
+
+# With a directory of CA certs
+kubectl coco initdata create --capath /etc/ssl/certs
+
+# Custom output path
+kubectl coco initdata create --output /tmp/my-initdata.toml
+```
+
+#### Inspect initdata
+
+```bash
+# Show the base64+gzip encoded blob (ready for use as an annotation value)
+kubectl coco initdata dump
+
+# Show the human-readable plaintext TOML
+kubectl coco initdata dump --raw
+
+# Read from a specific file
+kubectl coco initdata dump --file /tmp/my-initdata.toml
+```
+
+The default output of `dump` (without `--raw`) is the value to use for the
+`io.katacontainers.config.hypervisor.cc_init_data` annotation.
+
+#### Validate initdata
+
+```bash
+# Validate a saved TOML file (checks version, algorithm, required keys, embedded certs)
+kubectl coco initdata validate --file ~/.kube/coco-initdata.toml
+
+# Validate the encoded blob from dump via pipe
+kubectl coco initdata dump | kubectl coco initdata validate
+```
+
+Validation checks:
+- `version` is `0.1.0` and `algorithm` is `sha256`
+- Required keys `aa.toml` and `cdh.toml` are present (`policy.rego` is optional)
+- Any CA certificates embedded in `aa.toml` or `cdh.toml` pass rustls compatibility checks
 
 ### Transform and Apply Manifests
 
