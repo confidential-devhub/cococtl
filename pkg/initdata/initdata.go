@@ -6,9 +6,9 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/confidential-devhub/cococtl/pkg/config"
 	"github.com/pelletier/go-toml/v2"
@@ -35,45 +35,52 @@ type ImagePullSecretInfo struct {
 	Key        string
 }
 
-// Generate creates initdata based on the CoCo configuration
-// imagePullSecrets is optional - pass nil if no imagePullSecrets need to be added
+// Generate creates initdata based on the CoCo configuration.
 func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (string, error) {
+	raw, err := GenerateRaw(cfg, "", imagePullSecrets)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := compressAndEncode(raw)
+	if err != nil {
+		return "", fmt.Errorf("failed to compress and encode initdata: %w", err)
+	}
+	return encoded, nil
+}
+
+// GenerateRaw returns the raw initdata TOML bytes without gzip/base64 encoding.
+// When certPEM is non-empty it is used directly instead of reading cfg.TrusteeCACert.
+func GenerateRaw(cfg *config.CocoConfig, certPEM string, imagePullSecrets []ImagePullSecretInfo) ([]byte, error) {
 	if cfg.TrusteeServer == "" {
-		return "", fmt.Errorf("trustee server URL is required for initdata generation")
+		return nil, fmt.Errorf("trustee server URL is required for initdata generation")
 	}
 
-	// Read the CA cert once so that both aa.toml and cdh.toml are guaranteed
-	// to embed identical content (avoids a TOCTOU window from multiple reads).
-	var caCert string
-	if cfg.TrusteeCACert != "" {
+	caCert := certPEM
+	if caCert == "" && cfg.TrusteeCACert != "" {
 		raw, err := os.ReadFile(cfg.TrusteeCACert)
 		if err != nil {
-			return "", fmt.Errorf("failed to read CA cert from %q: %w", cfg.TrusteeCACert, err)
+			return nil, fmt.Errorf("failed to read CA cert from %q: %w", cfg.TrusteeCACert, err)
 		}
 		caCert = string(raw)
 	}
 
-	// Generate aa.toml (Attestation Agent configuration)
 	aaToml, err := generateAAToml(cfg, caCert)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate aa.toml: %w", err)
+		return nil, fmt.Errorf("failed to generate aa.toml: %w", err)
 	}
 
-	// Generate cdh.toml (Confidential Data Hub configuration)
 	cdhToml, err := generateCDHToml(cfg, caCert, imagePullSecrets)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate cdh.toml: %w", err)
+		return nil, fmt.Errorf("failed to generate cdh.toml: %w", err)
 	}
 
-	// Get policy.rego
 	var policy string
 	if cfg.KataAgentPolicy != "" {
 		policy, err = loadPolicyFile(cfg.KataAgentPolicy)
 		if err != nil {
-			return "", fmt.Errorf("failed to load policy file: %w", err)
+			return nil, fmt.Errorf("failed to load policy file: %w", err)
 		}
 	} else {
-		// Use default restrictive policy (exec disabled, logs enabled)
 		policy = getDefaultPolicy()
 	}
 
@@ -89,16 +96,31 @@ func Generate(cfg *config.CocoConfig, imagePullSecrets []ImagePullSecretInfo) (s
 
 	tomlData, err := toml.Marshal(id)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal initdata: %w", err)
+		return nil, fmt.Errorf("failed to marshal initdata: %w", err)
 	}
+	return tomlData, nil
+}
 
-	// Compress with gzip and encode to base64
-	encoded, err := compressAndEncode(tomlData)
+// Decode decodes a base64+gzip encoded initdata string and returns the data map.
+func Decode(encoded string) (map[string]string, error) {
+	gzipData, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return "", fmt.Errorf("failed to compress and encode initdata: %w", err)
+		return nil, fmt.Errorf("failed to decode base64: %w", err)
 	}
-
-	return encoded, nil
+	gzipReader, err := gzip.NewReader(bytes.NewReader(gzipData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer func() { _ = gzipReader.Close() }()
+	tomlData, err := io.ReadAll(gzipReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress gzip data: %w", err)
+	}
+	var id InitData
+	if err := toml.Unmarshal(tomlData, &id); err != nil {
+		return nil, fmt.Errorf("failed to parse initdata TOML: %w", err)
+	}
+	return id.Data, nil
 }
 
 // generateAAToml creates the Attestation Agent configuration.
@@ -152,9 +174,7 @@ func generateCDHToml(cfg *config.CocoConfig, caCert string, imagePullSecrets []I
 		// Add authenticated registry credentials URI
 		// Priority: imagePullSecrets (dynamic) > config.RegistryCredURI (static)
 		if len(imagePullSecrets) > 0 {
-			// CDH spec only supports a single authenticated_registry_credentials_uri
-			// Use the first (and typically only) imagePullSecret
-			// Format: kbs:///namespace/secret-name/key
+			// CDH spec only supports one URI; use the first entry.
 			ips := imagePullSecrets[0]
 			uri := fmt.Sprintf("kbs:///%s/%s/%s", ips.Namespace, ips.SecretName, ips.Key)
 			imageConfig["authenticated_registry_credentials_uri"] = uri
@@ -187,34 +207,15 @@ func generateCDHToml(cfg *config.CocoConfig, caCert string, imagePullSecrets []I
 
 // loadPolicyFile reads a policy file from disk
 func loadPolicyFile(path string) (string, error) {
-	// Validate and sanitize the path to prevent directory traversal
-	// Source - https://stackoverflow.com/a/57534618
-	// Posted by Kenny Grant, modified by community. See post 'Timeline' for change history
-	// Retrieved 2025-11-14, License - CC BY-SA 4.0
 	cleanPath := filepath.Clean(path)
-
-	// For absolute paths, validate they don't escape the filesystem root
-	// For relative paths, ensure they're relative to current directory
-	if filepath.IsAbs(cleanPath) {
-		// Absolute paths are allowed for policy files
-		// but ensure path doesn't contain traversal attempts
-		if strings.Contains(path, "..") {
-			return "", fmt.Errorf("invalid policy path: contains directory traversal")
-		}
-	} else {
-		// For relative paths, ensure they resolve within current directory
+	if !filepath.IsAbs(cleanPath) {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return "", fmt.Errorf("failed to get current directory: %w", err)
 		}
-		absPath := filepath.Join(cwd, cleanPath)
-		if !strings.HasPrefix(absPath, cwd) {
-			return "", fmt.Errorf("invalid policy path: escapes current directory")
-		}
-		cleanPath = absPath
+		cleanPath = filepath.Join(cwd, cleanPath)
 	}
-
-	// #nosec G304 - Path is validated above
+	// #nosec G304
 	data, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return "", err
