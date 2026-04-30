@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,23 +11,6 @@ import (
 
 	pkginitdata "github.com/confidential-devhub/cococtl/pkg/initdata"
 )
-
-func makeRawInitdataFile(t *testing.T, dir string) string {
-	t.Helper()
-	cfgPath := filepath.Join(dir, "cfg.toml")
-	_ = os.WriteFile(cfgPath, []byte("trustee_server = \"http://kbs.test.svc:8080\"\nruntime_class = \"kata-cc\"\n"), 0600)
-	cfg, err := loadConfig(cfgPath)
-	if err != nil {
-		t.Fatalf("loadConfig: %v", err)
-	}
-	raw, err := pkginitdata.GenerateRaw(cfg, "", nil)
-	if err != nil {
-		t.Fatalf("GenerateRaw: %v", err)
-	}
-	path := filepath.Join(dir, "initdata.toml")
-	_ = os.WriteFile(path, raw, 0600)
-	return path
-}
 
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
@@ -48,9 +30,7 @@ func captureStdout(t *testing.T, fn func()) string {
 }
 
 func TestRunDump_Encoded(t *testing.T) {
-	dir := t.TempDir()
-	tomlPath := makeRawInitdataFile(t, dir)
-	dumpFile = tomlPath
+	dumpFile = "testdata/valid.toml"
 	dumpRaw = false
 	defer func() { dumpFile = ""; dumpRaw = false }()
 
@@ -66,9 +46,7 @@ func TestRunDump_Encoded(t *testing.T) {
 }
 
 func TestRunDump_Raw(t *testing.T) {
-	dir := t.TempDir()
-	tomlPath := makeRawInitdataFile(t, dir)
-	dumpFile = tomlPath
+	dumpFile = "testdata/valid.toml"
 	dumpRaw = true
 	defer func() { dumpFile = ""; dumpRaw = false }()
 

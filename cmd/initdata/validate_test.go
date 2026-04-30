@@ -11,7 +11,6 @@ import (
 	"encoding/pem"
 	"math/big"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,34 +20,11 @@ import (
 	pkginitdata "github.com/confidential-devhub/cococtl/pkg/initdata"
 )
 
-func validInitData() pkginitdata.InitData {
-	return pkginitdata.InitData{
-		Version:   pkginitdata.InitDataVersion,
-		Algorithm: pkginitdata.InitDataAlgorithm,
-		Data: map[string]string{
-			"aa.toml":     "[token_configs]\n[token_configs.kbs]\nurl = \"http://kbs.test:8080\"\n",
-			"cdh.toml":    "[kbc]\nname = \"cc_kbc\"\nurl = \"http://kbs.test:8080\"\n",
-			"policy.rego": "package agent_policy\n",
-		},
-	}
-}
-
-func marshalToFile(t *testing.T, dir, name string, id pkginitdata.InitData) string {
+func encodeBlobFromFile(t *testing.T, path string) string {
 	t.Helper()
-	raw, err := toml.Marshal(id)
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	path := filepath.Join(dir, name)
-	_ = os.WriteFile(path, raw, 0600)
-	return path
-}
-
-func encodeBlob(t *testing.T, id pkginitdata.InitData) string {
-	t.Helper()
-	raw, err := toml.Marshal(id)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatalf("read fixture: %v", err)
 	}
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
@@ -58,16 +34,23 @@ func encodeBlob(t *testing.T, id pkginitdata.InitData) string {
 }
 
 func TestRunValidate_ValidFile(t *testing.T) {
-	path := marshalToFile(t, t.TempDir(), "initdata.toml", validInitData())
-	validateFile = path
+	validateFile = "testdata/valid.toml"
 	defer func() { validateFile = "" }()
 	if err := runValidate(nil, nil); err != nil {
 		t.Errorf("runValidate() unexpected error: %v", err)
 	}
 }
 
+func TestRunValidate_ValidNoPolicyRego(t *testing.T) {
+	validateFile = "testdata/valid-no-policy.toml"
+	defer func() { validateFile = "" }()
+	if err := runValidate(nil, nil); err != nil {
+		t.Errorf("runValidate() should accept missing policy.rego: %v", err)
+	}
+}
+
 func TestRunValidate_FromStdin(t *testing.T) {
-	encoded := encodeBlob(t, validInitData())
+	encoded := encodeBlobFromFile(t, "testdata/valid.toml")
 	validateFile = ""
 	defer func() { validateFile = "" }()
 
@@ -84,10 +67,7 @@ func TestRunValidate_FromStdin(t *testing.T) {
 }
 
 func TestRunValidate_WrongVersion(t *testing.T) {
-	id := validInitData()
-	id.Version = "9.9.9"
-	path := marshalToFile(t, t.TempDir(), "initdata.toml", id)
-	validateFile = path
+	validateFile = "testdata/invalid-version.toml"
 	defer func() { validateFile = "" }()
 
 	err := runValidate(nil, nil)
@@ -97,10 +77,7 @@ func TestRunValidate_WrongVersion(t *testing.T) {
 }
 
 func TestRunValidate_WrongAlgorithm(t *testing.T) {
-	id := validInitData()
-	id.Algorithm = "md5"
-	path := marshalToFile(t, t.TempDir(), "initdata.toml", id)
-	validateFile = path
+	validateFile = "testdata/invalid-algorithm.toml"
 	defer func() { validateFile = "" }()
 
 	err := runValidate(nil, nil)
@@ -109,16 +86,13 @@ func TestRunValidate_WrongAlgorithm(t *testing.T) {
 	}
 }
 
-func TestRunValidate_MissingKey(t *testing.T) {
-	id := validInitData()
-	delete(id.Data, "policy.rego")
-	path := marshalToFile(t, t.TempDir(), "initdata.toml", id)
-	validateFile = path
+func TestRunValidate_MissingRequiredKey(t *testing.T) {
+	validateFile = "testdata/invalid-missing-cdh.toml"
 	defer func() { validateFile = "" }()
 
 	err := runValidate(nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "policy.rego") {
-		t.Errorf("expected missing key error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "cdh.toml") {
+		t.Errorf("expected missing cdh.toml error, got: %v", err)
 	}
 }
 
@@ -140,14 +114,27 @@ func TestRunValidate_InvalidEmbeddedCert(t *testing.T) {
 	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
 	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
 
-	id := validInitData()
-	id.Data["aa.toml"] = "[token_configs]\n[token_configs.kbs]\nurl = \"http://kbs.test:8080\"\ncert = \"\"\"\n" +
-		string(leafPEM) + "\n\"\"\"\n"
-	path := marshalToFile(t, t.TempDir(), "initdata.toml", id)
+	id := pkginitdata.InitData{
+		Version:   pkginitdata.InitDataVersion,
+		Algorithm: pkginitdata.InitDataAlgorithm,
+		Data: map[string]string{
+			"aa.toml": "[token_configs]\n[token_configs.kbs]\nurl = \"http://kbs.test:8080\"\ncert = \"\"\"\n" +
+				string(leafPEM) + "\n\"\"\"\n",
+			"cdh.toml": "[kbc]\nname = \"cc_kbc\"\nurl = \"http://kbs.test:8080\"\n",
+		},
+	}
+	raw, err := toml.Marshal(id)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	path := t.TempDir() + "/initdata.toml"
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
 	validateFile = path
 	defer func() { validateFile = "" }()
 
-	err := runValidate(nil, nil)
+	err = runValidate(nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "cert validation failed") {
 		t.Errorf("expected cert validation error, got: %v", err)
 	}

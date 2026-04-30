@@ -20,7 +20,7 @@ Reads from --file (plaintext TOML) or stdin (base64+gzip encoded blob).
 Checks:
   - TOML parses cleanly
   - version == "0.1.0" and algorithm == "sha256"
-  - aa.toml, cdh.toml, policy.rego are present
+  - aa.toml and cdh.toml are present (policy.rego is optional)
   - Embedded CA certs in aa.toml / cdh.toml pass validation
 
 Examples:
@@ -54,7 +54,7 @@ func runValidate(_ *cobra.Command, _ []string) error {
 	if id.Algorithm != pkginitdata.InitDataAlgorithm {
 		failures = append(failures, fmt.Sprintf("algorithm: got %q, want %q", id.Algorithm, pkginitdata.InitDataAlgorithm))
 	}
-	for _, key := range []string{"aa.toml", "cdh.toml", "policy.rego"} {
+	for _, key := range []string{"aa.toml", "cdh.toml"} {
 		if _, ok := id.Data[key]; !ok {
 			failures = append(failures, fmt.Sprintf("missing required data key: %s", key))
 		}

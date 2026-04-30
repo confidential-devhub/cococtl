@@ -1,0 +1,11 @@
+version = "0.1.0"
+algorithm = "sha256"
+
+[data]
+"aa.toml" = '''
+[token_configs]
+
+[token_configs.kbs]
+url = "http://kbs.example.svc:8080"
+
+'''
