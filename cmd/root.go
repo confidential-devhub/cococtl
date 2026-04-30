@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/confidential-devhub/cococtl/cmd/initdata"
 	"github.com/confidential-devhub/cococtl/cmd/kbs"
 )
 
@@ -35,6 +36,7 @@ func Execute() error {
 func init() {
 	cobra.OnInitialize()
 	rootCmd.AddCommand(kbs.KbsCmd)
+	rootCmd.AddCommand(initdata.InitdataCmd)
 }
 
 // contextKey is the type for context keys used in cococtl
