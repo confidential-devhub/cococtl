@@ -48,7 +48,7 @@ func runDump(_ *cobra.Command, _ []string) error {
 		filePath = filepath.Join(home, ".kube", "coco-initdata.toml")
 	}
 
-	// #nosec G304
+	// #nosec G304 -- path comes from --file flag or defaults to ~/.kube/coco-initdata.toml
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to read %s: %w", filePath, err)

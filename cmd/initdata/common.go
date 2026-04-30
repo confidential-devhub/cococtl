@@ -18,7 +18,7 @@ import (
 )
 
 func loadCerts(path string) ([]*x509.Certificate, error) {
-	// #nosec G304
+	// #nosec G304 -- path comes from the user-provided --cacert flag
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read %s: %w", path, err)
@@ -37,7 +37,7 @@ func loadCertsFromDir(dir string) ([]*x509.Certificate, error) {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
-		// #nosec G304
+		// #nosec G304 -- path is constructed from the user-provided --capath directory
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read %s: %w", path, err)
@@ -126,7 +126,7 @@ func loadConfig(path string) (*config.CocoConfig, error) {
 
 func loadInitdataTOML(filePath string, r io.Reader) ([]byte, error) {
 	if filePath != "" {
-		// #nosec G304
+		// #nosec G304 -- path comes from the user-provided --file flag
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read %s: %w", filePath, err)

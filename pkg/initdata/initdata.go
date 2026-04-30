@@ -235,9 +235,14 @@ func loadPolicyFile(path string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to get current directory: %w", err)
 		}
-		cleanPath = filepath.Join(cwd, cleanPath)
+		absPath := filepath.Join(cwd, cleanPath)
+		rel, err := filepath.Rel(cwd, absPath)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return "", fmt.Errorf("policy path %q escapes working directory", path)
+		}
+		cleanPath = absPath
 	}
-	// #nosec G304
+	// #nosec G304 -- path is cleaned and validated; absolute paths are intentionally allowed
 	data, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return "", err
