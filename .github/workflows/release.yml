@@ -24,6 +24,8 @@ jobs:
             goarch: s390x
           - goos: darwin
             goarch: amd64
+          - goos: darwin
+            goarch: arm64
 
     steps:
       - name: Checkout code
