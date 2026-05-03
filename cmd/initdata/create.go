@@ -56,7 +56,7 @@ func runCreate(_ *cobra.Command, _ []string) error {
 		if len(certs) == 0 {
 			return fmt.Errorf("--cacert %s: no certificates found", createCACert)
 		}
-		if err := validateCerts(certs); err != nil {
+		if err := validateCACerts(certs); err != nil {
 			return err
 		}
 		certPEM = certsToPEM(certs)
@@ -68,8 +68,27 @@ func runCreate(_ *cobra.Command, _ []string) error {
 		if len(certs) == 0 {
 			return fmt.Errorf("--capath %s: no certificates found", createCAPath)
 		}
-		if err := validateCerts(certs); err != nil {
+		if err := validateCACerts(certs); err != nil {
 			return err
+		}
+		certPEM = certsToPEM(certs)
+	}
+
+	// When neither flag is set, GenerateRaw would fall back to reading
+	// cfg.TrusteeCACert from disk. Load and validate it here instead so that
+	// (a) a leaf cert in the config is caught early, and (b) GenerateRaw
+	// receives the already-parsed PEM rather than the raw file, preventing
+	// extra non-CERTIFICATE blocks from being silently embedded.
+	if createCACert == "" && createCAPath == "" && cfg.TrusteeCACert != "" {
+		certs, err := loadCerts(cfg.TrusteeCACert)
+		if err != nil {
+			return fmt.Errorf("trustee_ca_cert: %w", err)
+		}
+		if len(certs) == 0 {
+			return fmt.Errorf("trustee_ca_cert %s: no certificates found", cfg.TrusteeCACert)
+		}
+		if err := validateCACerts(certs); err != nil {
+			return fmt.Errorf("trustee_ca_cert in config: %w", err)
 		}
 		certPEM = certsToPEM(certs)
 	}

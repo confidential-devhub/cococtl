@@ -3,21 +3,11 @@ package initdata
 import (
 	"bytes"
 	"compress/gzip"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
-	"encoding/pem"
-	"math/big"
+	"io"
 	"os"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/pelletier/go-toml/v2"
-
-	pkginitdata "github.com/confidential-devhub/cococtl/pkg/initdata"
 )
 
 func encodeBlobFromFile(t *testing.T, path string) string {
@@ -96,46 +86,265 @@ func TestRunValidate_MissingRequiredKey(t *testing.T) {
 	}
 }
 
-func TestRunValidate_InvalidEmbeddedCert(t *testing.T) {
-	caKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	caTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "CA"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+func TestRunValidate_WithCACert(t *testing.T) {
+	validateFile = "testdata/valid-with-ca-cert.toml"
+	defer func() { validateFile = "" }()
+	if err := runValidate(nil, nil); err != nil {
+		t.Errorf("runValidate() with CA cert fixture: %v", err)
 	}
-	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caDER)
-	leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "Bad Leaf"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		IsCA: false, BasicConstraintsValid: true,
-	}
-	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
+}
 
-	id := pkginitdata.InitData{
-		Version:   pkginitdata.InitDataVersion,
-		Algorithm: pkginitdata.InitDataAlgorithm,
-		Data: map[string]string{
-			"aa.toml": "[token_configs]\n[token_configs.kbs]\nurl = \"http://kbs.test:8080\"\ncert = \"\"\"\n" +
-				string(leafPEM) + "\n\"\"\"\n",
-			"cdh.toml": "[kbc]\nname = \"cc_kbc\"\nurl = \"http://kbs.test:8080\"\n",
-		},
+func TestRunValidate_WithLeafCert(t *testing.T) {
+	validateFile = "testdata/valid-with-leaf-cert.toml"
+	defer func() { validateFile = "" }()
+	if err := runValidate(nil, nil); err != nil {
+		t.Errorf("runValidate() with leaf cert fixture: %v", err)
 	}
-	raw, err := toml.Marshal(id)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+}
+
+func TestRunValidate_WithBothCertTypes(t *testing.T) {
+	validateFile = "testdata/valid-with-both.toml"
+	defer func() { validateFile = "" }()
+	if err := runValidate(nil, nil); err != nil {
+		t.Errorf("runValidate() with CA+leaf fixture: %v", err)
 	}
-	path := t.TempDir() + "/initdata.toml"
-	if err := os.WriteFile(path, raw, 0600); err != nil {
-		t.Fatalf("write fixture: %v", err)
+}
+
+func TestRunValidate_InvalidEmbeddedCert(t *testing.T) {
+	validateFile = "testdata/invalid-leaf-no-san.toml"
+	defer func() { validateFile = "" }()
+	err := runValidate(nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "cert validation failed") {
+		t.Errorf("expected cert validation error, got: %v", err)
 	}
+}
+
+func TestRunValidate_ExpiredCertFixture(t *testing.T) {
+	validateFile = "testdata/invalid-expired-cert.toml"
+	defer func() { validateFile = "" }()
+	err := runValidate(nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Errorf("expected expired cert error, got: %v", err)
+	}
+}
+
+func makeValidateTOML(t *testing.T, algorithm string) string {
+	t.Helper()
+	return `version = "0.1.0"
+algorithm = "` + algorithm + `"
+
+[data]
+"aa.toml" = '''
+[token_configs]
+[token_configs.kbs]
+url = "http://kbs.example.svc:8080"
+'''
+"cdh.toml" = '''
+[kbc]
+name = "cc_kbc"
+url = "http://kbs.example.svc:8080"
+'''
+`
+}
+
+func TestRunValidate_SHA384Accepted(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/initdata.toml"
+	_ = os.WriteFile(path, []byte(makeValidateTOML(t, "sha384")), 0600)
+	validateFile = path
+	defer func() { validateFile = "" }()
+	if err := runValidate(nil, nil); err != nil {
+		t.Errorf("sha384 algorithm should be accepted, got: %v", err)
+	}
+}
+
+func TestRunValidate_SHA512Accepted(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/initdata.toml"
+	_ = os.WriteFile(path, []byte(makeValidateTOML(t, "sha512")), 0600)
+	validateFile = path
+	defer func() { validateFile = "" }()
+	if err := runValidate(nil, nil); err != nil {
+		t.Errorf("sha512 algorithm should be accepted, got: %v", err)
+	}
+}
+
+func TestRunValidate_URLMismatchGoesToStderr(t *testing.T) {
+	toml := `version = "0.1.0"
+algorithm = "sha256"
+
+[data]
+"aa.toml" = '''
+[token_configs]
+[token_configs.kbs]
+url = "http://kbs1.svc:8080"
+cert = "PLACEHOLDER"
+'''
+"cdh.toml" = '''
+[kbc]
+name = "cc_kbc"
+url = "http://kbs2.svc:8080"
+'''
+`
+	dir := t.TempDir()
+	path := dir + "/initdata.toml"
+	_ = os.WriteFile(path, []byte(toml), 0600)
 	validateFile = path
 	defer func() { validateFile = "" }()
 
-	err = runValidate(nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "cert validation failed") {
-		t.Errorf("expected cert validation error, got: %v", err)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = w
+
+	runErr := runValidate(nil, nil)
+
+	_ = w.Close()
+	os.Stderr = oldStderr
+	stderrOut, _ := io.ReadAll(r)
+	_ = r.Close()
+
+	if runErr != nil {
+		t.Errorf("runValidate() unexpected error: %v", runErr)
+	}
+	if !strings.Contains(string(stderrOut), "WARNING") {
+		t.Errorf("URL mismatch warning should appear on stderr, got stdout-only output; stderr was: %q", string(stderrOut))
+	}
+}
+
+// certBearingEntry returns a token_configs.kbs TOML fragment with a non-empty
+// cert field, which is what checkKBSURLMismatch uses to identify KBS entries.
+func certBearingEntry(url string) string {
+	return "[token_configs]\n[token_configs.kbs]\nurl = \"" + url + "\"\ncert = \"PLACEHOLDER\"\n"
+}
+
+func TestCheckKBSURLMismatch_TrailingSlash(t *testing.T) {
+	data := map[string]string{
+		"aa.toml":  certBearingEntry("http://kbs.svc:8080"),
+		"cdh.toml": "[kbc]\nname = \"cc_kbc\"\nurl = \"http://kbs.svc:8080/\"\n",
+	}
+	if msg := checkKBSURLMismatch(data); msg != "" {
+		t.Errorf("trailing slash should not trigger a mismatch warning, got: %s", msg)
+	}
+}
+
+func TestCheckKBSURLMismatch_SameURL(t *testing.T) {
+	data := map[string]string{
+		"aa.toml":  certBearingEntry("http://kbs.svc:8080"),
+		"cdh.toml": "[kbc]\nname = \"cc_kbc\"\nurl = \"http://kbs.svc:8080\"\n",
+	}
+	if msg := checkKBSURLMismatch(data); msg != "" {
+		t.Errorf("expected no warning for matching URLs, got: %s", msg)
+	}
+}
+
+func TestCheckKBSURLMismatch_DifferentURLs(t *testing.T) {
+	data := map[string]string{
+		"aa.toml":  certBearingEntry("http://kbs1.svc:8080"),
+		"cdh.toml": "[kbc]\nname = \"cc_kbc\"\nurl = \"http://kbs2.svc:8080\"\n",
+	}
+	msg := checkKBSURLMismatch(data)
+	if msg == "" {
+		t.Fatal("expected warning for different URLs")
+	}
+	if !strings.Contains(msg, "WARNING") {
+		t.Errorf("expected WARNING prefix, got: %s", msg)
+	}
+	if !strings.Contains(msg, "kbs1.svc") || !strings.Contains(msg, "kbs2.svc") {
+		t.Errorf("expected both URLs in message, got: %s", msg)
+	}
+}
+
+func TestCheckKBSURLMismatch_SingleSource(t *testing.T) {
+	data := map[string]string{
+		"aa.toml":  certBearingEntry("http://kbs.svc:8080"),
+		"cdh.toml": "[kbc]\nname = \"cc_kbc\"\n",
+	}
+	if msg := checkKBSURLMismatch(data); msg != "" {
+		t.Errorf("expected no warning with only one URL source, got: %s", msg)
+	}
+}
+
+func TestCheckKBSURLMismatch_MultipleTokenConfigs(t *testing.T) {
+	// Two cert-bearing token_config entries with different URLs — should warn.
+	data := map[string]string{
+		"aa.toml": "[token_configs]\n" +
+			"[token_configs.kbs1]\nurl = \"http://kbs1.svc:8080\"\ncert = \"PLACEHOLDER\"\n" +
+			"[token_configs.kbs2]\nurl = \"http://kbs2.svc:8080\"\ncert = \"PLACEHOLDER\"\n",
+		"cdh.toml": "[kbc]\nname = \"cc_kbc\"\nurl = \"http://kbs1.svc:8080\"\n",
+	}
+	msg := checkKBSURLMismatch(data)
+	if msg == "" {
+		t.Fatal("expected warning when token_configs have different URLs")
+	}
+	if !strings.Contains(msg, "kbs2.svc") {
+		t.Errorf("expected differing URL in message, got: %s", msg)
+	}
+}
+
+func TestCheckKBSURLMismatch_AllTokenConfigsCompared(t *testing.T) {
+	// All token_configs URL entries are compared regardless of whether they
+	// have a cert field — a coco_as entry pointing at a different endpoint
+	// is still worth warning about so the user can verify intent.
+	data := map[string]string{
+		"aa.toml": "[token_configs]\n" +
+			"[token_configs.kbs]\nurl = \"http://kbs.svc:8080\"\ncert = \"PLACEHOLDER\"\n" +
+			"[token_configs.coco_as]\nurl = \"http://other.svc:9090\"\n",
+		"cdh.toml": "[kbc]\nname = \"cc_kbc\"\nurl = \"http://kbs.svc:8080\"\n",
+	}
+	msg := checkKBSURLMismatch(data)
+	if msg == "" {
+		t.Fatal("expected warning: all token_configs URLs are compared, including non-KBS entries")
+	}
+	if !strings.Contains(msg, "other.svc") {
+		t.Errorf("expected differing URL in warning, got: %s", msg)
+	}
+}
+
+func TestReportCerts_Output(t *testing.T) {
+	caCert, caKey, _ := makeTestCACert(t)
+	leaf := makeValidLeafCert(t, caCert, caKey)
+	entries := []certEntry{
+		{cert: caCert, source: "aa.toml/token_configs.kbs"},
+		{cert: leaf, source: "cdh.toml/kbc"},
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = w
+	reportCerts(entries)
+	_ = w.Close()
+	os.Stdout = oldStdout
+	out, _ := io.ReadAll(r)
+	_ = r.Close()
+
+	output := string(out)
+	checks := []struct {
+		label string
+		want  string
+	}{
+		{"summary line", "2 total"},
+		{"CA count", "1 CA"},
+		{"leaf count", "1 leaf"},
+		{"CA subject", "Test CA"},
+		{"CA type label", "[CA"},
+		{"leaf subject", "Test Valid Leaf"},
+		{"leaf type label", "[leaf]"},
+		{"SAN", "DNS:test.example.com"},
+		{"EKU", "serverAuth"},
+		{"source aa", "aa.toml/token_configs.kbs"},
+		{"source cdh", "cdh.toml/kbc"},
+		{"key type", "RSA-"},
+		{"fingerprint label", "Fingerprint:"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(output, c.want) {
+			t.Errorf("reportCerts output missing %s (%q);\nfull output:\n%s", c.label, c.want, output)
+		}
 	}
 }

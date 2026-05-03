@@ -1,0 +1,3 @@
+# Private keys must never be committed — only certificate PEM files belong here.
+*-key.pem
+*.key
