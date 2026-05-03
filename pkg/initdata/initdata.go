@@ -22,6 +22,19 @@ const (
 	InitDataAlgorithm = "sha256"
 )
 
+// ValidAlgorithms lists all hash algorithms accepted during initdata validation.
+var ValidAlgorithms = []string{"sha256", "sha384", "sha512"}
+
+// IsValidAlgorithm reports whether alg is an accepted initdata algorithm.
+func IsValidAlgorithm(alg string) bool {
+	for _, v := range ValidAlgorithms {
+		if alg == v {
+			return true
+		}
+	}
+	return false
+}
+
 // InitData represents the structure of initdata TOML.
 // The [data] section holds the embedded configuration files keyed by filename.
 type InitData struct {

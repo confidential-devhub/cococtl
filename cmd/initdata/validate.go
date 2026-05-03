@@ -1,9 +1,16 @@
 package initdata
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
 	pkginitdata "github.com/confidential-devhub/cococtl/pkg/initdata"
 	"github.com/pelletier/go-toml/v2"
@@ -19,9 +26,9 @@ Reads from --file (plaintext TOML) or stdin (base64+gzip encoded blob).
 
 Checks:
   - TOML parses cleanly
-  - version == "0.1.0" and algorithm == "sha256"
+  - version == "0.1.0" and algorithm is one of sha256, sha384, sha512
   - aa.toml and cdh.toml are present (policy.rego is optional)
-  - Embedded CA certs in aa.toml / cdh.toml pass validation
+  - Embedded certs pass rustls rules (CA: keyCertSign; leaf: SAN + serverAuth, not self-signed)
 
 Examples:
   kubectl coco initdata validate --file ~/.kube/coco-initdata.toml
@@ -51,8 +58,8 @@ func runValidate(_ *cobra.Command, _ []string) error {
 	if id.Version != pkginitdata.InitDataVersion {
 		failures = append(failures, fmt.Sprintf("version: got %q, want %q", id.Version, pkginitdata.InitDataVersion))
 	}
-	if id.Algorithm != pkginitdata.InitDataAlgorithm {
-		failures = append(failures, fmt.Sprintf("algorithm: got %q, want %q", id.Algorithm, pkginitdata.InitDataAlgorithm))
+	if !pkginitdata.IsValidAlgorithm(id.Algorithm) {
+		failures = append(failures, fmt.Sprintf("algorithm: got %q, want one of %v", id.Algorithm, pkginitdata.ValidAlgorithms))
 	}
 	for _, key := range []string{"aa.toml", "cdh.toml"} {
 		if _, ok := id.Data[key]; !ok {
@@ -60,11 +67,16 @@ func runValidate(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	certs, err := extractCertsFromInitdata(id.Data)
+	if warn := checkKBSURLMismatch(id.Data); warn != "" {
+		fmt.Fprint(os.Stderr, warn)
+	}
+
+	entries, err := extractCertsFromInitdata(id.Data)
 	if err != nil {
 		failures = append(failures, fmt.Sprintf("cert extraction failed: %v", err))
-	} else if len(certs) > 0 {
-		if err := validateCerts(certs); err != nil {
+	} else if len(entries) > 0 {
+		reportCerts(entries)
+		if err := validateCertsBySource(entries); err != nil {
 			failures = append(failures, err.Error())
 		}
 	}
@@ -75,4 +87,233 @@ func runValidate(_ *cobra.Command, _ []string) error {
 
 	fmt.Println("Validation passed.")
 	return nil
+}
+
+// checkKBSURLMismatch returns a warning message when KBS URLs differ across
+// the aa.toml token_configs and cdh.toml kbc entries, or an empty string if
+// all URLs are consistent. Differing URLs are valid but likely unintentional.
+func checkKBSURLMismatch(data map[string]string) string {
+	type urlEntry struct {
+		source string
+		url    string
+	}
+
+	// normalizeURL strips trailing slashes and whitespace so that
+	// "https://kbs:8080" and "https://kbs:8080/" are treated as equal.
+	normalizeURL := func(u string) string {
+		return strings.TrimRight(strings.TrimSpace(u), "/")
+	}
+
+	var entries []urlEntry
+
+	if aaToml, ok := data["aa.toml"]; ok && aaToml != "" {
+		var aa map[string]interface{}
+		if err := toml.Unmarshal([]byte(aaToml), &aa); err == nil {
+			if tc, ok := aa["token_configs"].(map[string]interface{}); ok {
+				names := make([]string, 0, len(tc))
+				for name := range tc {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				for _, name := range names {
+					if entry, ok := tc[name].(map[string]interface{}); ok {
+						if url, ok := entry["url"].(string); ok && url != "" {
+							entries = append(entries, urlEntry{"aa.toml/token_configs." + name, normalizeURL(url)})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if cdhToml, ok := data["cdh.toml"]; ok && cdhToml != "" {
+		var cdh map[string]interface{}
+		if err := toml.Unmarshal([]byte(cdhToml), &cdh); err == nil {
+			if kbc, ok := cdh["kbc"].(map[string]interface{}); ok {
+				if url, ok := kbc["url"].(string); ok && url != "" {
+					entries = append(entries, urlEntry{"cdh.toml/kbc", normalizeURL(url)})
+				}
+			}
+		}
+	}
+
+	if len(entries) < 2 {
+		return ""
+	}
+
+	sort.Slice(entries, func(i, j int) bool { return entries[i].source < entries[j].source })
+
+	first := entries[0].url
+	for _, e := range entries[1:] {
+		if e.url != first {
+			var sb strings.Builder
+			sb.WriteString("WARNING: KBS URLs differ across configurations — verify this is intentional:\n")
+			for _, e := range entries {
+				fmt.Fprintf(&sb, "  %-44s %s\n", e.source+":", e.url)
+			}
+			sb.WriteByte('\n')
+			return sb.String()
+		}
+	}
+	return ""
+}
+
+func reportCerts(entries []certEntry) {
+	caCount, leafCount := 0, 0
+	for _, e := range entries {
+		if e.cert.IsCA {
+			caCount++
+		} else {
+			leafCount++
+		}
+	}
+	fmt.Printf("Certificates: %d total  (%d CA, %d leaf)\n\n", len(entries), caCount, leafCount)
+
+	for i, e := range entries {
+		cert := e.cert
+		selfSigned := isSelfSigned(cert)
+
+		typeLabel := "leaf"
+		if cert.IsCA {
+			typeLabel = "CA"
+		}
+		if selfSigned {
+			typeLabel += " · self-signed"
+		}
+
+		issuerCN := cert.Issuer.CommonName
+		if issuerCN == "" {
+			issuerCN = cert.Issuer.String()
+		}
+
+		fp := sha256.Sum256(cert.Raw)
+		fingerprint := fmt.Sprintf("%X", fp[:6]) // first 6 bytes for brevity
+
+		fmt.Printf("  [%d] %s  [%s]\n", i+1, certDisplayName(cert), typeLabel)
+		fmt.Printf("      %-12s %s\n", "Issuer:", issuerCN)
+		fmt.Printf("      %-12s %s → %s  (%s)\n", "Valid:", cert.NotBefore.Format("2006-01-02"), cert.NotAfter.Format("2006-01-02"), certExpiryNote(cert))
+		fmt.Printf("      %-12s %s\n", "Key:", certKeyDesc(cert.PublicKey))
+		if usage := certFormatKeyUsage(cert.KeyUsage); usage != "" {
+			fmt.Printf("      %-12s %s\n", "Usage:", usage)
+		}
+		if !cert.IsCA {
+			if san := certFormatSANs(cert); san != "" {
+				fmt.Printf("      %-12s %s\n", "SAN:", san)
+			}
+		}
+		if eku := certFormatEKU(cert.ExtKeyUsage); eku != "" {
+			fmt.Printf("      %-12s %s\n", "EKU:", eku)
+		}
+		fmt.Printf("      %-12s %s\n", "Fingerprint:", fingerprint)
+		fmt.Printf("      %-12s %s\n", "Source:", e.source)
+		fmt.Println()
+	}
+}
+
+// certDisplayName returns a human-readable identifier for cert. It prefers the
+// Common Name, but falls back to the first SAN when CN is empty (as is common
+// for modern server certificates).
+func certDisplayName(cert *x509.Certificate) string {
+	if cert.Subject.CommonName != "" {
+		return cert.Subject.CommonName
+	}
+	if len(cert.DNSNames) > 0 {
+		return cert.DNSNames[0]
+	}
+	if len(cert.IPAddresses) > 0 {
+		return cert.IPAddresses[0].String()
+	}
+	if len(cert.URIs) > 0 {
+		return cert.URIs[0].String()
+	}
+	fp := sha256.Sum256(cert.Raw)
+	return fmt.Sprintf("(no CN) %X", fp[:6])
+}
+
+func certExpiryNote(cert *x509.Certificate) string {
+	now := time.Now()
+	if now.After(cert.NotAfter) {
+		days := int(now.Sub(cert.NotAfter).Hours() / 24)
+		return fmt.Sprintf("EXPIRED %d days ago", days)
+	}
+	days := int(cert.NotAfter.Sub(now).Hours() / 24)
+	if days < 30 {
+		return fmt.Sprintf("%d days remaining — WARNING", days)
+	}
+	return fmt.Sprintf("%d days remaining", days)
+}
+
+func certKeyDesc(pub interface{}) string {
+	switch k := pub.(type) {
+	case *rsa.PublicKey:
+		return fmt.Sprintf("RSA-%d", k.N.BitLen())
+	case *ecdsa.PublicKey:
+		return fmt.Sprintf("ECDSA %s", k.Curve.Params().Name)
+	case ed25519.PublicKey:
+		return "Ed25519"
+	default:
+		return "unknown"
+	}
+}
+
+func certFormatKeyUsage(u x509.KeyUsage) string {
+	type flag struct {
+		bit  x509.KeyUsage
+		name string
+	}
+	flags := []flag{
+		{x509.KeyUsageCertSign, "CertSign"},
+		{x509.KeyUsageCRLSign, "CRLSign"},
+		{x509.KeyUsageDigitalSignature, "DigitalSignature"},
+		{x509.KeyUsageKeyEncipherment, "KeyEncipherment"},
+		{x509.KeyUsageContentCommitment, "ContentCommitment"},
+		{x509.KeyUsageKeyAgreement, "KeyAgreement"},
+		{x509.KeyUsageDataEncipherment, "DataEncipherment"},
+		{x509.KeyUsageEncipherOnly, "EncipherOnly"},
+		{x509.KeyUsageDecipherOnly, "DecipherOnly"},
+	}
+	var parts []string
+	for _, f := range flags {
+		if u&f.bit != 0 {
+			parts = append(parts, f.name)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func certFormatEKU(ekus []x509.ExtKeyUsage) string {
+	names := map[x509.ExtKeyUsage]string{
+		x509.ExtKeyUsageServerAuth:      "serverAuth",
+		x509.ExtKeyUsageClientAuth:      "clientAuth",
+		x509.ExtKeyUsageCodeSigning:     "codeSigning",
+		x509.ExtKeyUsageEmailProtection: "emailProtection",
+		x509.ExtKeyUsageTimeStamping:    "timeStamping",
+		x509.ExtKeyUsageOCSPSigning:     "OCSPSigning",
+	}
+	var parts []string
+	for _, eku := range ekus {
+		if name, ok := names[eku]; ok {
+			parts = append(parts, name)
+		} else {
+			parts = append(parts, fmt.Sprintf("unknown(%d)", eku))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func certFormatSANs(cert *x509.Certificate) string {
+	parts := make([]string, 0, len(cert.DNSNames)+len(cert.IPAddresses)+len(cert.URIs)+len(cert.EmailAddresses))
+	for _, d := range cert.DNSNames {
+		parts = append(parts, "DNS:"+d)
+	}
+	for _, ip := range cert.IPAddresses {
+		parts = append(parts, "IP:"+ip.String())
+	}
+	for _, u := range cert.URIs {
+		parts = append(parts, "URI:"+u.String())
+	}
+	for _, e := range cert.EmailAddresses {
+		parts = append(parts, "email:"+e)
+	}
+	return strings.Join(parts, "  ")
 }
