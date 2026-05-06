@@ -4,6 +4,7 @@ package initdata
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -101,19 +102,36 @@ func checkExpiry(cert *x509.Certificate) error {
 	return nil
 }
 
-// validateCACert checks that cert is a valid CA certificate: IsCA must be true
-// and KeyUsageCertSign must be set. The IsCA guard is intentional — this
-// function may be called directly (e.g. from validateCACerts) without the
-// IsCA pre-filter that validateCerts applies.
+// isWeakSignatureAlg reports whether alg is SHA-1, MD5, or MD2 — all rejected
+// by rustls as insufficiently secure.
+func isWeakSignatureAlg(alg x509.SignatureAlgorithm) bool {
+	switch alg {
+	case x509.MD2WithRSA, x509.MD5WithRSA, x509.SHA1WithRSA, x509.DSAWithSHA1, x509.ECDSAWithSHA1:
+		return true
+	}
+	return false
+}
+
+// validateCACert checks that cert is a valid CA certificate: IsCA must be true,
+// KeyUsageCertSign must be set, and the cert must not use weak crypto.
 func validateCACert(cert *x509.Certificate) error {
 	if !cert.IsCA {
-		return fmt.Errorf("certificate %q: IsCA is false", cert.Subject.CommonName)
+		return fmt.Errorf("certificate %q: not a CA certificate (CA:TRUE required for trust anchors)", cert.Subject.CommonName)
 	}
 	if err := checkExpiry(cert); err != nil {
 		return err
 	}
 	if cert.KeyUsage&x509.KeyUsageCertSign == 0 {
 		return fmt.Errorf("certificate %q: missing KeyUsageCertSign", cert.Subject.CommonName)
+	}
+	if isWeakSignatureAlg(cert.SignatureAlgorithm) {
+		return fmt.Errorf("certificate %q: weak signature algorithm %s", cert.Subject.CommonName, cert.SignatureAlgorithm)
+	}
+	if rsaKey, ok := cert.PublicKey.(*rsa.PublicKey); ok && rsaKey.N.BitLen() < 1024 {
+		return fmt.Errorf("certificate %q: RSA key is %d bits, minimum is 1024", cert.Subject.CommonName, rsaKey.N.BitLen())
+	}
+	if len(cert.UnhandledCriticalExtensions) > 0 {
+		return fmt.Errorf("certificate %q: has unknown critical extensions", cert.Subject.CommonName)
 	}
 	return nil
 }
@@ -134,64 +152,14 @@ func validateCACerts(certs []*x509.Certificate) error {
 	return nil
 }
 
-// validateLeafCert checks rustls rules for end-entity (non-CA) certificates:
-// must not be self-signed, must carry a SubjectAltName, and must have
-// extendedKeyUsage serverAuth.
-func validateLeafCert(cert *x509.Certificate) error {
-	if err := checkExpiry(cert); err != nil {
-		return err
-	}
-	// rustls rejects self-signed end-entity certificates
-	if isSelfSigned(cert) {
-		return fmt.Errorf("certificate %q: self-signed certificate cannot be used as a leaf cert", cert.Subject.CommonName)
-	}
-	hasSAN := len(cert.DNSNames) > 0 || len(cert.IPAddresses) > 0 ||
-		len(cert.URIs) > 0 || len(cert.EmailAddresses) > 0
-	if !hasSAN {
-		return fmt.Errorf("certificate %q: missing SubjectAltName extension", cert.Subject.CommonName)
-	}
-	for _, eku := range cert.ExtKeyUsage {
-		if eku == x509.ExtKeyUsageServerAuth {
-			return nil
-		}
-	}
-	return fmt.Errorf("certificate %q: missing extendedKeyUsage serverAuth", cert.Subject.CommonName)
-}
-
-func validateCerts(certs []*x509.Certificate) error {
-	var errs []string
-	for _, cert := range certs {
-		var err error
-		if cert.IsCA {
-			err = validateCACert(cert)
-		} else {
-			err = validateLeafCert(cert)
-		}
-		if err != nil {
-			errs = append(errs, err.Error())
-		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("cert validation failed:\n  %s", strings.Join(errs, "\n  "))
-	}
-	return nil
-}
-
-// validateCertsBySource applies rustls rules to each certificate and includes
-// the source field in error messages so the user can locate the problematic cert.
-// All initdata cert fields accept any cert valid under rustls rules:
-// CA certs require keyCertSign; leaf certs require SAN + serverAuth EKU and
-// must not be self-signed.
+// validateCertsBySource applies CA certificate rules to each embedded cert and
+// includes the source field in error messages so the user can locate the
+// problematic cert. All initdata cert fields are trust anchor positions —
+// only CA certificates (CA:TRUE, keyCertSign) are accepted.
 func validateCertsBySource(entries []certEntry) error {
 	var errs []string
 	for _, e := range entries {
-		var err error
-		if e.cert.IsCA {
-			err = validateCACert(e.cert)
-		} else {
-			err = validateLeafCert(e.cert)
-		}
-		if err != nil {
+		if err := validateCACert(e.cert); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %s", e.source, err.Error()))
 		}
 	}

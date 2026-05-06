@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -16,6 +17,11 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 )
+
+// errValidationFailed is a sentinel returned when runValidate has already
+// printed its own diagnostics and wants a non-zero exit without Cobra
+// printing an additional "Error: ..." line.
+var errValidationFailed = errors.New("")
 
 var validateCmd = &cobra.Command{
 	Use:   "validate",
@@ -28,7 +34,12 @@ Checks:
   - TOML parses cleanly
   - version == "0.1.0" and algorithm is one of sha256, sha384, sha512
   - aa.toml and cdh.toml are present (policy.rego is optional)
-  - Embedded certs pass rustls rules (CA: keyCertSign; leaf: SAN + serverAuth, not self-signed)
+  - Embedded certs are CA certificates (CA:TRUE, keyCertSign key usage)
+
+Rejected certs: leaf/non-CA certificates, expired certs, SHA-1 or MD5
+signatures, unknown critical extensions, RSA keys shorter than 1024 bits.
+
+Exit codes: 0 = passed, 1 = validation failed or input error.
 
 Examples:
   kubectl coco initdata validate --file ~/.kube/coco-initdata.toml
@@ -42,15 +53,28 @@ func init() {
 	validateCmd.Flags().StringVar(&validateFile, "file", "", "Path to plaintext initdata TOML file (reads encoded blob from stdin if not set)")
 }
 
-func runValidate(_ *cobra.Command, _ []string) error {
+// silenceAndReturn silences Cobra's own error/usage output for this command
+// and returns the sentinel. Call only after writing diagnostics to stderr.
+// cmd may be nil when runValidate is called directly in tests.
+func silenceAndReturn(cmd *cobra.Command) error {
+	if cmd != nil {
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+	}
+	return errValidationFailed
+}
+
+func runValidate(cmd *cobra.Command, _ []string) error {
 	tomlBytes, err := loadInitdataTOML(validateFile, os.Stdin)
 	if err != nil {
-		return fmt.Errorf("failed to load initdata: %w", err)
+		fmt.Fprintf(os.Stderr, "Error: failed to load initdata: %v\n", err)
+		return silenceAndReturn(cmd)
 	}
 
 	var id pkginitdata.InitData
 	if err := toml.Unmarshal(tomlBytes, &id); err != nil {
-		return fmt.Errorf("failed to parse TOML: %w", err)
+		fmt.Fprintf(os.Stderr, "Error: failed to parse TOML: %v\n", err)
+		return silenceAndReturn(cmd)
 	}
 
 	var failures []string
@@ -82,7 +106,11 @@ func runValidate(_ *cobra.Command, _ []string) error {
 	}
 
 	if len(failures) > 0 {
-		return fmt.Errorf("validation failed:\n  %s", strings.Join(failures, "\n  "))
+		fmt.Fprintln(os.Stderr, "Validation failed:")
+		for _, f := range failures {
+			fmt.Fprintf(os.Stderr, "  %s\n", f)
+		}
+		return silenceAndReturn(cmd)
 	}
 
 	fmt.Println("Validation passed.")

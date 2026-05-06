@@ -1,0 +1,24 @@
+version = "0.1.0"
+algorithm = "sha256"
+
+[data]
+
+"aa.toml" = '''
+[token_configs]
+[token_configs.kbs]
+url = 'http://kbs.example.svc:8080'
+'''
+
+"cdh.toml" = '''
+[kbc]
+kbs_cert = "-----BEGIN CERTIFICATE-----\nMIIDITCCAgmgAwIBAgIBAjANBgkqhkiG9w0BAQsFADASMRAwDgYDVQQDEwdUZXN0\nIENBMCAXDTI2MDUwNjA1MTIyMVoYDzIxMjYwNTA2MDYxMjIxWjAaMRgwFgYDVQQD\nEw9rYnMuZXhhbXBsZS5zdmMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIB\nAQDJKcDrIRnqoXqt4L1drsY31RvUt7N+r1gFY5W007scNN9A6/SuBxVMhsgMN6/y\nuCEGCo1aICUsZplohR9UYK0asgMhTFPKQbrlR5Qkc9K0+uVZNZrybmeFaDc/inTD\nEc4HA6DE9GL2bpY08c/hEH85v9uKAM5Ar+dC68qU6ndNej/qJs/ENPgfSQu6Fxul\n82i30eOMbxgSkBavrf7NLN0Bbb8EBnlKLpmcvKhtxkvTB9rp53xfC2/iOd9mV3bG\n0DXiWNJXrI5LkKdgi6OE+734OklDcghFBkxniDEBpK7GluQoBvHK88SlLorOAE3y\nOdZsQiT7K+FzjNxvuVDv7oEzAgMBAAGjeDB2MA4GA1UdDwEB/wQEAwIHgDATBgNV\nHSUEDDAKBggrBgEFBQcDATAMBgNVHRMBAf8EAjAAMB8GA1UdIwQYMBaAFBHS5EAr\nim5bi/skARW9UNUnK5x4MCAGA1UdEQQZMBeCD2ticy5leGFtcGxlLnN2Y4cECgAA\nATANBgkqhkiG9w0BAQsFAAOCAQEARHDdKT7Ac2ELeU2/lWVvvbCt2935Y1SbZgrf\nwhjLsn8ZvPq0jxCwLKHvliIio/bIBrfs4PbX6/YazTVllRfjA4R2HR1MFAVMG0V+\nGXKbAqN1FBFvj9pRhzf5PLSS0zj3sbomwR7aVplJLI6JTM3DCplInhE5k1XGCdQP\nZNf9h4WqZt/+NyyLqqDRORhiKa3QiazroNMe4bD9vs7V3VRsSmXl+HNhhwGnMHVt\nm8eWoUHtB8YIaxuEJV8CV6epktrGVuRfByr5cKHBDpCxFAFT0pIw5JQfOwu2oiOQ\nGlV93irse08QPJxMkpXgxMdetCCGmRJ8p+OqbhBQnzDVCM4piQ==\n-----END CERTIFICATE-----\n"
+name = 'cc_kbc'
+url = 'http://kbs.example.svc:8080'
+'''
+
+"policy.rego" = '''
+package agent_policy
+
+default CreateContainerRequest := true
+default ExecProcessRequest := false
+'''
