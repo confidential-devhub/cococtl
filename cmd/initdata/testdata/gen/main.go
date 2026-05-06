@@ -124,7 +124,7 @@ func cdhToml(certPEM string) map[string]interface{} {
 }
 
 func main() {
-	// CA cert — 100-year validity so the fixture never expires in practice.
+	// Primary CA cert — 100-year validity so the fixture never expires in practice.
 	caKey := mustGenKey()
 	caTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -137,7 +137,20 @@ func main() {
 	}
 	caPEM, caCert := mustCreateCert(caTmpl, caTmpl, &caKey.PublicKey, caKey)
 
-	// Leaf cert — 100-year validity, signed by the test CA.
+	// Second CA cert — used in valid-with-both.toml so both cert positions carry a CA.
+	ca2Key := mustGenKey()
+	ca2Tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(5),
+		Subject:               pkix.Name{CommonName: "Test CA 2"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().AddDate(100, 0, 0),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	ca2PEM, _ := mustCreateCert(ca2Tmpl, ca2Tmpl, &ca2Key.PublicKey, ca2Key)
+
+	// Leaf cert — signed by the test CA. Used in invalid-leaf-cert.toml.
 	leafKey := mustGenKey()
 	leafTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(2),
@@ -166,7 +179,7 @@ func main() {
 	}
 	expPEM, _ := mustCreateCert(expTmpl, expTmpl, &expKey.PublicKey, expKey)
 
-	// Leaf cert with no SAN — valid structure but fails rustls leaf rules.
+	// Non-CA leaf cert — rejected because IsCA is false.
 	badLeafKey := mustGenKey()
 	badLeafTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(4),
@@ -175,7 +188,7 @@ func main() {
 		NotAfter:              time.Now().AddDate(100, 0, 0),
 		IsCA:                  false,
 		BasicConstraintsValid: true,
-		// deliberately no SAN, no ExtKeyUsage
+		// IsCA:false — rejected because it is not a CA cert
 	}
 	badLeafPEM, _ := mustCreateCert(badLeafTmpl, caCert, &badLeafKey.PublicKey, caKey)
 
@@ -187,15 +200,17 @@ func main() {
 		"policy.rego": defaultPolicy,
 	}))
 
-	writeFixture("valid-with-leaf-cert.toml", buildFixture(map[string]string{
+	// invalid-leaf-cert.toml: a leaf (non-CA) cert in cdh.toml — must be rejected.
+	writeFixture("invalid-leaf-cert.toml", buildFixture(map[string]string{
 		"aa.toml":     innerTOML(aaToml("")),
 		"cdh.toml":    innerTOML(cdhToml(string(leafPEM))),
 		"policy.rego": defaultPolicy,
 	}))
 
+	// valid-with-both.toml: CA certs in both aa.toml and cdh.toml — must pass.
 	writeFixture("valid-with-both.toml", buildFixture(map[string]string{
 		"aa.toml":     innerTOML(aaToml(string(caPEM))),
-		"cdh.toml":    innerTOML(cdhToml(string(leafPEM))),
+		"cdh.toml":    innerTOML(cdhToml(string(ca2PEM))),
 		"policy.rego": defaultPolicy,
 	}))
 

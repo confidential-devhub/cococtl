@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/pem"
 	"math/big"
@@ -65,31 +66,6 @@ func makeTestLeafCert(t *testing.T, caCert *x509.Certificate, caKey *rsa.Private
 	cert, _ := x509.ParseCertificate(der)
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	return cert, pemBytes
-}
-
-// makeValidLeafCert creates a leaf cert that passes rustls rules (SAN + serverAuth EKU).
-func makeValidLeafCert(t *testing.T, caCert *x509.Certificate, caKey *rsa.PrivateKey) *x509.Certificate {
-	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(3),
-		Subject:               pkix.Name{CommonName: "Test Valid Leaf"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  false,
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"test.example.com"},
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	cert, _ := x509.ParseCertificate(der)
-	return cert
 }
 
 func writeTempPEM(t *testing.T, dir, name string, pemData []byte) string {
@@ -188,8 +164,9 @@ func TestValidateCACert_ValidCA(t *testing.T) {
 func TestValidateCACert_LeafCert(t *testing.T) {
 	caCert, caKey, _ := makeTestCACert(t)
 	leaf, _ := makeTestLeafCert(t, caCert, caKey)
-	if err := validateCACert(leaf); err == nil {
-		t.Error("validateCACert() should reject leaf cert")
+	err := validateCACert(leaf)
+	if err == nil || !strings.Contains(err.Error(), "not a CA certificate") {
+		t.Errorf("validateCACert() should reject leaf cert with 'not a CA certificate', got: %v", err)
 	}
 }
 
@@ -265,108 +242,74 @@ func TestIsSelfSigned_SelfIssuedNotSelfSigned(t *testing.T) {
 	}
 }
 
-func TestValidateLeafCert_Expired(t *testing.T) {
-	caCert, caKey, _ := makeTestCACert(t)
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(10), Subject: pkix.Name{CommonName: "Expired Leaf"},
-		NotBefore: time.Now().Add(-48 * time.Hour), NotAfter: time.Now().Add(-time.Hour),
-		IsCA: false, BasicConstraintsValid: true,
-		DNSNames:    []string{"kbs.example.com"},
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	der, _ := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
-	leaf, _ := x509.ParseCertificate(der)
-	err := validateLeafCert(leaf)
-	if err == nil || !strings.Contains(err.Error(), "expired") {
-		t.Errorf("expected expired error, got: %v", err)
+func TestValidateCACert_SHA1Rejected(t *testing.T) {
+	cert, _, _ := makeTestCACert(t)
+	cert.SignatureAlgorithm = x509.SHA1WithRSA
+	err := validateCACert(cert)
+	if err == nil || !strings.Contains(err.Error(), "weak signature") {
+		t.Errorf("expected weak signature error for SHA-1, got: %v", err)
 	}
 }
 
-func TestValidateLeafCert_Valid(t *testing.T) {
-	caCert, caKey, _ := makeTestCACert(t)
-	leaf := makeValidLeafCert(t, caCert, caKey)
-	if err := validateLeafCert(leaf); err != nil {
-		t.Errorf("validateLeafCert() unexpected error for valid leaf: %v", err)
+func TestValidateCACert_MD5Rejected(t *testing.T) {
+	cert, _, _ := makeTestCACert(t)
+	cert.SignatureAlgorithm = x509.MD5WithRSA
+	err := validateCACert(cert)
+	if err == nil || !strings.Contains(err.Error(), "weak signature") {
+		t.Errorf("expected weak signature error for MD5, got: %v", err)
 	}
 }
 
-func TestValidateLeafCert_NoSAN(t *testing.T) {
-	caCert, caKey, _ := makeTestCACert(t)
-	leaf, _ := makeTestLeafCert(t, caCert, caKey) // no SAN, no EKU
-	err := validateLeafCert(leaf)
-	if err == nil || !strings.Contains(err.Error(), "SubjectAltName") {
-		t.Errorf("expected SubjectAltName error, got: %v", err)
+func TestValidateCACert_WeakRSAKeyRejected(t *testing.T) {
+	// Construct a cert struct directly with a 512-bit modulus so we don't need
+	// to generate a real small key (which newer Go versions may reject).
+	n := new(big.Int).SetBit(new(big.Int), 511, 1) // 512-bit number
+	cert, _, _ := makeTestCACert(t)
+	cert.PublicKey = &rsa.PublicKey{N: n, E: 65537}
+	err := validateCACert(cert)
+	if err == nil || !strings.Contains(err.Error(), "1024") {
+		t.Errorf("expected RSA key size error, got: %v", err)
 	}
 }
 
-func TestValidateLeafCert_NoServerAuth(t *testing.T) {
-	caCert, caKey, _ := makeTestCACert(t)
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(4),
-		Subject:               pkix.Name{CommonName: "No EKU Leaf"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  false,
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"test.example.com"},
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+func TestValidateCACert_UnknownCriticalExtensionsRejected(t *testing.T) {
+	cert, _, _ := makeTestCACert(t)
+	cert.UnhandledCriticalExtensions = []asn1.ObjectIdentifier{{1, 2, 3, 4}}
+	err := validateCACert(cert)
+	if err == nil || !strings.Contains(err.Error(), "unknown critical extensions") {
+		t.Errorf("expected unknown critical extensions error, got: %v", err)
 	}
-	der, _ := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
-	leaf, _ := x509.ParseCertificate(der)
-	err := validateLeafCert(leaf)
-	if err == nil || !strings.Contains(err.Error(), "serverAuth") {
-		t.Errorf("expected serverAuth error, got: %v", err)
+	if err != nil && !strings.Contains(err.Error(), "1.2.3.4") {
+		t.Errorf("error should include OID in dot notation, got: %v", err)
 	}
 }
 
-func TestValidateLeafCert_SelfSigned(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(5),
-		Subject:               pkix.Name{CommonName: "Self-Signed Leaf"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  false,
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"test.example.com"},
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	// self-signed: parent == self
-	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	leaf, _ := x509.ParseCertificate(der)
-	err := validateLeafCert(leaf)
-	if err == nil || !strings.Contains(err.Error(), "self-signed") {
-		t.Errorf("expected self-signed error, got: %v", err)
-	}
-}
-
-func TestValidateCerts_ValidLeafAccepted(t *testing.T) {
-	caCert, caKey, _ := makeTestCACert(t)
-	leaf := makeValidLeafCert(t, caCert, caKey)
-	if err := validateCerts([]*x509.Certificate{caCert, leaf}); err != nil {
-		t.Errorf("validateCerts() should accept CA + valid leaf: %v", err)
-	}
-}
-
-func TestValidateCerts_AllValid(t *testing.T) {
-	cert1, _, _ := makeTestCACert(t)
-	cert2, _, _ := makeTestCACert(t)
-	if err := validateCerts([]*x509.Certificate{cert1, cert2}); err != nil {
-		t.Errorf("validateCerts() unexpected error: %v", err)
-	}
-}
-
-func TestValidateCerts_OneInvalid(t *testing.T) {
+func TestValidateCACerts_LeafRejected(t *testing.T) {
 	caCert, caKey, _ := makeTestCACert(t)
 	leaf, _ := makeTestLeafCert(t, caCert, caKey)
-	err := validateCerts([]*x509.Certificate{caCert, leaf})
-	if err == nil {
-		t.Fatal("validateCerts() should fail with one leaf cert")
+	err := validateCACerts([]*x509.Certificate{caCert, leaf})
+	if err == nil || !strings.Contains(err.Error(), "not a CA certificate") {
+		t.Errorf("validateCACerts() should reject non-CA cert, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "Test Leaf") {
-		t.Errorf("error should name the failing cert, got: %v", err)
+}
+
+func TestValidateCACerts_AllValid(t *testing.T) {
+	cert1, _, _ := makeTestCACert(t)
+	cert2, _, _ := makeTestCACert(t)
+	if err := validateCACerts([]*x509.Certificate{cert1, cert2}); err != nil {
+		t.Errorf("validateCACerts() unexpected error: %v", err)
+	}
+}
+
+func TestValidateCACerts_OneInvalid(t *testing.T) {
+	caCert, caKey, _ := makeTestCACert(t)
+	leaf, _ := makeTestLeafCert(t, caCert, caKey)
+	err := validateCACerts([]*x509.Certificate{caCert, leaf})
+	if err == nil {
+		t.Fatal("validateCACerts() should fail with one non-CA cert")
+	}
+	if !strings.Contains(err.Error(), "not a CA certificate") {
+		t.Errorf("error should identify non-CA cert, got: %v", err)
 	}
 }
 

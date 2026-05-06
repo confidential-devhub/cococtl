@@ -10,6 +10,24 @@ import (
 	"testing"
 )
 
+// runValidateStderr runs runValidate and returns stderr output alongside the error.
+// Use this for tests that check validation failure messages.
+func runValidateStderr(t *testing.T) (string, error) {
+	t.Helper()
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatalf("os.Pipe: %v", pipeErr)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = oldStderr })
+	err := runValidate(nil, nil)
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	_ = r.Close()
+	return string(out), err
+}
+
 func encodeBlobFromFile(t *testing.T, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -60,9 +78,9 @@ func TestRunValidate_WrongVersion(t *testing.T) {
 	validateFile = "testdata/invalid-version.toml"
 	defer func() { validateFile = "" }()
 
-	err := runValidate(nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "version") {
-		t.Errorf("expected version error, got: %v", err)
+	stderr, err := runValidateStderr(t)
+	if err == nil || !strings.Contains(stderr, "version") {
+		t.Errorf("expected version error in stderr, got err=%v stderr=%q", err, stderr)
 	}
 }
 
@@ -70,9 +88,9 @@ func TestRunValidate_WrongAlgorithm(t *testing.T) {
 	validateFile = "testdata/invalid-algorithm.toml"
 	defer func() { validateFile = "" }()
 
-	err := runValidate(nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "algorithm") {
-		t.Errorf("expected algorithm error, got: %v", err)
+	stderr, err := runValidateStderr(t)
+	if err == nil || !strings.Contains(stderr, "algorithm") {
+		t.Errorf("expected algorithm error in stderr, got err=%v stderr=%q", err, stderr)
 	}
 }
 
@@ -80,9 +98,9 @@ func TestRunValidate_MissingRequiredKey(t *testing.T) {
 	validateFile = "testdata/invalid-missing-cdh.toml"
 	defer func() { validateFile = "" }()
 
-	err := runValidate(nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "cdh.toml") {
-		t.Errorf("expected missing cdh.toml error, got: %v", err)
+	stderr, err := runValidateStderr(t)
+	if err == nil || !strings.Contains(stderr, "cdh.toml") {
+		t.Errorf("expected missing cdh.toml in stderr, got err=%v stderr=%q", err, stderr)
 	}
 }
 
@@ -94,37 +112,41 @@ func TestRunValidate_WithCACert(t *testing.T) {
 	}
 }
 
-func TestRunValidate_WithLeafCert(t *testing.T) {
-	validateFile = "testdata/valid-with-leaf-cert.toml"
+// TestRunValidate_LeafCertRejected uses a cert with valid SAN and serverAuth EKU
+// — a cert that would have passed the old leaf-cert rules — to confirm that even
+// a "well-formed" leaf cert is rejected when used as a trust anchor.
+func TestRunValidate_LeafCertRejected(t *testing.T) {
+	validateFile = "testdata/invalid-leaf-cert.toml"
 	defer func() { validateFile = "" }()
-	if err := runValidate(nil, nil); err != nil {
-		t.Errorf("runValidate() with leaf cert fixture: %v", err)
+	stderr, err := runValidateStderr(t)
+	if err == nil || !strings.Contains(stderr, "not a CA certificate") {
+		t.Errorf("runValidate() should reject leaf cert, got err=%v stderr=%q", err, stderr)
 	}
 }
 
-func TestRunValidate_WithBothCertTypes(t *testing.T) {
+func TestRunValidate_WithBothCACerts(t *testing.T) {
 	validateFile = "testdata/valid-with-both.toml"
 	defer func() { validateFile = "" }()
 	if err := runValidate(nil, nil); err != nil {
-		t.Errorf("runValidate() with CA+leaf fixture: %v", err)
+		t.Errorf("runValidate() with two CA cert fixture: %v", err)
 	}
 }
 
 func TestRunValidate_InvalidEmbeddedCert(t *testing.T) {
 	validateFile = "testdata/invalid-leaf-no-san.toml"
 	defer func() { validateFile = "" }()
-	err := runValidate(nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "cert validation failed") {
-		t.Errorf("expected cert validation error, got: %v", err)
+	stderr, err := runValidateStderr(t)
+	if err == nil || !strings.Contains(stderr, "not a CA certificate") {
+		t.Errorf("expected 'not a CA certificate' in stderr, got err=%v stderr=%q", err, stderr)
 	}
 }
 
 func TestRunValidate_ExpiredCertFixture(t *testing.T) {
 	validateFile = "testdata/invalid-expired-cert.toml"
 	defer func() { validateFile = "" }()
-	err := runValidate(nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "expired") {
-		t.Errorf("expected expired cert error, got: %v", err)
+	stderr, err := runValidateStderr(t)
+	if err == nil || !strings.Contains(stderr, "expired") {
+		t.Errorf("expected 'expired' in stderr, got err=%v stderr=%q", err, stderr)
 	}
 }
 
@@ -198,11 +220,11 @@ url = "http://kbs2.svc:8080"
 	}
 	oldStderr := os.Stderr
 	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = oldStderr })
 
 	runErr := runValidate(nil, nil)
 
 	_ = w.Close()
-	os.Stderr = oldStderr
 	stderrOut, _ := io.ReadAll(r)
 	_ = r.Close()
 
@@ -304,39 +326,27 @@ func TestCheckKBSURLMismatch_AllTokenConfigsCompared(t *testing.T) {
 }
 
 func TestReportCerts_Output(t *testing.T) {
-	caCert, caKey, _ := makeTestCACert(t)
-	leaf := makeValidLeafCert(t, caCert, caKey)
+	ca1, _, _ := makeTestCACert(t)
+	ca2, _, _ := makeTestCACert(t)
 	entries := []certEntry{
-		{cert: caCert, source: "aa.toml/token_configs.kbs"},
-		{cert: leaf, source: "cdh.toml/kbc"},
+		{cert: ca1, source: "aa.toml/token_configs.kbs"},
+		{cert: ca2, source: "cdh.toml/kbc"},
 	}
 
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
+	var buf bytes.Buffer
+	if err := reportCerts(&buf, entries); err != nil {
+		t.Fatalf("reportCerts() unexpected error: %v", err)
 	}
-	oldStdout := os.Stdout
-	os.Stdout = w
-	reportCerts(entries)
-	_ = w.Close()
-	os.Stdout = oldStdout
-	out, _ := io.ReadAll(r)
-	_ = r.Close()
-
-	output := string(out)
+	output := buf.String()
 	checks := []struct {
 		label string
 		want  string
 	}{
 		{"summary line", "2 total"},
-		{"CA count", "1 CA"},
-		{"leaf count", "1 leaf"},
+		{"CA count", "2 CA"},
+		{"leaf count", "0 leaf"},
 		{"CA subject", "Test CA"},
 		{"CA type label", "[CA"},
-		{"leaf subject", "Test Valid Leaf"},
-		{"leaf type label", "[leaf]"},
-		{"SAN", "DNS:test.example.com"},
-		{"EKU", "serverAuth"},
 		{"source aa", "aa.toml/token_configs.kbs"},
 		{"source cdh", "cdh.toml/kbc"},
 		{"key type", "RSA-"},

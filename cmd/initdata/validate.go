@@ -6,7 +6,9 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -16,6 +18,11 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 )
+
+// errValidationFailed is a sentinel returned when runValidate has already
+// printed its own diagnostics and wants a non-zero exit without Cobra
+// printing an additional "Error: ..." line.
+var errValidationFailed = errors.New("validation failed")
 
 var validateCmd = &cobra.Command{
 	Use:   "validate",
@@ -28,7 +35,12 @@ Checks:
   - TOML parses cleanly
   - version == "0.1.0" and algorithm is one of sha256, sha384, sha512
   - aa.toml and cdh.toml are present (policy.rego is optional)
-  - Embedded certs pass rustls rules (CA: keyCertSign; leaf: SAN + serverAuth, not self-signed)
+  - Embedded certs are CA certificates (CA:TRUE, keyCertSign key usage)
+
+Rejected certs: leaf/non-CA certificates, expired certs, SHA-1 or MD5
+signatures, unknown critical extensions, RSA keys shorter than 1024 bits.
+
+Exit codes: 0 = passed, 1 = validation failed or input error.
 
 Examples:
   kubectl coco initdata validate --file ~/.kube/coco-initdata.toml
@@ -42,15 +54,28 @@ func init() {
 	validateCmd.Flags().StringVar(&validateFile, "file", "", "Path to plaintext initdata TOML file (reads encoded blob from stdin if not set)")
 }
 
-func runValidate(_ *cobra.Command, _ []string) error {
+// silenceAndReturn silences Cobra's own error/usage output for this command
+// and returns the sentinel. Call only after writing diagnostics to stderr.
+// cmd may be nil when runValidate is called directly in tests.
+func silenceAndReturn(cmd *cobra.Command) error {
+	if cmd != nil {
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+	}
+	return errValidationFailed
+}
+
+func runValidate(cmd *cobra.Command, _ []string) error {
 	tomlBytes, err := loadInitdataTOML(validateFile, os.Stdin)
 	if err != nil {
-		return fmt.Errorf("failed to load initdata: %w", err)
+		fmt.Fprintf(os.Stderr, "Error: failed to load initdata: %v\n", err)
+		return silenceAndReturn(cmd)
 	}
 
 	var id pkginitdata.InitData
 	if err := toml.Unmarshal(tomlBytes, &id); err != nil {
-		return fmt.Errorf("failed to parse TOML: %w", err)
+		fmt.Fprintf(os.Stderr, "Error: failed to parse TOML: %v\n", err)
+		return silenceAndReturn(cmd)
 	}
 
 	var failures []string
@@ -75,14 +100,18 @@ func runValidate(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		failures = append(failures, fmt.Sprintf("cert extraction failed: %v", err))
 	} else if len(entries) > 0 {
-		reportCerts(entries)
+		_ = reportCerts(os.Stderr, entries)
 		if err := validateCertsBySource(entries); err != nil {
 			failures = append(failures, err.Error())
 		}
 	}
 
 	if len(failures) > 0 {
-		return fmt.Errorf("validation failed:\n  %s", strings.Join(failures, "\n  "))
+		fmt.Fprintln(os.Stderr, "Validation failed:")
+		for _, f := range failures {
+			fmt.Fprintf(os.Stderr, "  %s\n", f)
+		}
+		return silenceAndReturn(cmd)
 	}
 
 	fmt.Println("Validation passed.")
@@ -158,7 +187,21 @@ func checkKBSURLMismatch(data map[string]string) string {
 	return ""
 }
 
-func reportCerts(entries []certEntry) {
+// diagWriter wraps an io.Writer and captures the first write error,
+// short-circuiting subsequent writes so the caller can check once at the end.
+type diagWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (d *diagWriter) printf(format string, a ...any) {
+	if d.err == nil {
+		_, d.err = fmt.Fprintf(d.w, format, a...)
+	}
+}
+
+func reportCerts(w io.Writer, entries []certEntry) error {
+	dw := &diagWriter{w: w}
 	caCount, leafCount := 0, 0
 	for _, e := range entries {
 		if e.cert.IsCA {
@@ -167,7 +210,7 @@ func reportCerts(entries []certEntry) {
 			leafCount++
 		}
 	}
-	fmt.Printf("Certificates: %d total  (%d CA, %d leaf)\n\n", len(entries), caCount, leafCount)
+	dw.printf("Certificates: %d total  (%d CA, %d leaf)\n\n", len(entries), caCount, leafCount)
 
 	for i, e := range entries {
 		cert := e.cert
@@ -189,25 +232,26 @@ func reportCerts(entries []certEntry) {
 		fp := sha256.Sum256(cert.Raw)
 		fingerprint := fmt.Sprintf("%X", fp[:6]) // first 6 bytes for brevity
 
-		fmt.Printf("  [%d] %s  [%s]\n", i+1, certDisplayName(cert), typeLabel)
-		fmt.Printf("      %-12s %s\n", "Issuer:", issuerCN)
-		fmt.Printf("      %-12s %s → %s  (%s)\n", "Valid:", cert.NotBefore.Format("2006-01-02"), cert.NotAfter.Format("2006-01-02"), certExpiryNote(cert))
-		fmt.Printf("      %-12s %s\n", "Key:", certKeyDesc(cert.PublicKey))
+		dw.printf("  [%d] %s  [%s]\n", i+1, certDisplayName(cert), typeLabel)
+		dw.printf("      %-12s %s\n", "Issuer:", issuerCN)
+		dw.printf("      %-12s %s → %s  (%s)\n", "Valid:", cert.NotBefore.Format("2006-01-02"), cert.NotAfter.Format("2006-01-02"), certExpiryNote(cert))
+		dw.printf("      %-12s %s\n", "Key:", certKeyDesc(cert.PublicKey))
 		if usage := certFormatKeyUsage(cert.KeyUsage); usage != "" {
-			fmt.Printf("      %-12s %s\n", "Usage:", usage)
+			dw.printf("      %-12s %s\n", "Usage:", usage)
 		}
 		if !cert.IsCA {
 			if san := certFormatSANs(cert); san != "" {
-				fmt.Printf("      %-12s %s\n", "SAN:", san)
+				dw.printf("      %-12s %s\n", "SAN:", san)
 			}
 		}
 		if eku := certFormatEKU(cert.ExtKeyUsage); eku != "" {
-			fmt.Printf("      %-12s %s\n", "EKU:", eku)
+			dw.printf("      %-12s %s\n", "EKU:", eku)
 		}
-		fmt.Printf("      %-12s %s\n", "Fingerprint:", fingerprint)
-		fmt.Printf("      %-12s %s\n", "Source:", e.source)
-		fmt.Println()
+		dw.printf("      %-12s %s\n", "Fingerprint:", fingerprint)
+		dw.printf("      %-12s %s\n", "Source:", e.source)
+		dw.printf("\n")
 	}
+	return dw.err
 }
 
 // certDisplayName returns a human-readable identifier for cert. It prefers the

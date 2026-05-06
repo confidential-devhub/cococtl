@@ -25,7 +25,8 @@ It provides commands to:
   - Create CoCo configuration
   - Transform regular K8s manifests to CoCo-enabled manifests
   - Deploy CoCo applications`,
-	Version: version,
+	Version:      version,
+	SilenceUsage: true,
 }
 
 // Execute runs the root command
