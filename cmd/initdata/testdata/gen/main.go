@@ -179,7 +179,7 @@ func main() {
 	}
 	expPEM, _ := mustCreateCert(expTmpl, expTmpl, &expKey.PublicKey, expKey)
 
-	// Non-CA leaf cert with no SAN — fails on two counts: not a CA cert, no SAN.
+	// Non-CA leaf cert — rejected because IsCA is false.
 	badLeafKey := mustGenKey()
 	badLeafTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(4),

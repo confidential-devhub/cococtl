@@ -279,6 +279,9 @@ func TestValidateCACert_UnknownCriticalExtensionsRejected(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unknown critical extensions") {
 		t.Errorf("expected unknown critical extensions error, got: %v", err)
 	}
+	if err != nil && !strings.Contains(err.Error(), "1.2.3.4") {
+		t.Errorf("error should include OID in dot notation, got: %v", err)
+	}
 }
 
 func TestValidateCACerts_LeafRejected(t *testing.T) {

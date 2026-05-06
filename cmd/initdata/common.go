@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"strconv"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -131,7 +132,16 @@ func validateCACert(cert *x509.Certificate) error {
 		return fmt.Errorf("certificate %q: RSA key is %d bits, minimum is 1024", cert.Subject.CommonName, rsaKey.N.BitLen())
 	}
 	if len(cert.UnhandledCriticalExtensions) > 0 {
-		return fmt.Errorf("certificate %q: has unknown critical extensions", cert.Subject.CommonName)
+		oidStrs := make([]string, len(cert.UnhandledCriticalExtensions))
+		for i, oid := range cert.UnhandledCriticalExtensions {
+			parts := make([]string, len(oid))
+			for j, n := range oid {
+				parts[j] = strconv.Itoa(n)
+			}
+			oidStrs[i] = strings.Join(parts, ".")
+		}
+		return fmt.Errorf("certificate %q: has unknown critical extensions: %s",
+			cert.Subject.CommonName, strings.Join(oidStrs, ", "))
 	}
 	return nil
 }

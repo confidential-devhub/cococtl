@@ -369,7 +369,7 @@ kubectl coco initdata dump | kubectl coco initdata validate
 Validation checks:
 - `version` is `0.1.0` and `algorithm` is one of `sha256`, `sha384`, `sha512`
 - Required keys `aa.toml` and `cdh.toml` are present (`policy.rego` is optional)
-- Embedded certificates must be CA certificates (`CA:TRUE`, `keyCertSign`); rejected: leaf/non-CA certs, expired certs, SHA-1 or MD5 signatures, unknown critical extensions, RSA keys shorter than 1024 bits
+- Embedded certificates must be CA certificates (`CA:TRUE`, `keyCertSign`); rejected: leaf/non-CA certs, expired or not-yet-valid certs, SHA-1 or MD5 signatures, unknown critical extensions, RSA keys shorter than 1024 bits
 - All `aa.toml` token config URLs are consistent with `cdh.toml` kbc URL (a warning is printed if any differ)
 
 ### Transform and Apply Manifests

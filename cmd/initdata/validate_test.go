@@ -12,7 +12,7 @@ import (
 
 // runValidateStderr runs runValidate and returns stderr output alongside the error.
 // Use this for tests that check validation failure messages.
-func runValidateStderr(t *testing.T) (stderr string, err error) {
+func runValidateStderr(t *testing.T) (string, error) {
 	t.Helper()
 	r, w, pipeErr := os.Pipe()
 	if pipeErr != nil {
@@ -20,9 +20,9 @@ func runValidateStderr(t *testing.T) (stderr string, err error) {
 	}
 	oldStderr := os.Stderr
 	os.Stderr = w
-	err = runValidate(nil, nil)
+	t.Cleanup(func() { os.Stderr = oldStderr })
+	err := runValidate(nil, nil)
 	_ = w.Close()
-	os.Stderr = oldStderr
 	out, _ := io.ReadAll(r)
 	_ = r.Close()
 	return string(out), err
@@ -220,11 +220,11 @@ url = "http://kbs2.svc:8080"
 	}
 	oldStderr := os.Stderr
 	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = oldStderr })
 
 	runErr := runValidate(nil, nil)
 
 	_ = w.Close()
-	os.Stderr = oldStderr
 	stderrOut, _ := io.ReadAll(r)
 	_ = r.Close()
 
@@ -333,19 +333,11 @@ func TestReportCerts_Output(t *testing.T) {
 		{cert: ca2, source: "cdh.toml/kbc"},
 	}
 
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
+	var buf bytes.Buffer
+	if err := reportCerts(&buf, entries); err != nil {
+		t.Fatalf("reportCerts() unexpected error: %v", err)
 	}
-	oldStdout := os.Stdout
-	os.Stdout = w
-	reportCerts(entries)
-	_ = w.Close()
-	os.Stdout = oldStdout
-	out, _ := io.ReadAll(r)
-	_ = r.Close()
-
-	output := string(out)
+	output := buf.String()
 	checks := []struct {
 		label string
 		want  string

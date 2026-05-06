@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -21,7 +22,7 @@ import (
 // errValidationFailed is a sentinel returned when runValidate has already
 // printed its own diagnostics and wants a non-zero exit without Cobra
 // printing an additional "Error: ..." line.
-var errValidationFailed = errors.New("")
+var errValidationFailed = errors.New("validation failed")
 
 var validateCmd = &cobra.Command{
 	Use:   "validate",
@@ -99,7 +100,7 @@ func runValidate(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		failures = append(failures, fmt.Sprintf("cert extraction failed: %v", err))
 	} else if len(entries) > 0 {
-		reportCerts(entries)
+		_ = reportCerts(os.Stderr, entries)
 		if err := validateCertsBySource(entries); err != nil {
 			failures = append(failures, err.Error())
 		}
@@ -186,7 +187,21 @@ func checkKBSURLMismatch(data map[string]string) string {
 	return ""
 }
 
-func reportCerts(entries []certEntry) {
+// diagWriter wraps an io.Writer and captures the first write error,
+// short-circuiting subsequent writes so the caller can check once at the end.
+type diagWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (d *diagWriter) printf(format string, a ...any) {
+	if d.err == nil {
+		_, d.err = fmt.Fprintf(d.w, format, a...)
+	}
+}
+
+func reportCerts(w io.Writer, entries []certEntry) error {
+	dw := &diagWriter{w: w}
 	caCount, leafCount := 0, 0
 	for _, e := range entries {
 		if e.cert.IsCA {
@@ -195,7 +210,7 @@ func reportCerts(entries []certEntry) {
 			leafCount++
 		}
 	}
-	fmt.Printf("Certificates: %d total  (%d CA, %d leaf)\n\n", len(entries), caCount, leafCount)
+	dw.printf("Certificates: %d total  (%d CA, %d leaf)\n\n", len(entries), caCount, leafCount)
 
 	for i, e := range entries {
 		cert := e.cert
@@ -217,25 +232,26 @@ func reportCerts(entries []certEntry) {
 		fp := sha256.Sum256(cert.Raw)
 		fingerprint := fmt.Sprintf("%X", fp[:6]) // first 6 bytes for brevity
 
-		fmt.Printf("  [%d] %s  [%s]\n", i+1, certDisplayName(cert), typeLabel)
-		fmt.Printf("      %-12s %s\n", "Issuer:", issuerCN)
-		fmt.Printf("      %-12s %s → %s  (%s)\n", "Valid:", cert.NotBefore.Format("2006-01-02"), cert.NotAfter.Format("2006-01-02"), certExpiryNote(cert))
-		fmt.Printf("      %-12s %s\n", "Key:", certKeyDesc(cert.PublicKey))
+		dw.printf("  [%d] %s  [%s]\n", i+1, certDisplayName(cert), typeLabel)
+		dw.printf("      %-12s %s\n", "Issuer:", issuerCN)
+		dw.printf("      %-12s %s → %s  (%s)\n", "Valid:", cert.NotBefore.Format("2006-01-02"), cert.NotAfter.Format("2006-01-02"), certExpiryNote(cert))
+		dw.printf("      %-12s %s\n", "Key:", certKeyDesc(cert.PublicKey))
 		if usage := certFormatKeyUsage(cert.KeyUsage); usage != "" {
-			fmt.Printf("      %-12s %s\n", "Usage:", usage)
+			dw.printf("      %-12s %s\n", "Usage:", usage)
 		}
 		if !cert.IsCA {
 			if san := certFormatSANs(cert); san != "" {
-				fmt.Printf("      %-12s %s\n", "SAN:", san)
+				dw.printf("      %-12s %s\n", "SAN:", san)
 			}
 		}
 		if eku := certFormatEKU(cert.ExtKeyUsage); eku != "" {
-			fmt.Printf("      %-12s %s\n", "EKU:", eku)
+			dw.printf("      %-12s %s\n", "EKU:", eku)
 		}
-		fmt.Printf("      %-12s %s\n", "Fingerprint:", fingerprint)
-		fmt.Printf("      %-12s %s\n", "Source:", e.source)
-		fmt.Println()
+		dw.printf("      %-12s %s\n", "Fingerprint:", fingerprint)
+		dw.printf("      %-12s %s\n", "Source:", e.source)
+		dw.printf("\n")
 	}
+	return dw.err
 }
 
 // certDisplayName returns a human-readable identifier for cert. It prefers the
