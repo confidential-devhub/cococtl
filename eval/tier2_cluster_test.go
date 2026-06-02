@@ -99,6 +99,39 @@ func TestEvalCluster(t *testing.T) {
 
 	// ── apply workflow ────────────────────────────────────────────────────────
 
+	check(t, "cluster", "cluster/kbs-populate-from-k8s-secret", func(t *testing.T) {
+		// Create a K8s secret then upload it via the --from-k8s-secret input mode.
+		genOut, err := exec.Command("kubectl", "create", "secret", "generic", "eval-kbs-upload-secret",
+			"--from-literal=api-key=top-secret-value",
+			"-n", evalNamespace, "--dry-run=client", "-o", "yaml",
+		).Output()
+		if err != nil {
+			t.Fatalf("generate secret YAML: %v", err)
+		}
+		ap := exec.Command("kubectl", "apply", "-f", "-")
+		ap.Stdin = strings.NewReader(string(genOut))
+		if out, err := ap.CombinedOutput(); err != nil {
+			t.Fatalf("kubectl apply secret: %v\n%s", err, out)
+		}
+
+		stdout, stderr, code := runBin(t, "kbs", "populate",
+			"--from-k8s-secret", "eval-kbs-upload-secret",
+			"--namespace", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("kbs populate exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+		// Verify the secret key actually landed in the KBS repository on disk.
+		// Path: <namespace>/<secret-name>/<key>
+		const repoBase = "/opt/confidential-containers/kbs/repository"
+		if out, err := exec.Command("kubectl", "exec",
+			"-n", evalNamespace, "deployment/trustee-deployment", "--",
+			"test", "-f", repoBase+"/"+evalNamespace+"/eval-kbs-upload-secret/api-key",
+		).CombinedOutput(); err != nil {
+			t.Fatalf("secret not found in KBS repository: %v\n%s", err, out)
+		}
+	})
+
 	check(t, "cluster", "cluster/apply-transforms-with-secrets", func(t *testing.T) {
 		// Create a K8s secret in the eval namespace that the pod will reference.
 		if out, err := exec.Command("kubectl", "create", "secret", "generic", "eval-app-secret",
