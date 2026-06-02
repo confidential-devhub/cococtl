@@ -132,6 +132,78 @@ func TestRunValidate_WithBothCACerts(t *testing.T) {
 	}
 }
 
+func TestRunValidate_CombinedExtraRootCertRejected(t *testing.T) {
+	_, _, pem1 := makeTestCACert(t)
+	_, _, pem2 := makeTestCACert(t)
+	combined := strings.ReplaceAll(string(append(pem1, pem2...)), "\n", "\\n")
+
+	tomlContent := `version = "0.1.0"
+algorithm = "sha256"
+
+[data]
+"aa.toml" = '''
+[token_configs]
+[token_configs.kbs]
+url = "http://kbs.example.svc:8080"
+'''
+"cdh.toml" = '''
+[kbc]
+name = "cc_kbc"
+url = "http://kbs.example.svc:8080"
+
+[image]
+extra_root_certificates = ["` + combined + `"]
+'''
+`
+	dir := t.TempDir()
+	path := dir + "/initdata.toml"
+	_ = os.WriteFile(path, []byte(tomlContent), 0600)
+	validateFile = path
+	defer func() { validateFile = "" }()
+
+	stderr, err := runValidateStderr(t)
+	if err == nil {
+		t.Fatal("expected validation failure for combined extra_root_certificates entry")
+	}
+	if !strings.Contains(stderr, "extra_root_certificates[0]") || !strings.Contains(stderr, "exactly one certificate") {
+		t.Errorf("expected 'extra_root_certificates[0]' and 'exactly one certificate' in stderr, got: %q", stderr)
+	}
+}
+
+func TestRunValidate_EmptyExtraRootCertEntryRejected(t *testing.T) {
+	tomlContent := `version = "0.1.0"
+algorithm = "sha256"
+
+[data]
+"aa.toml" = '''
+[token_configs]
+[token_configs.kbs]
+url = "http://kbs.example.svc:8080"
+'''
+"cdh.toml" = '''
+[kbc]
+name = "cc_kbc"
+url = "http://kbs.example.svc:8080"
+
+[image]
+extra_root_certificates = ["not a certificate"]
+'''
+`
+	dir := t.TempDir()
+	path := dir + "/initdata.toml"
+	_ = os.WriteFile(path, []byte(tomlContent), 0600)
+	validateFile = path
+	defer func() { validateFile = "" }()
+
+	stderr, err := runValidateStderr(t)
+	if err == nil {
+		t.Fatal("expected validation failure for zero-cert extra_root_certificates entry")
+	}
+	if !strings.Contains(stderr, "extra_root_certificates[0]") || !strings.Contains(stderr, "exactly one certificate") {
+		t.Errorf("expected 'extra_root_certificates[0]' and 'exactly one certificate' in stderr, got: %q", stderr)
+	}
+}
+
 func TestRunValidate_InvalidEmbeddedCert(t *testing.T) {
 	validateFile = "testdata/invalid-leaf-no-san.toml"
 	defer func() { validateFile = "" }()
