@@ -292,6 +292,26 @@ spec:
 				err, strings.TrimSpace(string(rcOut)), evalRuntimeClass)
 		}
 	})
+	check(t, "cluster", "cluster/apply-sidecar", func(t *testing.T) {
+		dir := t.TempDir()
+		src := copyFixture(t, filepath.Join(fixtures(t), "manifests", "simple-pod.yaml"), dir)
+
+		_, _, code := runBin(t, "apply", "-f", src,
+			"--skip-apply", "--sidecar", "--sidecar-skip-auto-sans",
+			"--convert-secrets=false", "-n", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("apply exited %d", code)
+		}
+		out, err := os.ReadFile(cocoOutput(src))
+		if err != nil {
+			t.Fatalf("output file missing: %v", err)
+		}
+		if !strings.Contains(string(out), "coco-secure-access") {
+			t.Errorf("sidecar container 'coco-secure-access' not found in -coco.yaml:\n%s", out)
+		}
+	})
+
 	check(t, "cluster", "cluster/apply-deployment", func(t *testing.T) {
 		if out, err := exec.Command("kubectl", "get", "runtimeclass", evalRuntimeClass, "-o", "name").Output(); err != nil || !strings.Contains(string(out), evalRuntimeClass) {
 			t.Skipf("%s RuntimeClass not found", evalRuntimeClass)
