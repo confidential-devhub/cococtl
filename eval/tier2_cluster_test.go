@@ -179,6 +179,25 @@ spec:
 		}
 	})
 
+	check(t, "cluster", "cluster/apply-init-container", func(t *testing.T) {
+		dir := t.TempDir()
+		src := copyFixture(t, filepath.Join(fixtures(t), "manifests", "simple-pod.yaml"), dir)
+
+		stdout, stderr, code := runBin(t, "apply", "-f", src,
+			"--skip-apply", "--init-container", "--convert-secrets=false", "-n", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("apply exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+		out, err := os.ReadFile(cocoOutput(src))
+		if err != nil {
+			t.Fatalf("output file missing: %v", err)
+		}
+		if !strings.Contains(string(out), "initContainers:") {
+			t.Errorf("initContainers not found in -coco.yaml:\n%s", out)
+		}
+	})
+
 	check(t, "cluster", "cluster/apply-creates-pod", func(t *testing.T) {
 		// Skip if kata-qemu-coco-dev is not installed on this cluster.
 		if out, err := exec.Command("kubectl", "get", "runtimeclass", evalRuntimeClass, "-o", "name").Output(); err != nil || !strings.Contains(string(out), evalRuntimeClass) {
