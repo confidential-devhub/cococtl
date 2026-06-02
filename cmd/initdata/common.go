@@ -286,7 +286,15 @@ func extractCertsFromInitdata(data map[string]string) ([]certEntry, error) {
 			if extra, ok := img["extra_root_certificates"].([]interface{}); ok {
 				for i, c := range extra {
 					if cert, ok := c.(string); ok && cert != "" {
-						pemSources = append(pemSources, pemSource{cert, fmt.Sprintf("cdh.toml/image.extra_root_certificates[%d]", i)})
+						source := fmt.Sprintf("cdh.toml/image.extra_root_certificates[%d]", i)
+						certs, err := parsePEMCerts([]byte(cert))
+						if err != nil {
+							return nil, fmt.Errorf("%s: failed to parse: %w", source, err)
+						}
+						if len(certs) != 1 {
+							return nil, fmt.Errorf("%s: must contain exactly one certificate, got %d", source, len(certs))
+						}
+						pemSources = append(pemSources, pemSource{cert, source})
 					}
 				}
 			}
