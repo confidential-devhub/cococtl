@@ -312,6 +312,32 @@ spec:
 		}
 	})
 
+	check(t, "cluster", "cluster/initdata-dump-validate-pipeline", func(t *testing.T) {
+		dir := t.TempDir()
+		tomlFile := filepath.Join(dir, "initdata.toml")
+
+		// Create initdata from the config written by init/kbs-start (real KBS URL).
+		if _, _, code := runBin(t, "initdata", "create", "--output", tomlFile); code != 0 {
+			t.Fatalf("initdata create exited %d", code)
+		}
+
+		// Capture dump output and feed it to validate via stdin.
+		dumpOut, _, code := runBin(t, "initdata", "dump", "--file", tomlFile)
+		if code != 0 {
+			t.Fatalf("initdata dump exited %d", code)
+		}
+
+		cmd := exec.Command(binary(t), "initdata", "validate")
+		cmd.Stdin = strings.NewReader(dumpOut)
+		var outBuf, errBuf strings.Builder
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &errBuf
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("initdata validate exited non-zero\nstdout: %s\nstderr: %s",
+				outBuf.String(), errBuf.String())
+		}
+	})
+
 	check(t, "cluster", "cluster/apply-deployment", func(t *testing.T) {
 		if out, err := exec.Command("kubectl", "get", "runtimeclass", evalRuntimeClass, "-o", "name").Output(); err != nil || !strings.Contains(string(out), evalRuntimeClass) {
 			t.Skipf("%s RuntimeClass not found", evalRuntimeClass)
