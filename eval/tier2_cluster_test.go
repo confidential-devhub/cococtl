@@ -242,6 +242,47 @@ spec:
 				err, strings.TrimSpace(string(rcOut)), evalRuntimeClass)
 		}
 	})
+	check(t, "cluster", "cluster/apply-deployment", func(t *testing.T) {
+		if out, err := exec.Command("kubectl", "get", "runtimeclass", evalRuntimeClass, "-o", "name").Output(); err != nil || !strings.Contains(string(out), evalRuntimeClass) {
+			t.Skipf("%s RuntimeClass not found", evalRuntimeClass)
+		}
+
+		dir := t.TempDir()
+		data, err := os.ReadFile(filepath.Join(fixtures(t), "manifests", "deployment.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Embed namespace so kubectl apply targets the eval namespace.
+		patched := strings.Replace(string(data), "metadata:", "metadata:\n  namespace: "+evalNamespace, 1)
+		src := filepath.Join(dir, "deployment.yaml")
+		if err := os.WriteFile(src, []byte(patched), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Cleanup(func() {
+			exec.Command("kubectl", "delete", "deployment", "test-deployment",
+				"-n", evalNamespace, "--ignore-not-found=true").Run() //nolint:errcheck
+		})
+
+		_, _, code := runBin(t, "apply", "-f", src,
+			"--convert-secrets=false", "--runtime-class", evalRuntimeClass, "-n", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("apply exited %d", code)
+		}
+		out, err := exec.Command("kubectl", "get", "deployment", "test-deployment",
+			"-n", evalNamespace, "-o", "name").Output()
+		if err != nil || !strings.Contains(string(out), "test-deployment") {
+			t.Errorf("deployment not found after apply: err=%v, out=%s", err, out)
+		}
+		// Verify the transformation set runtimeClassName on the pod template spec.
+		rcOut, err := exec.Command("kubectl", "get", "deployment", "test-deployment", "-n", evalNamespace,
+			"-o", "jsonpath={.spec.template.spec.runtimeClassName}").Output()
+		if err != nil || strings.TrimSpace(string(rcOut)) != evalRuntimeClass {
+			t.Errorf("runtimeClassName not set on pod template: err=%v, got=%q, want=%q",
+				err, strings.TrimSpace(string(rcOut)), evalRuntimeClass)
+		}
+	})
 }
 
 // createEvalNamespace creates evalNamespace (idempotent) and registers cleanup.
