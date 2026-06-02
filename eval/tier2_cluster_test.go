@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	evalPodName   = "coco-eval-test-pod"
-	evalNamespace = "default"
+	evalPodName        = "coco-eval-test-pod"
+	evalNamespace      = "default"
+	evalRuntimeClass   = "kata-qemu-coco-dev"
 )
 
 // TestEvalCluster runs scenarios that require a live Kubernetes cluster.
@@ -30,9 +31,9 @@ func TestEvalCluster(t *testing.T) {
 	})
 
 	check(t, "cluster", "cluster/apply-creates-object", func(t *testing.T) {
-		// kata-cc RuntimeClass is required; skip on plain clusters.
-		if out, err := exec.Command("kubectl", "get", "runtimeclass", "kata-cc", "-o", "name").Output(); err != nil || !strings.Contains(string(out), "kata-cc") {
-			t.Skip("kata-cc RuntimeClass not found — install CoCo to enable this test")
+		// kata-qemu-coco-dev RuntimeClass is required; skip on plain clusters.
+		if out, err := exec.Command("kubectl", "get", "runtimeclass", evalRuntimeClass, "-o", "name").Output(); err != nil || !strings.Contains(string(out), evalRuntimeClass) {
+			t.Skipf("%s RuntimeClass not found — install CoCo (`helm install coco oci://ghcr.io/confidential-containers/charts/confidential-containers`) to enable this test", evalRuntimeClass)
 		}
 
 		dir := t.TempDir()
@@ -52,7 +53,8 @@ func TestEvalCluster(t *testing.T) {
 			exec.Command("kubectl", "delete", "pod", evalPodName, "-n", evalNamespace, "--ignore-not-found=true", "--timeout=30s").Run() //nolint:errcheck
 		})
 
-		_, _, code := runBin(t, "apply", "-f", src, "--config", cfg, "--convert-secrets=false", "-n", evalNamespace)
+		_, _, code := runBin(t, "apply", "-f", src, "--config", cfg,
+			"--convert-secrets=false", "--runtime-class", evalRuntimeClass, "-n", evalNamespace)
 		if code != 0 {
 			t.Fatalf("apply exited %d", code)
 		}
