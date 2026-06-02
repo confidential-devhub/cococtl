@@ -26,8 +26,9 @@ func TestEvalCluster(t *testing.T) {
 
 	// Isolated namespace; deleted on cleanup.
 	createEvalNamespace(t)
-	// Config is overwritten by kbs start; restore original on cleanup.
+	// Config and sidecar certs are written by init; restore originals on cleanup.
 	backupCocoConfig(t)
+	backupCertDir(t)
 
 	// ── connectivity ──────────────────────────────────────────────────────────
 
@@ -44,7 +45,10 @@ func TestEvalCluster(t *testing.T) {
 	// ── init (Day 1 command) ─────────────────────────────────────────────────
 
 	check(t, "cluster", "cluster/init", func(t *testing.T) {
-		stdout, stderr, code := runBin(t, "init", "--trustee-namespace", evalNamespace)
+		stdout, stderr, code := runBin(t, "init",
+			"--trustee-namespace", evalNamespace,
+			"--enable-sidecar",
+		)
 		if code != 0 {
 			t.Fatalf("init exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 		}
@@ -292,16 +296,83 @@ spec:
 				err, strings.TrimSpace(string(rcOut)), evalRuntimeClass)
 		}
 	})
+
+	check(t, "cluster", "cluster/kata-pod-running", func(t *testing.T) {
+		if out, err := exec.Command("kubectl", "get", "runtimeclass", evalRuntimeClass, "-o", "name").Output(); err != nil || !strings.Contains(string(out), evalRuntimeClass) {
+			t.Skipf("%s RuntimeClass not found", evalRuntimeClass)
+		}
+
+		const podName = "coco-eval-kata-running"
+		dir := t.TempDir()
+		podFile := filepath.Join(dir, "kata-running.yaml")
+		// Use quay.io so CDH inside the kata VM can pull without Docker Hub
+		// rate limits; kubectl:latest is already cached on the node from kata CI.
+		if err := os.WriteFile(podFile, []byte(`apiVersion: v1
+kind: Pod
+metadata:
+  name: `+podName+`
+  namespace: `+evalNamespace+`
+spec:
+  containers:
+  - name: app
+    image: quay.io/kata-containers/kubectl:latest
+    imagePullPolicy: IfNotPresent
+    command: ["/bin/sh", "-c", "sleep 3600"]
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Cleanup(func() {
+			exec.Command("kubectl", "delete", "pod", podName, "-n", evalNamespace,
+				"--ignore-not-found=true", "--timeout=30s").Run() //nolint:errcheck
+		})
+
+		// cococtl apply adds cc_init_data, runtimeClassName and transforms the manifest.
+		stdout, stderr, code := runBin(t, "apply", "-f", podFile,
+			"--convert-secrets=false", "--runtime-class", evalRuntimeClass, "-n", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("apply exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+
+		// kata VM startup is slower than runc — allow up to 5 minutes.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if out, err := exec.CommandContext(ctx, "kubectl", "wait",
+			"--for=condition=ready", "pod", podName,
+			"-n", evalNamespace, "--timeout=300s",
+		).CombinedOutput(); err != nil {
+			// Capture pod events for diagnostics before failing.
+			events, _ := exec.Command("kubectl", "describe", "pod", podName, "-n", evalNamespace).Output()
+			t.Fatalf("pod did not reach Ready: %v\n%s\n--- describe ---\n%s", err, out, events)
+		}
+
+		// Verify the container state is Running (not CrashLoopBackOff or Waiting).
+		stateCtx, stateCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stateCancel()
+		stateOut, err := exec.CommandContext(stateCtx, "kubectl", "get", "pod", podName,
+			"-n", evalNamespace,
+			"-o", "jsonpath={.status.containerStatuses[0].state.running}",
+		).Output()
+		if err != nil || strings.TrimSpace(string(stateOut)) == "" {
+			t.Errorf("kata container is not in running state: err=%v, state=%q", err, string(stateOut))
+		}
+	})
+
 	check(t, "cluster", "cluster/apply-sidecar", func(t *testing.T) {
 		dir := t.TempDir()
 		src := copyFixture(t, filepath.Join(fixtures(t), "manifests", "simple-pod.yaml"), dir)
 
-		_, _, code := runBin(t, "apply", "-f", src,
-			"--skip-apply", "--sidecar", "--sidecar-skip-auto-sans",
+		const sidecarImage = "quay.io/confidential-devhub/coco-secure-access:latest"
+		stdout, stderr, code := runBin(t, "apply", "-f", src,
+			"--skip-apply", "--sidecar",
+			"--sidecar-image", sidecarImage,
+			"--sidecar-skip-auto-sans",
+			"--sidecar-san-dns", "eval-app."+evalNamespace+".svc.cluster.local",
 			"--convert-secrets=false", "-n", evalNamespace,
 		)
 		if code != 0 {
-			t.Fatalf("apply exited %d", code)
+			t.Fatalf("apply exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 		}
 		out, err := os.ReadFile(cocoOutput(src))
 		if err != nil {
@@ -398,6 +469,63 @@ func createEvalNamespace(t *testing.T) {
 			exec.Command("kubectl", "delete", "namespace", evalNamespace,
 				"--ignore-not-found=true", "--timeout=60s").Run() //nolint:errcheck
 		})
+	}
+}
+
+// backupCertDir copies ~/.kube/coco-sidecar/ to a temp location and restores
+// it on cleanup, so that init --enable-sidecar does not permanently alter the
+// developer's sidecar certificates.
+func backupCertDir(t *testing.T) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	certDir := filepath.Join(home, ".kube", "coco-sidecar")
+
+	// Snapshot existing contents before any test writes.
+	snapshot, snapshotErr := snapshotDir(certDir)
+
+	t.Cleanup(func() {
+		if snapshotErr != nil {
+			// Snapshot failed — preserve the original directory to avoid data loss.
+			return
+		}
+		os.RemoveAll(certDir) //nolint:errcheck
+		if len(snapshot) > 0 {
+			restoreDir(certDir, snapshot)
+		}
+	})
+}
+
+// snapshotDir reads all files in dir into a map[relpath]contents.
+// Returns nil map (not an error) when dir does not exist.
+func snapshotDir(dir string) (map[string][]byte, error) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return map[string][]byte{}, nil
+	}
+	snap := map[string][]byte{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		snap[rel] = data
+		return nil
+	})
+	return snap, err
+}
+
+// restoreDir writes a snapshotDir snapshot back to dir.
+func restoreDir(dir string, snap map[string][]byte) {
+	for rel, data := range snap {
+		dst := filepath.Join(dir, rel)
+		_ = os.MkdirAll(filepath.Dir(dst), 0o700)
+		_ = os.WriteFile(dst, data, 0o600)
 	}
 }
 
