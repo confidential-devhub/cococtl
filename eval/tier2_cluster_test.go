@@ -39,6 +39,31 @@ func TestEvalCluster(t *testing.T) {
 		}
 	})
 
+	// ── init (Day 1 command) ─────────────────────────────────────────────────
+
+	check(t, "cluster", "cluster/init", func(t *testing.T) {
+		stdout, stderr, code := runBin(t, "init", "--trustee-namespace", evalNamespace)
+		if code != 0 {
+			t.Fatalf("init exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+		home, _ := os.UserHomeDir()
+		cfgPath := filepath.Join(home, ".kube", "coco-config.toml")
+		cfgData, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatalf("config not created at %s: %v", cfgPath, err)
+		}
+		if !strings.Contains(string(cfgData), "trustee_server") ||
+			strings.Contains(string(cfgData), "trustee_server = ''") {
+			t.Fatalf("config missing trustee_server:\n%s", cfgData)
+		}
+		// Trustee pod must be ready before KBS tests proceed.
+		if out, err := exec.Command("kubectl", "wait", "--for=condition=ready",
+			"pod", "-l", "app=kbs", "-n", evalNamespace, "--timeout=120s",
+		).CombinedOutput(); err != nil {
+			t.Fatalf("Trustee not ready: %v\n%s", err, out)
+		}
+	})
+
 	// ── KBS workflow ──────────────────────────────────────────────────────────
 
 	check(t, "cluster", "cluster/kbs-start", func(t *testing.T) {
