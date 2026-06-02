@@ -1,4 +1,4 @@
-.PHONY: build install clean test help release release-all lint
+.PHONY: build install clean test eval eval-offline help release release-all lint
 
 # Binary name
 BINARY_NAME=kubectl-coco
@@ -67,6 +67,16 @@ clean:
 test:
 	@echo "Running tests (filter: $(TEST))..."
 	$(GOTEST) -v -run $(TEST) ./cmd/... ./integration_test/...
+
+## eval-offline: Run Tier 1 eval (no cluster required)
+eval-offline: build
+	@echo "Running offline eval..."
+	$(GOTEST) -v -run TestEvalOffline ./eval/...
+
+## eval: Run full eval scorecard (Tier 1 offline + Tier 2 cluster)
+eval: build
+	@echo "Running full eval..."
+	$(GOTEST) -v -run TestEval ./eval/...
 
 ## tidy: Tidy go modules
 tidy:
