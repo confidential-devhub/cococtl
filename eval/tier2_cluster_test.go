@@ -9,16 +9,25 @@ import (
 )
 
 const (
-	evalPodName        = "coco-eval-test-pod"
-	evalNamespace      = "default"
-	evalRuntimeClass   = "kata-qemu-coco-dev"
+	evalPodName      = "coco-eval-test-pod"
+	evalNamespace    = "coco-eval"
+	evalRuntimeClass = "kata-qemu-coco-dev"
 )
 
-// TestEvalCluster runs scenarios that require a live Kubernetes cluster.
+// TestEvalCluster drives the full user workflow against a live cluster:
+//
+//	kbs start → kbs populate → apply (with secrets) → apply (with kata runtime)
 func TestEvalCluster(t *testing.T) {
 	if !clusterAvailable() {
 		t.Skip("no Kubernetes cluster available — set KUBECONFIG or start a cluster to enable Tier 2")
 	}
+
+	// Isolated namespace; deleted on cleanup.
+	createEvalNamespace(t)
+	// Config is overwritten by kbs start; restore original on cleanup.
+	backupCocoConfig(t)
+
+	// ── connectivity ──────────────────────────────────────────────────────────
 
 	check(t, "cluster", "cluster/api-reachable", func(t *testing.T) {
 		out, err := exec.Command("kubectl", "cluster-info").Output()
@@ -30,21 +39,138 @@ func TestEvalCluster(t *testing.T) {
 		}
 	})
 
-	check(t, "cluster", "cluster/apply-creates-object", func(t *testing.T) {
-		// kata-qemu-coco-dev RuntimeClass is required; skip on plain clusters.
+	// ── KBS workflow ──────────────────────────────────────────────────────────
+
+	check(t, "cluster", "cluster/kbs-start", func(t *testing.T) {
+		stdout, stderr, code := runBin(t, "kbs", "start", "--namespace", evalNamespace)
+		if code != 0 {
+			t.Fatalf("kbs start exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+		// Wait specifically for the Trustee pod; --all would block on any
+		// Terminating pod left over from a rolling update.
+		out, err := exec.Command(
+			"kubectl", "wait", "--for=condition=ready", "pod", "-l", "app=kbs",
+			"-n", evalNamespace, "--timeout=120s",
+		).CombinedOutput()
+		if err != nil {
+			t.Fatalf("Trustee pod not ready: %v\n%s", err, out)
+		}
+	})
+
+	check(t, "cluster", "cluster/kbs-populate", func(t *testing.T) {
+		resFile := filepath.Join(t.TempDir(), "resource.txt")
+		if err := os.WriteFile(resFile, []byte("eval-test-secret-value"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		stdout, stderr, code := runBin(t, "kbs", "populate",
+			"--path", "default/eval/test-resource",
+			"--resource-file", resFile,
+			"--namespace", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("kbs populate exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+	})
+
+	// ── apply workflow ────────────────────────────────────────────────────────
+
+	check(t, "cluster", "cluster/apply-transforms-with-secrets", func(t *testing.T) {
+		// Create a K8s secret in the eval namespace that the pod will reference.
+		if out, err := exec.Command("kubectl", "create", "secret", "generic", "eval-app-secret",
+			"--from-literal=password=super-secret-value",
+			"-n", evalNamespace, "--dry-run=client", "-o", "yaml",
+		).Output(); err != nil {
+			t.Fatalf("generate secret YAML: %v", err)
+		} else {
+			ap := exec.Command("kubectl", "apply", "-f", "-")
+			ap.Stdin = strings.NewReader(string(out))
+			if combined, err := ap.CombinedOutput(); err != nil {
+				t.Fatalf("kubectl apply secret: %v\n%s", err, combined)
+			}
+		}
+
+		// Write a minimal pod manifest referencing the secret.
+		dir := t.TempDir()
+		podFile := filepath.Join(dir, "pod.yaml")
+		// Embed the namespace so the generated trustee-secrets file records the
+		// correct namespace for the KBS path and K8s secret lookup.
+		if err := os.WriteFile(podFile, []byte(`apiVersion: v1
+kind: Pod
+metadata:
+  name: eval-secrets-pod
+  namespace: `+evalNamespace+`
+spec:
+  containers:
+  - name: app
+    image: nginx:latest
+    env:
+    - name: PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: eval-app-secret
+          key: password
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// --skip-apply: apply transforms the manifest and writes two sidecar files:
+		//   pod-sealed-secrets.yaml  — K8s Secret manifest (kubectl apply separately)
+		//   pod-trustee-secrets.yaml — for `kbs populate -f` to upload values to KBS
+		// KBS upload is NOT performed automatically; it is deferred to the user.
+		// We run kbs populate here to close that gap and then verify via kubectl exec.
+		stdout, stderr, code := runBin(t, "apply", "-f", podFile,
+			"--skip-apply", "-n", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("apply exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+
+		coco, err := os.ReadFile(cocoOutput(podFile))
+		if err != nil {
+			t.Fatalf("output file missing: %v", err)
+		}
+		if !strings.Contains(string(coco), "-sealed") {
+			t.Errorf("sealed secret suffix not found in -coco.yaml:\n%s", coco)
+		}
+
+		// Upload the generated trustee-secrets file so KBS actually has the data.
+		trusteeSecrets := strings.TrimSuffix(podFile, ".yaml") + "-trustee-secrets.yaml"
+		if _, err := os.Stat(trusteeSecrets); err != nil {
+			t.Fatalf("trustee-secrets file not generated at %s: %v", trusteeSecrets, err)
+		}
+		if stdout, stderr, code = runBin(t, "kbs", "populate",
+			"-f", trusteeSecrets, "--namespace", evalNamespace,
+		); code != 0 {
+			t.Fatalf("kbs populate exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+
+		// Confirm the secret value landed in the KBS repository on disk.
+		const repoBase = "/opt/confidential-containers/kbs/repository"
+		if out, err := exec.Command("kubectl", "exec",
+			"-n", evalNamespace, "deployment/trustee-deployment", "--",
+			"test", "-f", repoBase+"/"+evalNamespace+"/eval-app-secret/password",
+		).CombinedOutput(); err != nil {
+			t.Fatalf("secret not found in KBS repository: %v\n%s", err, out)
+		}
+	})
+
+	check(t, "cluster", "cluster/apply-creates-pod", func(t *testing.T) {
+		// Skip if kata-qemu-coco-dev is not installed on this cluster.
 		if out, err := exec.Command("kubectl", "get", "runtimeclass", evalRuntimeClass, "-o", "name").Output(); err != nil || !strings.Contains(string(out), evalRuntimeClass) {
-			t.Skipf("%s RuntimeClass not found — install CoCo (`helm install coco oci://ghcr.io/confidential-containers/charts/confidential-containers`) to enable this test", evalRuntimeClass)
+			t.Skipf("%s RuntimeClass not found — helm install coco oci://ghcr.io/confidential-containers/charts/confidential-containers", evalRuntimeClass)
 		}
 
 		dir := t.TempDir()
-		cfg := minimalConfig(t, dir)
 		src := copyFixture(t, filepath.Join(fixtures(t), "manifests", "simple-pod.yaml"), dir)
 
 		data, err := os.ReadFile(src)
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Rename the pod and embed the eval namespace so kubectl apply targets
+		// coco-eval rather than the kubeconfig default namespace.
 		patched := strings.ReplaceAll(string(data), "name: test-pod", "name: "+evalPodName)
+		patched = strings.Replace(patched, "metadata:", "metadata:\n  namespace: "+evalNamespace, 1)
 		if err := os.WriteFile(src, []byte(patched), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -53,26 +179,67 @@ func TestEvalCluster(t *testing.T) {
 			exec.Command("kubectl", "delete", "pod", evalPodName, "-n", evalNamespace, "--ignore-not-found=true", "--timeout=30s").Run() //nolint:errcheck
 		})
 
-		_, _, code := runBin(t, "apply", "-f", src, "--config", cfg,
-			"--convert-secrets=false", "--runtime-class", evalRuntimeClass, "-n", evalNamespace)
+		_, _, code := runBin(t, "apply", "-f", src,
+			"--convert-secrets=false", "--runtime-class", evalRuntimeClass, "-n", evalNamespace,
+		)
 		if code != 0 {
 			t.Fatalf("apply exited %d", code)
 		}
 
 		out, err := exec.Command("kubectl", "get", "pod", evalPodName, "-n", evalNamespace, "-o", "name").Output()
 		if err != nil || !strings.Contains(string(out), evalPodName) {
-			t.Errorf("pod %s not found after apply (err=%v, out=%s)", evalPodName, err, out)
+			t.Errorf("pod not found in %s after apply: err=%v, out=%s", evalNamespace, err, out)
+		}
+		// Verify the transformation actually set runtimeClassName on the pod spec.
+		rcOut, err := exec.Command("kubectl", "get", "pod", evalPodName, "-n", evalNamespace,
+			"-o", "jsonpath={.spec.runtimeClassName}").Output()
+		if err != nil || strings.TrimSpace(string(rcOut)) != evalRuntimeClass {
+			t.Errorf("runtimeClassName not set correctly: err=%v, got=%q, want=%q",
+				err, strings.TrimSpace(string(rcOut)), evalRuntimeClass)
 		}
 	})
+}
 
-	check(t, "cluster", "cluster/kbs-detect-or-skip", func(t *testing.T) {
-		out, err := exec.Command("kubectl", "get", "pods", "-l", "app=trustee", "-o", "name").Output()
-		if err != nil || strings.TrimSpace(string(out)) == "" {
-			t.Skip("no Trustee pod found — deploy with `kubectl coco kbs start` to enable KBS tests")
+// createEvalNamespace creates evalNamespace (idempotent) and registers cleanup.
+func createEvalNamespace(t *testing.T) {
+	t.Helper()
+	// Only delete the namespace on cleanup if this call actually created it.
+	// If coco-eval already existed the eval must not destroy pre-existing resources.
+	created := exec.Command("kubectl", "create", "namespace", evalNamespace).Run() == nil
+	if !created {
+		// Namespace already exists — verify it is reachable before proceeding.
+		if out, err := exec.Command("kubectl", "get", "namespace", evalNamespace).CombinedOutput(); err != nil {
+			t.Fatalf("namespace %s exists but is not accessible: %v\n%s", evalNamespace, err, out)
 		}
-		_, _, code := runBin(t, "kbs", "--help")
-		if code != 0 {
-			t.Fatalf("kbs --help exited %d", code)
+	}
+	if created {
+		t.Cleanup(func() {
+			exec.Command("kubectl", "delete", "namespace", evalNamespace,
+				"--ignore-not-found=true", "--timeout=60s").Run() //nolint:errcheck
+		})
+	}
+}
+
+// backupCocoConfig saves ~/.kube/coco-config.toml and restores it on cleanup,
+// so that kbs start does not permanently alter the developer's config.
+func backupCocoConfig(t *testing.T) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	cfgPath := filepath.Join(home, ".kube", "coco-config.toml")
+	original, readErr := os.ReadFile(cfgPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		// File exists but is unreadable — fail early rather than risk deleting it.
+		t.Fatalf("config at %s exists but cannot be read: %v", cfgPath, readErr)
+	}
+	t.Cleanup(func() {
+		if readErr == nil {
+			os.WriteFile(cfgPath, original, 0o600) //nolint:errcheck
+		} else {
+			// File truly did not exist before; remove whatever the test wrote.
+			os.Remove(cfgPath) //nolint:errcheck
 		}
 	})
 }
