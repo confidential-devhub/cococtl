@@ -1,11 +1,13 @@
 package eval_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -98,6 +100,21 @@ func TestEvalCluster(t *testing.T) {
 	})
 
 	// ── apply workflow ────────────────────────────────────────────────────────
+
+	check(t, "cluster", "cluster/kbs-content-verify", func(t *testing.T) {
+		// Confirm the resource uploaded by kbs-populate is stored in the KBS
+		// repository on disk inside the Trustee pod.
+		const repoBase = "/opt/confidential-containers/kbs/repository"
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "kubectl", "exec",
+			"-n", evalNamespace, "deployment/trustee-deployment", "--",
+			"test", "-f", repoBase+"/default/eval/test-resource",
+		).CombinedOutput()
+		if err != nil {
+			t.Fatalf("resource not found in KBS repository: %v\n%s", err, out)
+		}
+	})
 
 	check(t, "cluster", "cluster/kbs-populate-from-k8s-secret", func(t *testing.T) {
 		// Create a K8s secret then upload it via the --from-k8s-secret input mode.
