@@ -617,6 +617,86 @@ spec:
 		}
 	})
 
+	check(t, "cluster", "cluster/apply-reapply-idempotency", func(t *testing.T) {
+		// Create a secret the pod will reference.
+		genOut, err := exec.Command("kubectl", "create", "secret", "generic", "eval-idempotent-secret",
+			"--from-literal=key=value", "-n", evalNamespace, "--dry-run=client", "-o", "yaml",
+		).Output()
+		if err != nil {
+			t.Fatalf("generate secret YAML: %v", err)
+		}
+		ap := exec.Command("kubectl", "apply", "-f", "-")
+		ap.Stdin = strings.NewReader(string(genOut))
+		if out, err := ap.CombinedOutput(); err != nil {
+			t.Fatalf("kubectl apply secret: %v\n%s", err, out)
+		}
+
+		dir := t.TempDir()
+		podFile := filepath.Join(dir, "pod.yaml")
+		if err := os.WriteFile(podFile, []byte(`apiVersion: v1
+kind: Pod
+metadata:
+  name: eval-idempotent-pod
+  namespace: `+evalNamespace+`
+spec:
+  containers:
+  - name: app
+    image: quay.io/kata-containers/kubectl:latest
+    imagePullPolicy: IfNotPresent
+    env:
+    - name: KEY
+      valueFrom:
+        secretKeyRef:
+          name: eval-idempotent-secret
+          key: key
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Run 1: --skip-apply with secret conversion.
+		s1, e1, c1 := runBin(t, "apply", "-f", podFile, "--skip-apply", "-n", evalNamespace)
+		if c1 != 0 {
+			t.Fatalf("run 1 exited %d\nstdout: %s\nstderr: %s", c1, s1, e1)
+		}
+		coco1, err := os.ReadFile(cocoOutput(podFile))
+		if err != nil {
+			t.Fatalf("run 1 -coco.yaml missing: %v", err)
+		}
+
+		// Run 2: identical command — must also exit 0 with the same output.
+		s2, e2, c2 := runBin(t, "apply", "-f", podFile, "--skip-apply", "-n", evalNamespace)
+		if c2 != 0 {
+			t.Fatalf("run 2 (re-apply) exited %d\nstdout: %s\nstderr: %s", c2, s2, e2)
+		}
+		coco2, err := os.ReadFile(cocoOutput(podFile))
+		if err != nil {
+			t.Fatalf("run 2 -coco.yaml missing: %v", err)
+		}
+		if string(coco1) != string(coco2) {
+			t.Errorf("re-apply produced different -coco.yaml:\nrun1:\n%s\nrun2:\n%s", coco1, coco2)
+		}
+
+		// Full cluster apply (skip if kata not available).
+		if out, err := exec.Command("kubectl", "get", "runtimeclass", evalRuntimeClass, "-o", "name").Output(); err != nil || !strings.Contains(string(out), evalRuntimeClass) {
+			t.Skipf("%s not found — skipping cluster re-apply check", evalRuntimeClass)
+		}
+		t.Cleanup(func() {
+			exec.Command("kubectl", "delete", "pod", "eval-idempotent-pod",
+				"-n", evalNamespace, "--ignore-not-found=true").Run() //nolint:errcheck
+		})
+		for run := 1; run <= 2; run++ {
+			if _, _, code := runBin(t, "apply", "-f", podFile,
+				"--runtime-class", evalRuntimeClass, "-n", evalNamespace,
+			); code != 0 {
+				t.Fatalf("cluster apply run %d exited %d", run, code)
+			}
+		}
+		if out, err := exec.Command("kubectl", "get", "pod", "eval-idempotent-pod",
+			"-n", evalNamespace, "-o", "name").Output(); err != nil || !strings.Contains(string(out), "eval-idempotent-pod") {
+			t.Errorf("pod not found after re-apply: err=%v, out=%s", err, out)
+		}
+	})
+
 	check(t, "cluster", "cluster/init-skip-trustee-deploy", func(t *testing.T) {
 		// Simulate the "I already have a KBS" flow: init with an explicit URL
 		// and --skip-trustee-deploy so no new Trustee pod is created.
