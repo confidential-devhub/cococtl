@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"os"
@@ -224,7 +225,22 @@ func generateCDHToml(cfg *config.CocoConfig, caCert string, imagePullSecrets []I
 		}
 
 		if caCert != "" {
-			imageConfig["extra_root_certificates"] = []string{caCert}
+			// Split the PEM into one entry per certificate so that each element
+			// in extra_root_certificates contains exactly one certificate.
+			// This matches what initdata validate enforces.
+			var entries []string
+			rest := []byte(caCert)
+			for {
+				var block *pem.Block
+				block, rest = pem.Decode(rest)
+				if block == nil {
+					break
+				}
+				entries = append(entries, string(pem.EncodeToMemory(block)))
+			}
+			if len(entries) > 0 {
+				imageConfig["extra_root_certificates"] = entries
+			}
 		}
 
 		if len(imageConfig) > 0 {
