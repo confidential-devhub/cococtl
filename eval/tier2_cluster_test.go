@@ -450,6 +450,85 @@ spec:
 				err, strings.TrimSpace(string(rcOut)), evalRuntimeClass)
 		}
 	})
+
+	check(t, "cluster", "cluster/apply-volume-secret", func(t *testing.T) {
+		// Create a K8s secret that will be mounted as a volume.
+		genOut, err := exec.Command("kubectl", "create", "secret", "generic", "eval-vol-secret",
+			"--from-literal=config.yaml=key: value",
+			"-n", evalNamespace, "--dry-run=client", "-o", "yaml",
+		).Output()
+		if err != nil {
+			t.Fatalf("generate secret YAML: %v", err)
+		}
+		ap := exec.Command("kubectl", "apply", "-f", "-")
+		ap.Stdin = strings.NewReader(string(genOut))
+		if out, err := ap.CombinedOutput(); err != nil {
+			t.Fatalf("kubectl apply secret: %v\n%s", err, out)
+		}
+
+		// Write pod manifest with a volume secret reference (different code path
+		// from env secretKeyRef — detected via volumes[].secret.secretName).
+		dir := t.TempDir()
+		podFile := filepath.Join(dir, "vol-pod.yaml")
+		if err := os.WriteFile(podFile, []byte(`apiVersion: v1
+kind: Pod
+metadata:
+  name: eval-vol-secret-pod
+  namespace: `+evalNamespace+`
+spec:
+  containers:
+  - name: app
+    image: quay.io/kata-containers/kubectl:latest
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+    - name: cfg
+      mountPath: /etc/config
+  volumes:
+  - name: cfg
+    secret:
+      secretName: eval-vol-secret
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		stdout, stderr, code := runBin(t, "apply", "-f", podFile,
+			"--skip-apply", "-n", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("apply exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+
+		// Volume secretName should be renamed with -sealed suffix.
+		coco, err := os.ReadFile(cocoOutput(podFile))
+		if err != nil {
+			t.Fatalf("output file missing: %v", err)
+		}
+		if !strings.Contains(string(coco), "eval-vol-secret-sealed") {
+			t.Errorf("sealed volume secret not found in -coco.yaml:\n%s", coco)
+		}
+
+		// Upload the generated trustee-secrets file to KBS.
+		trusteeSecrets := strings.TrimSuffix(podFile, ".yaml") + "-trustee-secrets.yaml"
+		if _, err := os.Stat(trusteeSecrets); err != nil {
+			t.Fatalf("trustee-secrets file not generated: %v", err)
+		}
+		if stdout, stderr, code = runBin(t, "kbs", "populate",
+			"-f", trusteeSecrets, "--namespace", evalNamespace,
+		); code != 0 {
+			t.Fatalf("kbs populate exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+
+		// Confirm the secret key landed in the KBS repository on disk.
+		const repoBase = "/opt/confidential-containers/kbs/repository"
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if out, err := exec.CommandContext(ctx, "kubectl", "exec",
+			"-n", evalNamespace, "deployment/trustee-deployment", "--",
+			"test", "-f", repoBase+"/"+evalNamespace+"/eval-vol-secret/config.yaml",
+		).CombinedOutput(); err != nil {
+			t.Fatalf("volume secret not found in KBS repository: %v\n%s", err, out)
+		}
+	})
 }
 
 // createEvalNamespace creates evalNamespace (idempotent) and registers cleanup.
