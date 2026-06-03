@@ -530,6 +530,93 @@ spec:
 		}
 	})
 
+	check(t, "cluster", "cluster/apply-multidoc", func(t *testing.T) {
+		dir := t.TempDir()
+		src := filepath.Join(dir, "pod-with-service.yaml")
+
+		// Multi-document YAML: Pod (primary workload) + Service (secondary).
+		// Namespace embedded so kubectl apply targets coco-eval.
+		if err := os.WriteFile(src, []byte(`apiVersion: v1
+kind: Pod
+metadata:
+  name: eval-multidoc-pod
+  namespace: `+evalNamespace+`
+  labels:
+    app: eval-multidoc
+spec:
+  containers:
+  - name: app
+    image: quay.io/kata-containers/kubectl:latest
+    imagePullPolicy: IfNotPresent
+    ports:
+    - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eval-multidoc-svc
+  namespace: `+evalNamespace+`
+spec:
+  selector:
+    app: eval-multidoc
+  ports:
+  - port: 80
+    targetPort: 8080
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Cleanup(func() {
+			exec.Command("kubectl", "delete", "pod", "eval-multidoc-pod",
+				"-n", evalNamespace, "--ignore-not-found=true").Run() //nolint:errcheck
+			exec.Command("kubectl", "delete", "svc", "eval-multidoc-svc",
+				"-n", evalNamespace, "--ignore-not-found=true").Run() //nolint:errcheck
+		})
+
+		// Transformation check (always runs): the primary workload gets cc_init_data;
+		// the Service document is extracted but NOT included in -coco.yaml.
+		stdout, stderr, code := runBin(t, "apply", "-f", src,
+			"--skip-apply", "--convert-secrets=false", "-n", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("apply exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+		coco, err := os.ReadFile(cocoOutput(src))
+		if err != nil {
+			t.Fatalf("-coco.yaml missing: %v", err)
+		}
+		if !strings.Contains(string(coco), "cc_init_data") {
+			t.Errorf("cc_init_data annotation not found in -coco.yaml")
+		}
+		// cococtl applies only the primary workload; the Service document is
+		// not written to -coco.yaml, ensuring the annotation is never placed on it.
+		if strings.Contains(string(coco), "kind: Service") {
+			t.Errorf("Service document unexpectedly included in -coco.yaml:\n%s", coco)
+		}
+
+		// Cluster apply check (skipped without kata RuntimeClass).
+		if out, err := exec.Command("kubectl", "get", "runtimeclass", evalRuntimeClass, "-o", "name").Output(); err != nil || !strings.Contains(string(out), evalRuntimeClass) {
+			t.Skipf("%s RuntimeClass not found — skipping cluster apply check", evalRuntimeClass)
+		}
+		_, _, code = runBin(t, "apply", "-f", src,
+			"--convert-secrets=false", "--runtime-class", evalRuntimeClass, "-n", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("cluster apply exited %d", code)
+		}
+		// Primary workload (Pod) must exist.
+		if out, err := exec.Command("kubectl", "get", "pod", "eval-multidoc-pod",
+			"-n", evalNamespace, "-o", "name").Output(); err != nil || !strings.Contains(string(out), "eval-multidoc-pod") {
+			t.Errorf("Pod not found after apply: err=%v, out=%s", err, out)
+		}
+		// Service must NOT exist — cococtl applies only the primary workload.
+		// Check err too: a kubectl failure (empty output) must not silently pass.
+		if out, err := exec.Command("kubectl", "get", "svc", "eval-multidoc-svc",
+			"-n", evalNamespace, "--ignore-not-found").Output(); err != nil || strings.Contains(string(out), "eval-multidoc-svc") {
+			t.Errorf("Service unexpectedly created by cococtl apply (err=%v): %s", err, out)
+		}
+	})
+
 	check(t, "cluster", "cluster/init-skip-trustee-deploy", func(t *testing.T) {
 		// Simulate the "I already have a KBS" flow: init with an explicit URL
 		// and --skip-trustee-deploy so no new Trustee pod is created.
