@@ -45,17 +45,24 @@ Requires a reachable Kubernetes cluster (`kubectl cluster-info` succeeds).
 Drives the real user workflow end-to-end.
 
 The eval creates a `coco-eval` namespace and backs up `~/.kube/coco-config.toml`
-before running; both are restored on completion.
+and `~/.kube/coco-sidecar/` before running; both are restored on completion.
 
 | Test | What it checks | Pass condition | Skip condition |
 |------|---------------|----------------|----------------|
 | `cluster/api-reachable` | Cluster connectivity | `kubectl cluster-info` exits 0 | — |
-| `cluster/kbs-start` | `kubectl coco kbs start` | Trustee pod reaches `Ready` in `coco-eval` | — |
-| `cluster/kbs-populate` | `kubectl coco kbs populate --path … --resource-file …` | Exit 0 | — |
-| `cluster/apply-transforms-with-secrets` | `apply --skip-apply` with a real K8s secret | `-coco.yaml` contains `-sealed` secret ref; exit 0 | — |
-| `cluster/apply-creates-pod` | `apply` (no `--skip-apply`) with `kata-qemu-coco-dev` | Pod object exists in `coco-eval` namespace | `kata-qemu-coco-dev` RuntimeClass absent |
+| `cluster/init` | `kubectl coco init --enable-sidecar` (Day 1 command) | Config created with non-empty `trustee_server`; Trustee pod `Ready`; client CA generated | — |
+| `cluster/kbs-start` | `kubectl coco kbs start` idempotency | Detects existing Trustee; exit 0 | — |
+| `cluster/kbs-populate` | `kbs populate --path … --resource-file …` | Exit 0 | — |
+| `cluster/kbs-content-verify` | Resource from `kbs-populate` is on disk in Trustee pod | `kubectl exec test -f <repo-path>` exits 0 (30 s timeout) | — |
+| `cluster/kbs-populate-from-k8s-secret` | `kbs populate --from-k8s-secret` (alternate input mode) | Exit 0; file confirmed in KBS repo via `kubectl exec` | — |
+| `cluster/apply-transforms-with-secrets` | `apply --skip-apply` with a real K8s secret; then `kbs populate -f` on generated trustee-secrets file | `-coco.yaml` has `-sealed` secret ref; secret value confirmed in KBS repo via `kubectl exec` | — |
+| `cluster/apply-init-container` | `apply --init-container --skip-apply` | `-coco.yaml` contains `initContainers:` | — |
+| `cluster/apply-creates-pod` | `apply` (no `--skip-apply`) with `kata-qemu-coco-dev` | Pod object exists in `coco-eval`; `spec.runtimeClassName` equals `kata-qemu-coco-dev` | `kata-qemu-coco-dev` RuntimeClass absent |
+| `cluster/apply-sidecar` | `apply --sidecar --skip-apply` | `-coco.yaml` contains `coco-secure-access` container | — |
+| `cluster/initdata-dump-validate-pipeline` | `initdata create → dump \| validate` pipe | `validate` reads encoded blob from stdin; exit 0 | — |
+| `cluster/apply-deployment` | `apply` on a Deployment (not just Pod) | `test-deployment` object exists in `coco-eval`; `spec.template.spec.runtimeClassName` equals `kata-qemu-coco-dev` | `kata-qemu-coco-dev` RuntimeClass absent |
 
-### CoCo RuntimeClass (for `apply-creates-pod`)
+### CoCo RuntimeClass (for `apply-creates-pod` and `apply-deployment`)
 
 Install with the official Helm chart:
 
