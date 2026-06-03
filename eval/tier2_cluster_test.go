@@ -529,6 +529,48 @@ spec:
 			t.Fatalf("volume secret not found in KBS repository: %v\n%s", err, out)
 		}
 	})
+
+	check(t, "cluster", "cluster/init-skip-trustee-deploy", func(t *testing.T) {
+		// Simulate the "I already have a KBS" flow: init with an explicit URL
+		// and --skip-trustee-deploy so no new Trustee pod is created.
+		kbsURL := "http://trustee-kbs." + evalNamespace + ".svc.cluster.local:8080"
+
+		// Snapshot deployments (stable objects) before the command.
+		depsBefore, err := exec.Command("kubectl", "get", "deployments",
+			"-n", evalNamespace, "-o", "name").Output()
+		if err != nil {
+			t.Fatalf("kubectl get deployments: %v", err)
+		}
+
+		stdout, stderr, code := runBin(t, "init",
+			"--skip-trustee-deploy",
+			"--trustee-url", kbsURL,
+		)
+		if code != 0 {
+			t.Fatalf("init exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+
+		// Config must contain the explicitly provided KBS URL.
+		home, _ := os.UserHomeDir()
+		cfgData, err := os.ReadFile(filepath.Join(home, ".kube", "coco-config.toml"))
+		if err != nil {
+			t.Fatalf("config not readable: %v", err)
+		}
+		if !strings.Contains(string(cfgData), kbsURL) {
+			t.Errorf("config does not contain expected URL %q:\n%s", kbsURL, cfgData)
+		}
+
+		// No new Trustee deployment — deployment names must be unchanged.
+		depsAfter, err := exec.Command("kubectl", "get", "deployments",
+			"-n", evalNamespace, "-o", "name").Output()
+		if err != nil {
+			t.Fatalf("kubectl get deployments: %v", err)
+		}
+		if string(depsBefore) != string(depsAfter) {
+			t.Errorf("deployments changed after init --skip-trustee-deploy (expected no deployment):\nbefore: %s\nafter:  %s",
+				depsBefore, depsAfter)
+		}
+	})
 }
 
 // createEvalNamespace creates evalNamespace (idempotent) and registers cleanup.
