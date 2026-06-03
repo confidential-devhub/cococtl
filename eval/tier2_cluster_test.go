@@ -697,6 +697,49 @@ spec:
 		}
 	})
 
+	check(t, "cluster", "cluster/kbs-start-external", func(t *testing.T) {
+		// Register a pre-existing external KBS without touching the cluster.
+		const externalURL = "http://kbs.external.example.com:8080"
+
+		// Snapshot deployments (stable objects) before the command.
+		// Using deployments rather than pods avoids flakiness from Terminating
+		// pods left by prior test cleanups.
+		depsBefore, err := exec.Command("kubectl", "get", "deployments",
+			"-n", evalNamespace, "-o", "name").Output()
+		if err != nil {
+			t.Fatalf("kubectl get deployments: %v", err)
+		}
+
+		stdout, stderr, code := runBin(t, "kbs", "start",
+			"--mode", "external",
+			"--url", externalURL,
+		)
+		if code != 0 {
+			t.Fatalf("kbs start --mode external exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+
+		// Config must contain the registered URL.
+		home, _ := os.UserHomeDir()
+		cfgData, err := os.ReadFile(filepath.Join(home, ".kube", "coco-config.toml"))
+		if err != nil {
+			t.Fatalf("config not readable: %v", err)
+		}
+		if !strings.Contains(string(cfgData), externalURL) {
+			t.Errorf("config does not contain registered URL %q:\n%s", externalURL, cfgData)
+		}
+
+		// No new Trustee deployment — deployment names must be unchanged.
+		depsAfter, err := exec.Command("kubectl", "get", "deployments",
+			"-n", evalNamespace, "-o", "name").Output()
+		if err != nil {
+			t.Fatalf("kubectl get deployments: %v", err)
+		}
+		if string(depsBefore) != string(depsAfter) {
+			t.Errorf("deployments changed after kbs start --mode external (expected no cluster interaction):\nbefore: %s\nafter:  %s",
+				depsBefore, depsAfter)
+		}
+	})
+
 	check(t, "cluster", "cluster/init-skip-trustee-deploy", func(t *testing.T) {
 		// Simulate the "I already have a KBS" flow: init with an explicit URL
 		// and --skip-trustee-deploy so no new Trustee pod is created.
