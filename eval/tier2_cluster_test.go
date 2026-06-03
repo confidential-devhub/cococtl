@@ -697,6 +697,90 @@ spec:
 		}
 	})
 
+	check(t, "cluster", "cluster/apply-statefulset", func(t *testing.T) {
+		dir := t.TempDir()
+		src := filepath.Join(dir, "sts.yaml")
+		if err := os.WriteFile(src, []byte(`apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: eval-sts
+  namespace: `+evalNamespace+`
+spec:
+  serviceName: eval-sts
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eval-sts
+  template:
+    metadata:
+      labels:
+        app: eval-sts
+    spec:
+      containers:
+      - name: app
+        image: quay.io/kata-containers/kubectl:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c", "sleep 3600"]
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Transformation check: cc_init_data must be on spec.template, NOT top-level metadata.
+		stdout, stderr, code := runBin(t, "apply", "-f", src,
+			"--skip-apply", "--convert-secrets=false", "-n", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("apply exited %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
+		coco, err := os.ReadFile(cocoOutput(src))
+		if err != nil {
+			t.Fatalf("-coco.yaml missing: %v", err)
+		}
+		cocoStr := string(coco)
+		if !strings.Contains(cocoStr, "cc_init_data") {
+			t.Errorf("cc_init_data annotation not found in -coco.yaml")
+		}
+		// The annotation must appear inside the template section, not in the
+		// top-level StatefulSet metadata (the critical workload-resource invariant).
+		parts := strings.SplitN(cocoStr, "  template:", 2)
+		if len(parts) < 2 {
+			t.Fatalf("template: section not found in -coco.yaml")
+		}
+		if strings.Contains(parts[0], "cc_init_data") {
+			t.Errorf("cc_init_data found in top-level metadata instead of spec.template.metadata")
+		}
+		if !strings.Contains(parts[1], "cc_init_data") {
+			t.Errorf("cc_init_data not found inside spec.template in -coco.yaml")
+		}
+
+		// Cluster apply check (skipped without kata RuntimeClass).
+		if out, err := exec.Command("kubectl", "get", "runtimeclass", evalRuntimeClass, "-o", "name").Output(); err != nil || !strings.Contains(string(out), evalRuntimeClass) {
+			t.Skipf("%s RuntimeClass not found — skipping cluster apply check", evalRuntimeClass)
+		}
+		t.Cleanup(func() {
+			exec.Command("kubectl", "delete", "statefulset", "eval-sts",
+				"-n", evalNamespace, "--ignore-not-found=true").Run() //nolint:errcheck
+		})
+		_, _, code = runBin(t, "apply", "-f", src,
+			"--convert-secrets=false", "--runtime-class", evalRuntimeClass, "-n", evalNamespace,
+		)
+		if code != 0 {
+			t.Fatalf("cluster apply exited %d", code)
+		}
+		out, err := exec.Command("kubectl", "get", "statefulset", "eval-sts",
+			"-n", evalNamespace, "-o", "name").Output()
+		if err != nil || !strings.Contains(string(out), "eval-sts") {
+			t.Errorf("StatefulSet not found after apply: err=%v, out=%s", err, out)
+		}
+		// Annotation must be on the pod template in the cluster object too.
+		rcOut, err := exec.Command("kubectl", "get", "statefulset", "eval-sts",
+			"-n", evalNamespace,
+			"-o", "jsonpath={.spec.template.spec.runtimeClassName}").Output()
+		if err != nil || strings.TrimSpace(string(rcOut)) != evalRuntimeClass {
+			t.Errorf("runtimeClassName not set on pod template: err=%v, got=%q", err, string(rcOut))
+		}
+	})
+
 	check(t, "cluster", "cluster/kbs-start-external", func(t *testing.T) {
 		// Register a pre-existing external KBS without touching the cluster.
 		const externalURL = "http://kbs.external.example.com:8080"
