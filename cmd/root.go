@@ -1,10 +1,12 @@
-// Package cmd provides the command-line interface for kubectl-coco.
+// Package cmd provides the command-line interface for cococtl / kubectl-coco.
 package cmd
 
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -16,9 +18,9 @@ import (
 var version = "dev"
 
 var rootCmd = &cobra.Command{
-	Use:   "kubectl-coco",
-	Short: "A kubectl plugin to deploy confidential containers (CoCo)",
-	Long: `kubectl-coco is a kubectl plugin that helps you transform and deploy
+	Use:   "cococtl",
+	Short: "Deploy and manage Confidential Containers (CoCo) applications",
+	Long: `cococtl (also usable as kubectl-coco) transforms and deploys
 Kubernetes manifests for Confidential Containers (CoCo).
 
 It provides commands to:
@@ -35,6 +37,13 @@ func Execute() error {
 }
 
 func init() {
+	// Adopt the correct command name based on how the binary is invoked.
+	// Supports both standalone usage ("cococtl") and kubectl plugin usage ("kubectl-coco").
+	name := filepath.Base(os.Args[0])
+	if name == "kubectl-coco" {
+		rootCmd.Use = "kubectl-coco"
+	}
+
 	cobra.OnInitialize()
 	rootCmd.AddCommand(kbs.KbsCmd)
 	rootCmd.AddCommand(initdata.InitdataCmd)

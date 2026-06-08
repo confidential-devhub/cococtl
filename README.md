@@ -1,13 +1,24 @@
-# kubectl-coco
+# cococtl / kubectl-coco
 
-A kubectl plugin to deploy Confidential Containers (CoCo) applications.
+A tool to deploy Confidential Containers (CoCo) applications on Kubernetes.
 
-`kubectl-coco` is designed primarily for developers to CoCo-fy their applications and test them with Trustee, the Remote Attestation Solution for CoCo. It's not meant for production deployment of CoCo applications.
+`cococtl` is designed primarily for developers to CoCo-fy their applications and test them with Trustee, the Remote Attestation Solution for CoCo. It's not meant for production deployment of CoCo applications.
 Read more about CoCo at [confidentialcontainers.org](https://confidentialcontainers.org/).
+
+## Usage Modes
+
+The tool ships as a single binary (`cococtl`) and supports two invocation styles:
+
+| Mode | Binary | Invocation |
+|------|--------|------------|
+| Standalone CLI | `cococtl` | `cococtl <command>` |
+| kubectl plugin | `kubectl-coco` (symlink) | `kubectl coco <command>` |
+
+All commands and flags are identical in both modes. The examples in this README use `cococtl`; replace with `kubectl coco` if you prefer the plugin style.
 
 ## Overview
 
-`kubectl-coco` simplifies the process of transforming regular Kubernetes manifests into CoCo-enabled manifests. It automatically handles:
+`cococtl` simplifies the process of transforming regular Kubernetes manifests into CoCo-enabled manifests. It automatically handles:
 
 - **RuntimeClass Configuration**: Sets the appropriate CoCo runtime
 - **Secrets Management**: Converts K8s secrets to sealed secrets for upload to Trustee KBS via `kbs populate`
@@ -34,14 +45,18 @@ Read more about CoCo at [confidentialcontainers.org](https://confidentialcontain
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi
-curl -LO "https://github.com/confidential-devhub/cococtl/releases/latest/download/kubectl-coco-${OS}-${ARCH}"
+curl -LO "https://github.com/confidential-devhub/cococtl/releases/latest/download/cococtl-${OS}-${ARCH}"
 
-# Install
-sudo install -m 0755 kubectl-coco-${OS}-${ARCH} /usr/local/bin/kubectl-coco
-sudo ln -sf /usr/local/bin/kubectl-coco /usr/local/bin/kubectl_complete-coco
+# Install standalone CLI
+sudo install -m 0755 cococtl-${OS}-${ARCH} /usr/local/bin/cococtl
+
+# Also install as kubectl plugin (optional)
+sudo ln -sf /usr/local/bin/cococtl /usr/local/bin/kubectl-coco
+sudo ln -sf /usr/local/bin/cococtl /usr/local/bin/kubectl_complete-coco
 
 # Verify
-kubectl coco --version
+cococtl --version
+kubectl coco --version   # if kubectl plugin symlinks were created
 ```
 
 See [Installation](#installation) for detailed options.
@@ -51,7 +66,8 @@ See [Installation](#installation) for detailed options.
 Deploy Trustee and create configuration:
 
 ```bash
-kubectl coco init
+cococtl init
+# or: kubectl coco init
 ```
 
 This creates `~/.kube/coco-config.toml` and deploys Trustee to your cluster.
@@ -61,7 +77,8 @@ This creates `~/.kube/coco-config.toml` and deploys Trustee to your cluster.
 Use `--skip-apply` to generate the transformed manifest and secrets file without deploying yet:
 
 ```bash
-kubectl coco apply -f your-app.yaml --skip-apply
+cococtl apply -f your-app.yaml --skip-apply
+# or: kubectl coco apply -f your-app.yaml --skip-apply
 ```
 
 ### 4. Upload Secrets to KBS
@@ -69,7 +86,8 @@ kubectl coco apply -f your-app.yaml --skip-apply
 Secrets must be in KBS before the pods start:
 
 ```bash
-kubectl coco kbs populate -f <app>-trustee-secrets.yaml
+cococtl kbs populate -f <app>-trustee-secrets.yaml
+# or: kubectl coco kbs populate -f <app>-trustee-secrets.yaml
 ```
 
 ### 5. Deploy
@@ -80,11 +98,11 @@ kubectl apply -f your-app-coco.yaml
 
 **Note:** There are some sample manifests under `examples` folder which you can try.
 
-> `kubectl coco apply` runs `kubectl apply` automatically unless `--skip-apply` is set. Use `--skip-apply` when you need to upload secrets to KBS before the workload starts (recommended for first deployments).
+> `cococtl apply` runs `kubectl apply` automatically unless `--skip-apply` is set. Use `--skip-apply` when you need to upload secrets to KBS before the workload starts (recommended for first deployments).
 
 ## What Gets Transformed
 
-`kubectl-coco` performs these transformations:
+`cococtl` performs these transformations:
 
 1. **Sets RuntimeClass** to `kata-cc` (configurable)
 2. **Converts Secrets**:
@@ -119,42 +137,49 @@ For detailed information, see [TRANSFORMATIONS.md](TRANSFORMATIONS.md).
    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
    ARCH=$(uname -m)
    if [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi
-   curl -LO "https://github.com/confidential-devhub/cococtl/releases/latest/download/kubectl-coco-${OS}-${ARCH}"
+   curl -LO "https://github.com/confidential-devhub/cococtl/releases/latest/download/cococtl-${OS}-${ARCH}"
    ```
 
    For a specific version:
    ```bash
    VERSION=v0.1.0
-   curl -LO "https://github.com/confidential-devhub/cococtl/releases/download/${VERSION}/kubectl-coco-${OS}-${ARCH}"
+   curl -LO "https://github.com/confidential-devhub/cococtl/releases/download/${VERSION}/cococtl-${OS}-${ARCH}"
    ```
 
 2. **Validate (optional):**
 
    ```bash
-   curl -LO "https://github.com/confidential-devhub/cococtl/releases/latest/download/kubectl-coco-${OS}-${ARCH}.sha256"
-   echo "$(cat kubectl-coco-${OS}-${ARCH}.sha256)" | sha256sum --check
+   curl -LO "https://github.com/confidential-devhub/cococtl/releases/latest/download/cococtl-${OS}-${ARCH}.sha256"
+   echo "$(cat cococtl-${OS}-${ARCH}.sha256)" | sha256sum --check
    ```
 
 3. **Install:**
 
    System-wide (requires sudo):
    ```bash
-   sudo install -m 0755 kubectl-coco-${OS}-${ARCH} /usr/local/bin/kubectl-coco
-   sudo ln -sf /usr/local/bin/kubectl-coco /usr/local/bin/kubectl_complete-coco
+   sudo install -m 0755 cococtl-${OS}-${ARCH} /usr/local/bin/cococtl
+
+   # Optional: enable as kubectl plugin
+   sudo ln -sf /usr/local/bin/cococtl /usr/local/bin/kubectl-coco
+   sudo ln -sf /usr/local/bin/cococtl /usr/local/bin/kubectl_complete-coco
    ```
 
    Or user directory:
    ```bash
    mkdir -p ~/.local/bin
-   install -m 0755 kubectl-coco-${OS}-${ARCH} ~/.local/bin/kubectl-coco
-   ln -sf ~/.local/bin/kubectl-coco ~/.local/bin/kubectl_complete-coco
+   install -m 0755 cococtl-${OS}-${ARCH} ~/.local/bin/cococtl
    export PATH=$PATH:~/.local/bin  # Add to ~/.bashrc or ~/.zshrc
+
+   # Optional: enable as kubectl plugin
+   ln -sf ~/.local/bin/cococtl ~/.local/bin/kubectl-coco
+   ln -sf ~/.local/bin/cococtl ~/.local/bin/kubectl_complete-coco
    ```
 
 4. **Verify:**
 
    ```bash
-   kubectl coco --version
+   cococtl --version
+   kubectl coco --version   # if kubectl plugin symlinks were created
    ```
 
 ### From Source
@@ -166,86 +191,102 @@ make build
 sudo make install
 ```
 
+`make install` installs the `cococtl` binary and automatically creates the `kubectl-coco` and `kubectl_complete-coco` symlinks in `$(INSTALL_PATH)` (default: `/usr/local/bin`).
+
 ## Shell Completion
 
-kubectl-coco supports command autocompletion for bash and zsh shells.
+cococtl supports tab completion for bash and zsh.
+
+**How completion works — two independent mechanisms:**
+
+| What you type | Driven by |
+|---|---|
+| `cococtl <TAB>` or `kubectl-coco <TAB>` | Generated completion script (source once) |
+| `kubectl coco <TAB>` | kubectl calls `kubectl_complete-coco` directly; needs kubectl's own completion set up |
+
+`make install` creates the `kubectl_complete-coco` symlink automatically. If you installed from a release binary, create it manually:
+```bash
+sudo ln -sf /usr/local/bin/cococtl /usr/local/bin/kubectl_complete-coco
+```
 
 ### Bash
 
-**Prerequisites:**
-
-Install bash-completion.
-
-For MacOS:
+**Step 1 — Install bash-completion** (skip if already done):
 
 ```bash
+# macOS
 brew install bash-completion@2
-
-# Add to your ~/.bash_profile:
-[[ -r "/opt/homebrew/etc/profile.d/bash_completion.sh" ]] && . "/opt/homebrew/etc/profile.d/bash_completion.sh"
-
-# Reload profile:
+echo '[[ -r "/opt/homebrew/etc/profile.d/bash_completion.sh" ]] && . "/opt/homebrew/etc/profile.d/bash_completion.sh"' >> ~/.bash_profile
 source ~/.bash_profile
-```
 
-For Linux:
-
-```bash
-# Ubuntu/Debian:
+# Linux (Ubuntu/Debian)
 apt-get install bash-completion
 
-# CentOS/RHEL:
+# Linux (CentOS/RHEL)
 yum install bash-completion
 ```
 
-**Installation:**
+**Step 2 — Install cococtl completion** (covers `cococtl` and `kubectl-coco`):
 
-For current session:
 ```bash
-source <(kubectl-coco completion bash)
-```
+# Current session only
+source <(cococtl completion bash)
 
-For all sessions (permanent):
-```bash
-# MacOS:
-kubectl-coco completion bash > $(brew --prefix)/etc/bash_completion.d/kubectl-coco
+# Permanent — macOS
+cococtl completion bash > $(brew --prefix)/etc/bash_completion.d/cococtl
 
-# Linux:
-kubectl-coco completion bash > /etc/bash_completion.d/kubectl-coco
+# Permanent — Linux, system-wide (requires root)
+cococtl completion bash | sudo tee /etc/bash_completion.d/cococtl > /dev/null
+
+# Permanent — Linux, current user only (no sudo)
+mkdir -p ~/.local/share/bash-completion/completions
+cococtl completion bash > ~/.local/share/bash-completion/completions/cococtl
 
 # Then restart your shell
 ```
 
-**For kubectl plugin (`kubectl coco`):**
-
-Install kubectl completion first:
+**Step 3 — Enable `kubectl coco <TAB>`** (if you use the kubectl plugin):
 
 ```bash
-# MacOS:
+# macOS
 kubectl completion bash > $(brew --prefix)/etc/bash_completion.d/kubectl
 
-# Linux:
-kubectl completion bash > /etc/bash_completion.d/kubectl
+# Linux, system-wide (requires root)
+kubectl completion bash | sudo tee /etc/bash_completion.d/kubectl > /dev/null
+
+# Linux, current user only (no sudo)
+kubectl completion bash > ~/.local/share/bash-completion/completions/kubectl
+```
+
+Verify the symlink is in PATH:
+```bash
+which kubectl_complete-coco   # should resolve to cococtl
 ```
 
 ### Zsh
 
-Enable completion if not already enabled:
+**Step 1 — Enable compinit** (skip if already done):
+
 ```bash
 echo "autoload -U compinit; compinit" >> ~/.zshrc
 ```
 
-Install kubectl-coco completion:
+**Step 2 — Install cococtl completion** (covers `cococtl` and `kubectl-coco`):
+
 ```bash
-kubectl-coco completion zsh > "${fpath[1]}/_kubectl-coco"
+cococtl completion zsh > "${fpath[1]}/_cococtl"
 ```
 
-Start a new shell for completion to take effect.
+**Step 3 — Enable `kubectl coco <TAB>`** (if you use the kubectl plugin):
 
-**Note:** The `kubectl_complete-coco` symlink (created during installation) enables `kubectl coco` plugin completion. If `kubectl coco <TAB>` doesn't work, verify:
 ```bash
-ls -la /usr/local/bin/kubectl_complete-coco
-# Should point to kubectl-coco
+kubectl completion zsh > "${fpath[1]}/_kubectl"
+```
+
+Verify the symlink is in PATH, then start a new shell:
+```bash
+which kubectl_complete-coco   # should resolve to cococtl
+exec zsh
 ```
 
 ## Usage
@@ -255,7 +296,8 @@ ls -la /usr/local/bin/kubectl_complete-coco
 Deploy Trustee and create configuration (non-interactive by default):
 
 ```bash
-kubectl coco init
+cococtl init
+# or: kubectl coco init
 ```
 
 This deploys Trustee to your current namespace and creates `~/.kube/coco-config.toml`.
@@ -263,13 +305,13 @@ This deploys Trustee to your current namespace and creates `~/.kube/coco-config.
 **Interactive mode:**
 
 ```bash
-kubectl coco init --interactive  # or -i
+cococtl init --interactive  # or -i
 ```
 
 **With custom Trustee:**
 
 ```bash
-kubectl coco init --trustee-url https://trustee.example.com:8080
+cococtl init --trustee-url https://trustee.example.com:8080
 ```
 
 ### Manage KBS (Key Broker Service)
@@ -279,43 +321,43 @@ The `kbs` subcommand manages the Trustee Key Broker Service that stores your sec
 #### Deploy KBS in Kubernetes
 
 ```bash
-kubectl coco kbs start --mode k8s
+cococtl kbs start --mode k8s
 ```
 
 Deploys Trustee to the current namespace and saves the admin private key to `~/.kube/coco-kbs-auth`. The KBS URL is written to `~/.kube/coco-config.toml` for use by subsequent commands.
 
 ```bash
 # With custom namespace
-kubectl coco kbs start --mode k8s --namespace coco-system
+cococtl kbs start --mode k8s --namespace coco-system
 ```
 
 #### Register an External KBS
 
 ```bash
-kubectl coco kbs start --mode external --url http://kbs.example.com:8080
+cococtl kbs start --mode external --url http://kbs.example.com:8080
 ```
 
 Records the KBS URL in config without deploying anything. Optionally specify `--auth-dir` to point at an existing admin key directory.
 
 #### Upload Resources to KBS
 
-After `kubectl coco apply` generates a `*-trustee-secrets.yaml`, upload the secrets:
+After `cococtl apply` generates a `*-trustee-secrets.yaml`, upload the secrets:
 
 ```bash
-kubectl coco kbs populate -f app-trustee-secrets.yaml
+cococtl kbs populate -f app-trustee-secrets.yaml
 ```
 
 **Other input modes:**
 
 ```bash
 # From a Kubernetes Secret
-kubectl coco kbs populate --from-k8s-secret my-registry-secret -n my-namespace
+cococtl kbs populate --from-k8s-secret my-registry-secret -n my-namespace
 
 # Single file to a specific KBS path
-kubectl coco kbs populate --path default/myapp/password --resource-file /path/to/password.txt
+cococtl kbs populate --path default/myapp/password --resource-file /path/to/password.txt
 
 # Direct URL (skips in-cluster port-forward)
-kubectl coco kbs populate --kbs-url http://kbs.example.com:8080 --auth-key /path/to/private.key -f secrets.yaml
+cococtl kbs populate --kbs-url http://kbs.example.com:8080 --auth-key /path/to/private.key -f secrets.yaml
 ```
 
 ### Manage InitData
@@ -328,29 +370,29 @@ Generate the raw initdata TOML from your config and save it to disk:
 
 ```bash
 # From default config, save to ~/.kube/coco-initdata.toml
-kubectl coco initdata create
+cococtl initdata create
 
 # With a custom CA certificate (validates cert before embedding)
-kubectl coco initdata create --cacert /path/to/ca.crt
+cococtl initdata create --cacert /path/to/ca.crt
 
 # With a directory of CA certs
-kubectl coco initdata create --capath /etc/ssl/certs
+cococtl initdata create --capath /etc/ssl/certs
 
 # Custom output path
-kubectl coco initdata create --output /tmp/my-initdata.toml
+cococtl initdata create --output /tmp/my-initdata.toml
 ```
 
 #### Inspect initdata
 
 ```bash
 # Show the base64+gzip encoded blob (ready for use as an annotation value)
-kubectl coco initdata dump
+cococtl initdata dump
 
 # Show the human-readable plaintext TOML
-kubectl coco initdata dump --raw
+cococtl initdata dump --raw
 
 # Read from a specific file
-kubectl coco initdata dump --file /tmp/my-initdata.toml
+cococtl initdata dump --file /tmp/my-initdata.toml
 ```
 
 The default output of `dump` (without `--raw`) is the value to use for the
@@ -360,10 +402,10 @@ The default output of `dump` (without `--raw`) is the value to use for the
 
 ```bash
 # Validate a saved TOML file (checks version, algorithm, required keys, embedded certs)
-kubectl coco initdata validate --file ~/.kube/coco-initdata.toml
+cococtl initdata validate --file ~/.kube/coco-initdata.toml
 
 # Validate the encoded blob from dump via pipe
-kubectl coco initdata dump | kubectl coco initdata validate
+cococtl initdata dump | cococtl initdata validate
 ```
 
 Validation checks:
@@ -377,28 +419,28 @@ Validation checks:
 **Basic usage:**
 
 ```bash
-kubectl coco apply -f app.yaml
+cococtl apply -f app.yaml
 ```
 
 **Common options:**
 ```bash
 # Only transform, don't apply
-kubectl coco apply -f app.yaml --skip-apply
+cococtl apply -f app.yaml --skip-apply
 
 # Use specific runtime class
-kubectl coco apply -f app.yaml --runtime-class kata-remote
+cococtl apply -f app.yaml --runtime-class kata-remote
 
 # Add attestation initContainer
-kubectl coco apply -f app.yaml --init-container
+cococtl apply -f app.yaml --init-container
 
 # Enable secure access sidecar
-kubectl coco apply -f app.yaml --sidecar
+cococtl apply -f app.yaml --sidecar
 
 # Disable automatic secret conversion
-kubectl coco apply -f app.yaml --convert-secrets=false
+cococtl apply -f app.yaml --convert-secrets=false
 
 # Use custom config file
-kubectl coco apply -f app.yaml --config /path/to/config.toml
+cococtl apply -f app.yaml --config /path/to/config.toml
 ```
 
 See [TRANSFORMATIONS.md](TRANSFORMATIONS.md) for detailed description on the transformations.
@@ -409,27 +451,27 @@ The `explain` command helps you understand what transformations are applied to y
 
 ```bash
 # Analyze your manifest
-kubectl coco explain -f your-app.yaml
+cococtl explain -f your-app.yaml
 
 # View built-in examples
-kubectl coco explain --list-examples
+cococtl explain --list-examples
 
 # Learn with interactive examples
-kubectl coco explain --example simple-pod
-kubectl coco explain --example deployment-secrets
-kubectl coco explain --example sidecar-service
+cococtl explain --example simple-pod
+cococtl explain --example deployment-secrets
+cococtl explain --example sidecar-service
 ```
 
 **Output formats:**
 ```bash
 # Human-readable (default)
-kubectl coco explain -f app.yaml
+cococtl explain -f app.yaml
 
 # Side-by-side diff view
-kubectl coco explain -f app.yaml --format diff
+cococtl explain -f app.yaml --format diff
 
 # Markdown for documentation
-kubectl coco explain -f app.yaml --format markdown -o transformations.md
+cococtl explain -f app.yaml --format markdown -o transformations.md
 ```
 
 The explain command provides:
@@ -447,20 +489,20 @@ The secure access sidecar provides mTLS-secured HTTPS access to your CoCo pods.
 **One-time setup:**
 
 ```bash
-kubectl coco init --enable-sidecar
+cococtl init --enable-sidecar
 ```
 
 **Deploy with sidecar:**
 
 ```bash
 # Basic usage
-kubectl coco apply -f app.yaml --sidecar
+cococtl apply -f app.yaml --sidecar
 
 # Enable port forwarding from primary container
-kubectl coco apply -f app.yaml --sidecar --sidecar-port-forward 8888
+cococtl apply -f app.yaml --sidecar --sidecar-port-forward 8888
 
 # Custom SANs for LoadBalancer or Ingress
-kubectl coco apply -f app.yaml --sidecar \
+cococtl apply -f app.yaml --sidecar \
   --sidecar-san-ips=203.0.113.10 \
   --sidecar-san-dns=myapp.example.com
 ```
@@ -506,7 +548,7 @@ cpu_request = "50m"                                        # Optional: CPU reque
 memory_request = "64Mi"                                    # Optional: memory request
 ```
 
-**Note:** TLS certificates are auto-generated per-app during `kubectl coco apply --sidecar`.
+**Note:** TLS certificates are auto-generated per-app during `cococtl apply --sidecar`.
 
 ## Development
 
