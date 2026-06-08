@@ -1,7 +1,9 @@
-.PHONY: build install clean test eval eval-offline help release release-all lint
+.PHONY: all build install uninstall clean test eval eval-offline tidy fmt vet lint deps help release release-all
 
-# Binary name
-BINARY_NAME=kubectl-coco
+# Primary binary name (standalone CLI)
+BINARY_NAME=cococtl
+# kubectl plugin binary name (symlinked from BINARY_NAME during install)
+KUBECTL_PLUGIN_NAME=kubectl-coco
 
 # Installation path
 INSTALL_PATH=/usr/local/bin
@@ -32,25 +34,29 @@ RELEASE_BINARY=$(BINARY_NAME)-$(GOOS)-$(GOARCH)
 # Default target
 all: build
 
-## build: Build the kubectl-coco binary
+## build: Build the cococtl binary
 build:
 	@echo "Building $(BINARY_NAME) (version: $(VERSION))..."
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) .
 	@echo "Build complete: $(BINARY_NAME)"
 
-## install: Install kubectl-coco to $(INSTALL_PATH)
+## install: Install cococtl and kubectl-coco symlink to $(INSTALL_PATH)
 install: build
 	@echo "Installing $(BINARY_NAME) to $(INSTALL_PATH)..."
 	@mkdir -p $(INSTALL_PATH)
 	@cp $(BINARY_NAME) $(INSTALL_PATH)/
 	@chmod +x $(INSTALL_PATH)/$(BINARY_NAME)
+	@ln -sf $(INSTALL_PATH)/$(BINARY_NAME) $(INSTALL_PATH)/$(KUBECTL_PLUGIN_NAME)
 	@ln -sf $(INSTALL_PATH)/$(BINARY_NAME) $(INSTALL_PATH)/kubectl_complete-coco
-	@echo "Installation complete. You can now use: kubectl coco"
+	@echo "Installation complete."
+	@echo "  Standalone CLI : $(BINARY_NAME)"
+	@echo "  kubectl plugin : kubectl coco  (via $(KUBECTL_PLUGIN_NAME) symlink)"
 
-## uninstall: Remove kubectl-coco from $(INSTALL_PATH)
+## uninstall: Remove cococtl, kubectl-coco, and completion symlink from $(INSTALL_PATH)
 uninstall:
 	@echo "Uninstalling $(BINARY_NAME)..."
 	@rm -f $(INSTALL_PATH)/$(BINARY_NAME)
+	@rm -f $(INSTALL_PATH)/$(KUBECTL_PLUGIN_NAME)
 	@rm -f $(INSTALL_PATH)/kubectl_complete-coco
 	@echo "Uninstall complete"
 
