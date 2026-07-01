@@ -777,7 +777,7 @@ func handleSidecarServerCert(ctx context.Context, cfg *config.CocoConfig, appNam
 		fmt.Printf("  - Server certificate uploaded to kbs:///%s and kbs:///%s\n", serverCertPath, serverKeyPath)
 	} else {
 		// Skip-apply mode: save certs to file instead of uploading
-		certFilePath, err := saveSidecarCertsToYAML(manifestPath, serverCert, appName, namespace)
+		certFilePath, err := saveSidecarCertsToYAML(manifestPath, serverCert, appName, trusteeNamespace)
 		if err != nil {
 			return err
 		}
