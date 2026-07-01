@@ -811,8 +811,8 @@ func saveSidecarCertsToYAML(manifestPath string, serverCert *certs.CertificateSe
 		},
 		"type": "kubernetes.io/tls",
 		"data": map[string]string{
-			"tls.crt": base64.StdEncoding.EncodeToString(serverCert.CertPEM),
-			"tls.key": base64.StdEncoding.EncodeToString(serverCert.KeyPEM),
+			"server-cert": base64.StdEncoding.EncodeToString(serverCert.CertPEM),
+			"server-key":  base64.StdEncoding.EncodeToString(serverCert.KeyPEM),
 		},
 	}
 

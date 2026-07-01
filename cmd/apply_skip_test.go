@@ -136,7 +136,7 @@ func TestSkipApply_NamespaceResolution_DefaultFallback(t *testing.T) {
 }
 
 // TestSkipApply_SidecarCertFileSaving tests that saveSidecarCertsToYAML creates
-// a properly formatted Kubernetes TLS Secret YAML file with correct permissions.
+// a properly formatted Kubernetes TLS Secret YAML file with KBS-matching key names.
 func TestSkipApply_SidecarCertFileSaving(t *testing.T) {
 	// Generate a CA for signing the server cert
 	ca, err := certs.GenerateCA("test-ca")
@@ -230,33 +230,29 @@ func TestSkipApply_SidecarCertFileSaving(t *testing.T) {
 		t.Fatalf("data is not a map: %T", secret["data"])
 	}
 
-	tlsCrt, ok := secretData["tls.crt"].(string)
-	if !ok || tlsCrt == "" {
-		t.Error("data[tls.crt] is missing or empty")
+	serverCertData, ok := secretData["server-cert"].(string)
+	if !ok || serverCertData == "" {
+		t.Error("data[server-cert] is missing or empty")
 	} else {
-		// Verify tls.crt is valid base64
-		decoded, err := base64.StdEncoding.DecodeString(tlsCrt)
+		decoded, err := base64.StdEncoding.DecodeString(serverCertData)
 		if err != nil {
-			t.Errorf("data[tls.crt] is not valid base64: %v", err)
+			t.Errorf("data[server-cert] is not valid base64: %v", err)
 		}
-		// Verify decoded content matches the original cert PEM
 		if string(decoded) != string(serverCert.CertPEM) {
-			t.Error("data[tls.crt] decoded content does not match original cert PEM")
+			t.Error("data[server-cert] decoded content does not match original cert PEM")
 		}
 	}
 
-	tlsKey, ok := secretData["tls.key"].(string)
-	if !ok || tlsKey == "" {
-		t.Error("data[tls.key] is missing or empty")
+	serverKeyData, ok := secretData["server-key"].(string)
+	if !ok || serverKeyData == "" {
+		t.Error("data[server-key] is missing or empty")
 	} else {
-		// Verify tls.key is valid base64
-		decoded, err := base64.StdEncoding.DecodeString(tlsKey)
+		decoded, err := base64.StdEncoding.DecodeString(serverKeyData)
 		if err != nil {
-			t.Errorf("data[tls.key] is not valid base64: %v", err)
+			t.Errorf("data[server-key] is not valid base64: %v", err)
 		}
-		// Verify decoded content matches the original key PEM
 		if string(decoded) != string(serverCert.KeyPEM) {
-			t.Error("data[tls.key] decoded content does not match original key PEM")
+			t.Error("data[server-key] decoded content does not match original key PEM")
 		}
 	}
 }
