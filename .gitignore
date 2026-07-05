@@ -22,6 +22,9 @@ go.work
 # IDE specific files
 .idea/
 .vscode/
+
+# Claude Code local config
+.claude/
 *.swp
 *.swo
 *~

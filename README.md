@@ -36,6 +36,13 @@ All commands and flags are identical in both modes. The examples in this README 
 - ✅ **InitData Management**: Create, inspect, and validate initdata via the `initdata` subcommand; automatically generated during `apply`
 - ✅ **Backup Management**: Saves transformed manifests with `-coco` suffix
 
+> **Using an AI coding agent (e.g. Claude Code)?** cococtl embeds a `cocofy` skill that teaches agents the full init → apply → populate → deploy workflow. Install it into your agent's skills directory:
+>
+> ```bash
+> mkdir -p ~/.claude/skills/cocofy
+> cococtl skill > ~/.claude/skills/cocofy/SKILL.md
+> ```
+
 ## Quick Start
 
 ### 1. Install
@@ -288,6 +295,22 @@ Verify the symlink is in PATH, then start a new shell:
 which kubectl_complete-coco   # should resolve to cococtl
 exec zsh
 ```
+
+## AI Agent Skill
+
+cococtl embeds a `cocofy` skill for AI coding agents (e.g. Claude Code). It teaches the full
+init → apply → populate → deploy workflow, the initdata create/validate commands, and the
+ordering rules (secrets must reach KBS before pods start).
+
+Print it to stdout and install it into your agent's skills directory:
+
+```bash
+mkdir -p ~/.claude/skills/cocofy
+cococtl skill > ~/.claude/skills/cocofy/SKILL.md
+```
+
+The skill ships inside the binary, so it always matches your installed cococtl version — no
+separate download needed.
 
 ## Usage
 
