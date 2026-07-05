@@ -4,11 +4,11 @@ package trustee
 import (
 	"context"
 	"crypto/ed25519"
-	"errors"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -755,5 +755,3 @@ func ConvertDockercfgToDockerConfigJSON(dockercfgData []byte) ([]byte, error) {
 
 	return newData, nil
 }
-
-

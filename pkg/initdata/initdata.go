@@ -113,7 +113,7 @@ func GenerateRaw(cfg *config.CocoConfig, certPEM string, imagePullSecrets []Imag
 	return marshalInitData(id)
 }
 
-// marshalInitData serialises InitData to TOML using ''' literal multi-line strings
+// marshalInitData serialises InitData to TOML using ”' literal multi-line strings
 // for data values so the output is human-readable without escape sequences.
 func marshalInitData(id InitData) ([]byte, error) {
 	var sb strings.Builder

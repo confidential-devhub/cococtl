@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"gopkg.in/yaml.v3"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/confidential-devhub/cococtl/pkg/k8s"
 	"github.com/confidential-devhub/cococtl/pkg/kbsclient"
@@ -49,15 +49,15 @@ Examples:
 }
 
 var (
-	populateFilename      string
-	populateKBSPath       string
-	populateResourceFile  string
+	populateFilename          string
+	populateKBSPath           string
+	populateResourceFile      string
 	populateFromK8sSecretName string
-	populateKBSURL        string
-	populateAuthDir       string
-	populateAuthKey       string
-	populateTLSCA         string
-	populateNamespace     string
+	populateKBSURL            string
+	populateAuthDir           string
+	populateAuthKey           string
+	populateTLSCA             string
+	populateNamespace         string
 )
 
 func init() {

@@ -255,4 +255,3 @@ func TestConfigMap_SocketsConfiguration(t *testing.T) {
 		t.Error("sockets configuration should come after [http_server] section")
 	}
 }
-
