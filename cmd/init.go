@@ -59,6 +59,7 @@ func init() {
 	initCmd.Flags().Bool("enable-sidecar", false, "Enable sidecar and generate client CA and client certificates")
 	initCmd.Flags().Bool("upload-client-ca", false, "Upload client CA to Trustee KBS")
 	initCmd.Flags().String("cert-dir", "", "Default directory to store/load sidecar certificates and keys (default: $HOME/.kube/coco-sidecar)")
+	initCmd.Flags().String("trustee-ca-cert", "", "Path to the Trustee CA certificate file")
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
@@ -71,6 +72,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	enableSidecar, _ := cmd.Flags().GetBool("enable-sidecar")
 	uploadClientCA, _ := cmd.Flags().GetBool("upload-client-ca")
 	certDir, _ := cmd.Flags().GetString("cert-dir")
+	trusteeCACert, _ := cmd.Flags().GetString("trustee-ca-cert")
 
 	// Get default config path if not specified
 	if outputPath == "" {
@@ -103,6 +105,10 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to get cert directory: %w", err)
 	}
 	cfg.Sidecar.CertDir = certDir
+
+	if trusteeCACert != "" {
+		cfg.TrusteeCACert = trusteeCACert
+	}
 
 	// Handle Trustee setup
 	trusteeDeployed, actualNamespace, err := handleTrusteeSetup(cmd, cfg, interactive, skipTrusteeDeploy, trusteeNamespace, trusteeURL)
