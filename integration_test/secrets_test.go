@@ -271,12 +271,129 @@ func TestManifest_RemoveSecretVolume(t *testing.T) {
 	}
 }
 
+func TestManifest_ConvertEnvSecretToSealed_InitContainer(t *testing.T) {
+	m, err := manifest.Load("testdata/manifests/pod-with-initcontainer-secrets.yaml")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	sealedSecret := "sealed.fakejwsheader.eyJ2ZXJzaW9uIjoiMC4xLjAifQ.fakesignature"
+
+	err = m.ConvertEnvSecretToSealed("init-setup", "INIT_SECRET", sealedSecret)
+	if err != nil {
+		t.Fatalf("ConvertEnvSecretToSealed() failed: %v", err)
+	}
+
+	spec, err := m.GetSpec()
+	if err != nil {
+		t.Fatalf("GetSpec() failed: %v", err)
+	}
+
+	initContainers, ok := spec["initContainers"].([]interface{})
+	if !ok || len(initContainers) == 0 {
+		t.Fatal("No initContainers found")
+	}
+
+	container, ok := initContainers[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("initContainer is not a map")
+	}
+
+	env, ok := container["env"].([]interface{})
+	if !ok || len(env) == 0 {
+		t.Fatal("No env variables found in initContainer")
+	}
+
+	found := false
+	for _, e := range env {
+		envVar, ok := e.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if envVar["name"] == "INIT_SECRET" {
+			if _, hasValueFrom := envVar["valueFrom"]; hasValueFrom {
+				t.Error("valueFrom still exists after conversion")
+			}
+			value, ok := envVar["value"].(string)
+			if !ok {
+				t.Fatal("value is not a string")
+			}
+			if value != sealedSecret {
+				t.Errorf("value = %q, want %q", value, sealedSecret)
+			}
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Error("INIT_SECRET env variable not found in initContainer")
+	}
+}
+
+func TestManifest_ReplaceSecretName_InitContainer(t *testing.T) {
+	m, err := manifest.Load("testdata/manifests/pod-with-initcontainer-secrets.yaml")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	err = m.ReplaceSecretName("my-app-secret", "new-secret")
+	if err != nil {
+		t.Fatalf("ReplaceSecretName() failed: %v", err)
+	}
+
+	spec, err := m.GetSpec()
+	if err != nil {
+		t.Fatalf("GetSpec() failed: %v", err)
+	}
+
+	initContainers, ok := spec["initContainers"].([]interface{})
+	if !ok || len(initContainers) == 0 {
+		t.Fatal("No initContainers found")
+	}
+
+	container, ok := initContainers[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("initContainer is not a map")
+	}
+
+	env, ok := container["env"].([]interface{})
+	if !ok || len(env) == 0 {
+		t.Fatal("No env variables found in initContainer")
+	}
+
+	envVar, ok := env[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("env var is not a map")
+	}
+
+	valueFrom, ok := envVar["valueFrom"].(map[string]interface{})
+	if !ok {
+		t.Fatal("valueFrom is not a map")
+	}
+
+	secretKeyRef, ok := valueFrom["secretKeyRef"].(map[string]interface{})
+	if !ok {
+		t.Fatal("secretKeyRef is not a map")
+	}
+
+	name, _ := secretKeyRef["name"].(string)
+	if name != "new-secret" {
+		t.Errorf("secretKeyRef.name = %q, want %q", name, "new-secret")
+	}
+}
+
 func TestSecrets_DetectSecrets_IntegrationManifests(t *testing.T) {
 	tests := []struct {
 		name          string
 		manifestPath  string
 		expectedCount int
 	}{
+		{
+			name:          "env secrets in initContainers only",
+			manifestPath:  "testdata/manifests/pod-with-initcontainer-secrets.yaml",
+			expectedCount: 1, // my-app-secret
+		},
 		{
 			name:          "env secrets",
 			manifestPath:  "testdata/manifests/pod-with-env-secret.yaml",

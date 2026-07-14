@@ -637,32 +637,34 @@ func (m *Manifest) ReplaceSecretName(oldName, newName string) error {
 		return err
 	}
 
-	// Replace in containers
-	if containers, ok := podSpec["containers"].([]interface{}); ok {
-		for _, container := range containers {
-			if c, ok := container.(map[string]interface{}); ok {
-				// Replace in env variables
-				if env, ok := c["env"].([]interface{}); ok {
-					for _, e := range env {
-						if envVar, ok := e.(map[string]interface{}); ok {
-							if valueFrom, ok := envVar["valueFrom"].(map[string]interface{}); ok {
-								if secretKeyRef, ok := valueFrom["secretKeyRef"].(map[string]interface{}); ok {
-									if name, ok := secretKeyRef["name"].(string); ok && name == oldName {
-										secretKeyRef["name"] = newName
+	// Replace in containers and initContainers
+	for _, containerKey := range []string{"containers", "initContainers"} {
+		if containers, ok := podSpec[containerKey].([]interface{}); ok {
+			for _, container := range containers {
+				if c, ok := container.(map[string]interface{}); ok {
+					// Replace in env variables
+					if env, ok := c["env"].([]interface{}); ok {
+						for _, e := range env {
+							if envVar, ok := e.(map[string]interface{}); ok {
+								if valueFrom, ok := envVar["valueFrom"].(map[string]interface{}); ok {
+									if secretKeyRef, ok := valueFrom["secretKeyRef"].(map[string]interface{}); ok {
+										if name, ok := secretKeyRef["name"].(string); ok && name == oldName {
+											secretKeyRef["name"] = newName
+										}
 									}
 								}
 							}
 						}
 					}
-				}
 
-				// Replace in envFrom
-				if envFrom, ok := c["envFrom"].([]interface{}); ok {
-					for _, ef := range envFrom {
-						if envFromItem, ok := ef.(map[string]interface{}); ok {
-							if secretRef, ok := envFromItem["secretRef"].(map[string]interface{}); ok {
-								if name, ok := secretRef["name"].(string); ok && name == oldName {
-									secretRef["name"] = newName
+					// Replace in envFrom
+					if envFrom, ok := c["envFrom"].([]interface{}); ok {
+						for _, ef := range envFrom {
+							if envFromItem, ok := ef.(map[string]interface{}); ok {
+								if secretRef, ok := envFromItem["secretRef"].(map[string]interface{}); ok {
+									if name, ok := secretRef["name"].(string); ok && name == oldName {
+										secretRef["name"] = newName
+									}
 								}
 							}
 						}
@@ -821,45 +823,43 @@ func (m *Manifest) ConvertEnvSecretToSealed(containerName, envVarName, sealedSec
 		return err
 	}
 
-	containers, ok := podSpec["containers"].([]interface{})
-	if !ok {
-		return fmt.Errorf("no containers found in spec")
-	}
-
-	// Find the container and env variable
-	for _, container := range containers {
-		c, ok := container.(map[string]interface{})
+	for _, containerKey := range []string{"containers", "initContainers"} {
+		containers, ok := podSpec[containerKey].([]interface{})
 		if !ok {
 			continue
 		}
 
-		// Check if this is the target container
-		name, _ := c["name"].(string)
-		if containerName != "" && name != containerName {
-			continue
-		}
-
-		// Find the env variable
-		env, ok := c["env"].([]interface{})
-		if !ok {
-			continue
-		}
-
-		for _, e := range env {
-			envVar, ok := e.(map[string]interface{})
+		for _, container := range containers {
+			c, ok := container.(map[string]interface{})
 			if !ok {
 				continue
 			}
 
-			envName, _ := envVar["name"].(string)
-			if envName != envVarName {
+			name, _ := c["name"].(string)
+			if containerName != "" && name != containerName {
 				continue
 			}
 
-			// Replace secretKeyRef with value
-			delete(envVar, "valueFrom")
-			envVar["value"] = sealedSecret
-			return nil
+			env, ok := c["env"].([]interface{})
+			if !ok {
+				continue
+			}
+
+			for _, e := range env {
+				envVar, ok := e.(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				envName, _ := envVar["name"].(string)
+				if envName != envVarName {
+					continue
+				}
+
+				delete(envVar, "valueFrom")
+				envVar["value"] = sealedSecret
+				return nil
+			}
 		}
 	}
 
@@ -1036,74 +1036,70 @@ func (m *Manifest) ConvertEnvFromSecret(containerName, secretName string, sealed
 		return err
 	}
 
-	containers, ok := podSpec["containers"].([]interface{})
-	if !ok {
-		return fmt.Errorf("no containers found in spec")
-	}
-
-	// Find the container
-	for _, container := range containers {
-		c, ok := container.(map[string]interface{})
+	for _, containerKey := range []string{"containers", "initContainers"} {
+		containers, ok := podSpec[containerKey].([]interface{})
 		if !ok {
 			continue
 		}
 
-		// Check if this is the target container
-		name, _ := c["name"].(string)
-		if containerName != "" && name != containerName {
-			continue
-		}
-
-		// Remove envFrom entry for this secret
-		envFrom, ok := c["envFrom"].([]interface{})
-		if ok {
-			var newEnvFrom []interface{}
-			for _, ef := range envFrom {
-				efMap, ok := ef.(map[string]interface{})
-				if !ok {
-					newEnvFrom = append(newEnvFrom, ef)
-					continue
-				}
-
-				secretRef, ok := efMap["secretRef"].(map[string]interface{})
-				if !ok {
-					newEnvFrom = append(newEnvFrom, ef)
-					continue
-				}
-
-				refName, _ := secretRef["name"].(string)
-				if refName != secretName {
-					newEnvFrom = append(newEnvFrom, ef)
-				}
-				// Skip this secretRef (we're converting it to env vars)
+		for _, container := range containers {
+			c, ok := container.(map[string]interface{})
+			if !ok {
+				continue
 			}
 
-			if len(newEnvFrom) > 0 {
-				c["envFrom"] = newEnvFrom
+			name, _ := c["name"].(string)
+			if containerName != "" && name != containerName {
+				continue
+			}
+
+			envFrom, ok := c["envFrom"].([]interface{})
+			if ok {
+				var newEnvFrom []interface{}
+				for _, ef := range envFrom {
+					efMap, ok := ef.(map[string]interface{})
+					if !ok {
+						newEnvFrom = append(newEnvFrom, ef)
+						continue
+					}
+
+					secretRef, ok := efMap["secretRef"].(map[string]interface{})
+					if !ok {
+						newEnvFrom = append(newEnvFrom, ef)
+						continue
+					}
+
+					refName, _ := secretRef["name"].(string)
+					if refName != secretName {
+						newEnvFrom = append(newEnvFrom, ef)
+					}
+				}
+
+				if len(newEnvFrom) > 0 {
+					c["envFrom"] = newEnvFrom
+				} else {
+					delete(c, "envFrom")
+				}
+			}
+
+			var env []interface{}
+			if existing, ok := c["env"].([]interface{}); ok {
+				env = existing
 			} else {
-				delete(c, "envFrom")
+				env = []interface{}{}
 			}
-		}
 
-		// Add individual env variables
-		var env []interface{}
-		if existing, ok := c["env"].([]interface{}); ok {
-			env = existing
-		} else {
-			env = []interface{}{}
-		}
-
-		// Add each sealed secret as an env var
-		for key, sealedSecret := range sealedSecretsMap {
-			envVar := map[string]interface{}{
-				"name":  key,
-				"value": sealedSecret,
+			for key, sealedSecret := range sealedSecretsMap {
+				envVar := map[string]interface{}{
+					"name":  key,
+					"value": sealedSecret,
+				}
+				env = append(env, envVar)
 			}
-			env = append(env, envVar)
-		}
 
-		c["env"] = env
-		return nil
+			c["env"] = env
+			return nil
+		}
 	}
 
 	return fmt.Errorf("container %s not found", containerName)

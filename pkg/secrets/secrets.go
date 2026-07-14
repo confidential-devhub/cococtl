@@ -62,17 +62,19 @@ func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, erro
 	// Map to collect all secrets: secretName -> SecretReference
 	secretsMap := make(map[string]*SecretReference)
 
-	// 1. Detect secrets from containers
-	if containers, ok := podSpec["containers"].([]interface{}); ok {
-		for _, container := range containers {
-			if c, ok := container.(map[string]interface{}); ok {
-				containerName := getContainerName(c)
+	// 1. Detect secrets from containers and initContainers
+	for _, containerKey := range []string{"containers", "initContainers"} {
+		if containers, ok := podSpec[containerKey].([]interface{}); ok {
+			for _, container := range containers {
+				if c, ok := container.(map[string]interface{}); ok {
+					containerName := getContainerName(c)
 
-				// Detect env variable secrets
-				detectEnvSecrets(c, containerName, namespace, secretsMap)
+					// Detect env variable secrets
+					detectEnvSecrets(c, containerName, namespace, secretsMap)
 
-				// Detect envFrom secrets
-				detectEnvFromSecrets(c, containerName, namespace, secretsMap)
+					// Detect envFrom secrets
+					detectEnvFromSecrets(c, containerName, namespace, secretsMap)
+				}
 			}
 		}
 	}
@@ -81,11 +83,13 @@ func DetectSecrets(manifestData map[string]interface{}) ([]SecretReference, erro
 	detectVolumeSecrets(podSpec, namespace, secretsMap)
 
 	// 3. Find mount paths for volume secrets
-	if containers, ok := podSpec["containers"].([]interface{}); ok {
-		for _, container := range containers {
-			if c, ok := container.(map[string]interface{}); ok {
-				containerName := getContainerName(c)
-				addVolumeMountPaths(c, containerName, secretsMap)
+	for _, containerKey := range []string{"containers", "initContainers"} {
+		if containers, ok := podSpec[containerKey].([]interface{}); ok {
+			for _, container := range containers {
+				if c, ok := container.(map[string]interface{}); ok {
+					containerName := getContainerName(c)
+					addVolumeMountPaths(c, containerName, secretsMap)
+				}
 			}
 		}
 	}
