@@ -81,7 +81,7 @@ into `cmd.version` variable. Default version is "dev" if git is not available.
 The `apply` command performs transformations in this order:
 1. **Detect secrets** (pkg/secrets) - Scan manifest for secret references (env, envFrom, volumes, imagePullSecrets)
 2. **Convert to sealed secrets** (pkg/sealed) - Create sealed format with KBS URIs
-3. **Upload to Trustee KBS** (pkg/trustee) - Automatically populate KBS repository via kubectl exec
+3. **Upload to Trustee KBS** (pkg/trustee) - Populate KBS resources via the admin HTTP API through a port-forward
 4. **Set RuntimeClass** (pkg/manifest) - Add `kata-cc` runtime to spec
 5. **Generate initdata** (pkg/initdata) - Create aa.toml, cdh.toml, policy.rego annotation
 6. **Add custom annotations** (pkg/manifest) - Apply config-defined annotations
@@ -98,7 +98,7 @@ The `apply` command performs transformations in this order:
 
 **pkg/initdata**: Generates gzip-compressed, base64-encoded initdata annotation containing three TOML files (aa.toml for attestation agent, cdh.toml for confidential data hub, policy.rego for kata agent policy). Handles optional imagePullSecrets URIs in CDH configuration.
 
-**pkg/trustee**: Deploys all-in-one Trustee KBS using kubectl. Generates Ed25519 keypair for auth. Automatically creates default attestation status secret at `/opt/confidential-containers/kbs/repository/default/attestation-status/status` for init container verification.
+**pkg/trustee**: Deploys all-in-one Trustee KBS (v0.21.0 image, shipped with CoCo v0.22.0) using kubectl. Generates an Ed25519 keypair for admin auth: private key stays in `~/.kube/coco-kbs-auth`, public key is applied as the `kbs-auth-public-key` Secret (key name `kbs.pem`) mounted at `/kbs/` in the KBS pod. Uploads the default attestation status resource `default/attestation-status/status` via the KBS admin HTTP API through a port-forward. KBS config uses the v0.21.0 schema: `AuthenticatedAuthorization` admin framework (JWT bearer + `admin` role regex ACL), unified `[storage_backend]` (LocalFs), and `[[plugins]] name = "resource" storage_backend_type = "kvstorage"`.
 
 **pkg/config**: Manages `~/.kube/coco-config.toml` with TOML format. Validates mandatory fields (trustee_server, runtime_class).
 
@@ -110,7 +110,7 @@ The `apply` command performs transformations in this order:
 
 This is handled by `GetPodAnnotationsPath()` in pkg/manifest/manifest.go.
 
-**Secret Upload Flow**: When converting secrets, the tool uses `kubectl exec` to write decoded secret values directly into the Trustee KBS pod at `/opt/confidential-containers/kbs/repository/{namespace}/{secret-name}/{key}`. This is a temporary solution for development/testing.
+**Secret Upload Flow**: Secret values are uploaded to the Trustee KBS via the KBS admin HTTP API (`pkg/kbsclient`) through a temporary port-forward: `POST /kbs/v0/resource/{namespace}/{secret-name}/{key}` with a JWT Bearer token signed by the local Ed25519 admin key. The JWT must carry a `role: "admin"` claim (KBS v0.21.0 regex ACL). The KBS persists resources in its unified LocalFs storage backend.
 
 **ImagePullSecrets Handling**: imagePullSecrets remain in the manifest (needed by CRI-O for image pulling) AND are uploaded to KBS (for runtime attestation verification). Only the first imagePullSecret is used in CDH configuration. The `.dockerconfigjson` key has its leading dot stripped when creating the KBS URI.
 
