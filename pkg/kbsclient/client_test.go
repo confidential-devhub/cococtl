@@ -86,6 +86,9 @@ func TestSignAdminToken_Claims(t *testing.T) {
 		t.Fatalf("unmarshal claims: %v", err)
 	}
 
+	if claims.Role != "admin" {
+		t.Errorf("claims.Role = %q, want %q", claims.Role, "admin")
+	}
 	if claims.Iat <= 0 {
 		t.Errorf("claims.Iat = %d, want > 0", claims.Iat)
 	}

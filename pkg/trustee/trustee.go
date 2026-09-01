@@ -329,6 +329,8 @@ func createAuthSecretFromKeys(ctx context.Context, namespace, authDir string) (e
 
 	// Write only the public key to a temporary directory for the secret.
 	// The private key must never be stored in the cluster.
+	// The key name in the Secret becomes the file name inside the pod; KBS
+	// v0.21.0's admin authentication framework reads it from /kbs/kbs.pem.
 	tmpDir, err := os.MkdirTemp("", "trustee-keys-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
@@ -339,7 +341,7 @@ func createAuthSecretFromKeys(ctx context.Context, namespace, authDir string) (e
 		}
 	}()
 
-	tmpPubPath := filepath.Join(tmpDir, "public.pub")
+	tmpPubPath := filepath.Join(tmpDir, "kbs.pem")
 	if err := os.WriteFile(tmpPubPath, publicKeyPEM, 0600); err != nil {
 		return nil, fmt.Errorf("failed to write public key to temp dir: %w", err)
 	}
@@ -521,7 +523,7 @@ func buildKBSManifest(cfg *Config) string {
         - name: kbs-config
           mountPath: /etc/kbs-config
         - name: auth-secret
-          mountPath: /etc/auth-secret`
+          mountPath: /kbs`
 
 	// Build volumes - base volumes
 	volumes := `      - name: confidential-containers
