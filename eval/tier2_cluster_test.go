@@ -16,6 +16,16 @@ const (
 	evalRuntimeClass = "kata-qemu-coco-dev"
 )
 
+// kbsResourceDiskPath returns the on-disk path of a KBS resource inside the
+// Trustee pod for Trustee v0.21.0 (the KBS shipped with CoCo v0.22.0).
+// Resources live in the unified LocalFs storage backend under the
+// "repository" namespace, and the key's '/' separators are stored as the
+// literal four-character sequence \x2F (see key-value-storage local_fs).
+func kbsResourceDiskPath(namespace, secret, key string) string {
+	return "/opt/confidential-containers/kbs/storage/repository/" +
+		namespace + `\x2F` + secret + `\x2F` + key
+}
+
 // TestEvalCluster drives the full user workflow against a live cluster:
 //
 //	kbs start → kbs populate → apply (with secrets) → apply (with kata runtime)
@@ -106,14 +116,13 @@ func TestEvalCluster(t *testing.T) {
 	// ── apply workflow ────────────────────────────────────────────────────────
 
 	check(t, "cluster", "cluster/kbs-content-verify", func(t *testing.T) {
-		// Confirm the resource uploaded by kbs-populate is stored in the KBS
-		// repository on disk inside the Trustee pod.
-		const repoBase = "/opt/confidential-containers/kbs/repository"
+		// Confirm the resource uploaded by kbs-populate is stored on disk
+		// inside the Trustee pod (unified LocalFs storage backend).
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		out, err := exec.CommandContext(ctx, "kubectl", "exec",
 			"-n", evalNamespace, "deployment/trustee-deployment", "--",
-			"test", "-f", repoBase+"/default/eval/test-resource",
+			"test", "-f", kbsResourceDiskPath("default", "eval", "test-resource"),
 		).CombinedOutput()
 		if err != nil {
 			t.Fatalf("resource not found in KBS repository: %v\n%s", err, out)
@@ -144,10 +153,9 @@ func TestEvalCluster(t *testing.T) {
 		}
 		// Verify the secret key actually landed in the KBS repository on disk.
 		// Path: <namespace>/<secret-name>/<key>
-		const repoBase = "/opt/confidential-containers/kbs/repository"
 		if out, err := exec.Command("kubectl", "exec",
 			"-n", evalNamespace, "deployment/trustee-deployment", "--",
-			"test", "-f", repoBase+"/"+evalNamespace+"/eval-kbs-upload-secret/api-key",
+			"test", "-f", kbsResourceDiskPath(evalNamespace, "eval-kbs-upload-secret", "api-key"),
 		).CombinedOutput(); err != nil {
 			t.Fatalf("secret not found in KBS repository: %v\n%s", err, out)
 		}
@@ -224,10 +232,9 @@ spec:
 		}
 
 		// Confirm the secret value landed in the KBS repository on disk.
-		const repoBase = "/opt/confidential-containers/kbs/repository"
 		if out, err := exec.Command("kubectl", "exec",
 			"-n", evalNamespace, "deployment/trustee-deployment", "--",
-			"test", "-f", repoBase+"/"+evalNamespace+"/eval-app-secret/password",
+			"test", "-f", kbsResourceDiskPath(evalNamespace, "eval-app-secret", "password"),
 		).CombinedOutput(); err != nil {
 			t.Fatalf("secret not found in KBS repository: %v\n%s", err, out)
 		}
@@ -519,12 +526,11 @@ spec:
 		}
 
 		// Confirm the secret key landed in the KBS repository on disk.
-		const repoBase = "/opt/confidential-containers/kbs/repository"
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if out, err := exec.CommandContext(ctx, "kubectl", "exec",
 			"-n", evalNamespace, "deployment/trustee-deployment", "--",
-			"test", "-f", repoBase+"/"+evalNamespace+"/eval-vol-secret/config.yaml",
+			"test", "-f", kbsResourceDiskPath(evalNamespace, "eval-vol-secret", "config.yaml"),
 		).CombinedOutput(); err != nil {
 			t.Fatalf("volume secret not found in KBS repository: %v\n%s", err, out)
 		}
