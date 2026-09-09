@@ -11,19 +11,25 @@ import (
 // adminTokenExpirySecs matches the kbs-client default of 2 hours.
 const adminTokenExpirySecs = 7200
 
+// adminRole is the role claim expected by the KBS v0.21.0 admin authorization
+// framework. The generated kbs-config maps this role to all /kbs endpoints via
+// [admin.authorization.regex_acl].
+const adminRole = "admin"
+
 type jwtHeader struct {
 	Alg string `json:"alg"`
 	Typ string `json:"typ"`
 }
 
 type jwtClaims struct {
-	Iat int64 `json:"iat"`
-	Exp int64 `json:"exp"`
+	Role string `json:"role"`
+	Iat  int64  `json:"iat"`
+	Exp  int64  `json:"exp"`
 }
 
 // signAdminToken creates a JWT signed with the given Ed25519 private key.
-// The token contains only iat and exp claims, matching the kbs-client implementation.
-// The KBS server validates the signature against its pre-configured public keys.
+// The token carries the "admin" role plus iat/exp claims. KBS v0.21.0
+// requires the role claim to authorize admin endpoints via its regex ACL.
 func signAdminToken(privateKey ed25519.PrivateKey) (string, error) {
 	if len(privateKey) != ed25519.PrivateKeySize {
 		return "", fmt.Errorf("invalid Ed25519 private key: got %d bytes, want %d", len(privateKey), ed25519.PrivateKeySize)
@@ -37,8 +43,9 @@ func signAdminToken(privateKey ed25519.PrivateKey) (string, error) {
 
 	now := time.Now().Unix()
 	claims := jwtClaims{
-		Iat: now,
-		Exp: now + adminTokenExpirySecs,
+		Role: adminRole,
+		Iat:  now,
+		Exp:  now + adminTokenExpirySecs,
 	}
 	claimsJSON, err := json.Marshal(claims)
 	if err != nil {

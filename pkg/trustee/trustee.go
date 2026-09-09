@@ -128,14 +128,8 @@ func Deploy(ctx context.Context, clientset kubernetes.Interface, cfg *Config) er
 		return fmt.Errorf("failed to create auth secret: %w", err)
 	}
 
-	if err := deployConfigMaps(ctx, cfg.Namespace); err != nil {
+	if err := deployConfigMaps(ctx, cfg); err != nil {
 		return fmt.Errorf("failed to deploy ConfigMaps: %w", err)
-	}
-
-	if cfg.PCCSURL != "" {
-		if err := deployPCCSConfigMap(ctx, cfg.Namespace, cfg.PCCSURL); err != nil {
-			return fmt.Errorf("failed to deploy PCCS ConfigMap: %w", err)
-		}
 	}
 
 	if err := deployKBS(ctx, cfg); err != nil {
@@ -335,6 +329,8 @@ func createAuthSecretFromKeys(ctx context.Context, namespace, authDir string) (e
 
 	// Write only the public key to a temporary directory for the secret.
 	// The private key must never be stored in the cluster.
+	// The key name in the Secret becomes the file name inside the pod; KBS
+	// v0.21.0's admin authentication framework reads it from /kbs/kbs.pem.
 	tmpDir, err := os.MkdirTemp("", "trustee-keys-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
@@ -345,7 +341,7 @@ func createAuthSecretFromKeys(ctx context.Context, namespace, authDir string) (e
 		}
 	}()
 
-	tmpPubPath := filepath.Join(tmpDir, "public.pub")
+	tmpPubPath := filepath.Join(tmpDir, "kbs.pem")
 	if err := os.WriteFile(tmpPubPath, publicKeyPEM, 0600); err != nil {
 		return nil, fmt.Errorf("failed to write public key to temp dir: %w", err)
 	}
@@ -449,7 +445,28 @@ func loadOrGeneratePrivateKey(keyPath string) (ed25519.PrivateKey, error) {
 	return privateKey, nil
 }
 
-func buildConfigMapsManifest(namespace string) string {
+// buildConfigMapsManifest returns the kbs-config.toml ConfigMap manifest for
+// Trustee v0.21.0 (the KBS version shipped with CoCo v0.22.0).
+//
+// Schema notes (verified against confidential-containers/trustee v0.21.0):
+//   - [admin] uses the new authorization framework: JWT bearer tokens signed
+//     with the Ed25519 admin key are verified against the public key mounted
+//     at /kbs/kbs.pem, and authorized via a regex ACL on the "admin" role.
+//   - Resource storage uses the unified [storage_backend] (LocalFs); the
+//     resource plugin reads/writes through the kvstorage backend.
+//   - The resource policy is embedded at startup; no policy path is needed.
+//   - The Intel DCAP verifier no longer reads sgx_default_qcnl.conf; the PCCS
+//     URL is configured via [attestation_service.verifier_config.dcap_verifier].
+func buildConfigMapsManifest(namespace, pccsURL string) string {
+	// Optional Intel DCAP collateral service (PCCS or Intel PCS) configuration.
+	// Defaults to the Intel PCS URL inside the KBS when omitted. The URL is
+	// emitted as a quoted, escaped TOML string so quotes or backslashes in a
+	// custom PCCS URL cannot break the generated kbs-config.toml.
+	pccsSection := ""
+	if pccsURL != "" {
+		pccsSection = fmt.Sprintf("\n    [attestation_service.verifier_config.dcap_verifier]\n    collateral_service = %q", pccsURL)
+	}
+
 	return fmt.Sprintf(`
 apiVersion: v1
 kind: ConfigMap
@@ -463,72 +480,40 @@ data:
     insecure_http = true
 
     [attestation_token]
-    insecure_key = true
+    insecure_header_jwk = true
 
     [attestation_service]
-    type = "coco_as_builtin"
-    work_dir = "/opt/confidential-containers/attestation-service"
-    policy_engine = "opa"
+    type = "coco_as_builtin"%s
 
     [attestation_service.attestation_token_broker]
-    type = "Ear"
     duration_min = 5
 
     [attestation_service.rvps_config]
     type = "BuiltIn"
 
-    [policy_engine]
-    policy_path = "/opt/confidential-containers/opa/policy.rego"
-
     [admin]
-    type = "InsecureAllowAll"
+    authorization_mode = "AuthenticatedAuthorization"
+
+    [admin.authentication.bearer_jwt]
+    identity_providers = [{ public_key_uri = "/kbs/kbs.pem" }]
+
+    [admin.authorization.regex_acl]
+    acls = [{ role = "admin", allowed_endpoints = "^/kbs/.+$" }]
+
+    [storage_backend]
+    storage_type = "LocalFs"
+
+    [storage_backend.backends.local_fs]
+    dir_path = "/opt/confidential-containers/kbs/storage"
 
     [[plugins]]
     name = "resource"
-    type = "LocalFs"
-    dir_path = "/opt/confidential-containers/kbs/repository"
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: resource-policy
-  namespace: %s
-data:
-  policy.rego: |
-    package policy
-    import rego.v1
-
-    default allow = true
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: rvps-reference-values
-  namespace: %s
-data:
-  reference-values.json: |
-    {}
-`, namespace, defaultKBSPort, namespace, namespace)
+    storage_backend_type = "kvstorage"
+`, namespace, defaultKBSPort, pccsSection)
 }
 
-func deployConfigMaps(ctx context.Context, namespace string) error {
-	return applyManifest(ctx, buildConfigMapsManifest(namespace))
-}
-
-func deployPCCSConfigMap(ctx context.Context, namespace, pccsURL string) error {
-	qcnlConfig := fmt.Sprintf(`{"collateral_service":"%s"}`, pccsURL)
-
-	manifest := fmt.Sprintf(`
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: dcap-attestation-conf
-  namespace: %s
-data:
-  sgx_default_qcnl.conf: '%s'
-`, namespace, qcnlConfig)
-
-	return applyManifest(ctx, manifest)
+func deployConfigMaps(ctx context.Context, cfg *Config) error {
+	return applyManifest(ctx, buildConfigMapsManifest(cfg.Namespace, cfg.PCCSURL))
 }
 
 func buildKBSManifest(cfg *Config) string {
@@ -537,20 +522,8 @@ func buildKBSManifest(cfg *Config) string {
           mountPath: /opt/confidential-containers
         - name: kbs-config
           mountPath: /etc/kbs-config
-        - name: opa
-          mountPath: /opt/confidential-containers/opa
         - name: auth-secret
-          mountPath: /etc/auth-secret
-        - name: reference-values
-          mountPath: /opt/confidential-containers/rvps/reference-values`
-
-	// Add PCCS volumeMount if configured
-	if cfg.PCCSURL != "" {
-		volumeMounts += `
-        - name: qplconf
-          mountPath: /etc/sgx_default_qcnl.conf
-          subPath: sgx_default_qcnl.conf`
-	}
+          mountPath: /kbs`
 
 	// Build volumes - base volumes
 	volumes := `      - name: confidential-containers
@@ -559,26 +532,9 @@ func buildKBSManifest(cfg *Config) string {
       - name: kbs-config
         configMap:
           name: kbs-config-cm
-      - name: opa
-        configMap:
-          name: resource-policy
       - name: auth-secret
         secret:
-          secretName: kbs-auth-public-key
-      - name: reference-values
-        configMap:
-          name: rvps-reference-values`
-
-	// Add PCCS volume if configured
-	if cfg.PCCSURL != "" {
-		volumes += `
-      - name: qplconf
-        configMap:
-          name: dcap-attestation-conf
-          items:
-          - key: sgx_default_qcnl.conf
-            path: sgx_default_qcnl.conf`
-	}
+          secretName: kbs-auth-public-key`
 
 	return fmt.Sprintf(`
 apiVersion: apps/v1
